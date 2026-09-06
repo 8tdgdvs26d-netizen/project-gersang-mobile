@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#17130e">
+<title>Project 巨商 Mobile 001</title>
+<style>
+:root{--bg:#17130e;--panel:#241d15;--paper:#efe0b8;--ink:#2b2117;--gold:#d6a84f;--red:#9e3f32}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:#111;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Noto Sans TC",sans-serif}
+#app{min-height:100vh;max-width:520px;margin:auto;background:var(--bg);overflow:hidden}
+.screen{min-height:100vh;padding:24px 18px 32px}
+.hidden{display:none!important}
+.title{display:flex;flex-direction:column;justify-content:center;text-align:center;min-height:100vh;background:
+radial-gradient(circle at 50% 25%,#59432a 0,#17130e 48%);}
+.kicker{letter-spacing:5px;color:#d6a84f;font-size:13px}
+h1{font-family:Georgia,serif;font-size:48px;margin:12px 0 4px;color:#f3dfad}
+.sub{color:#bcae94;margin-bottom:42px}
+button{border:0;border-radius:12px;padding:14px 18px;font-size:16px;font-weight:700;background:var(--gold);color:#24190d;box-shadow:0 5px 0 #8d6728}
+button:active{transform:translateY(3px);box-shadow:0 2px 0 #8d6728}
+.choices{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.choice{background:#30251a;color:#f4dfb0;border:1px solid #67502f;box-shadow:none}
+.choice b{display:block;font-size:20px;margin-bottom:5px}.choice small{color:#c6b99f}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.money{color:#f0c45b;font-weight:800}
+.map{position:relative;height:500px;border-radius:18px;overflow:hidden;background:#d8c28e;color:#2d271d;
+background-image:radial-gradient(#c8ae75 1px,transparent 1px);background-size:16px 16px}
+.sea{position:absolute;inset:0;background:linear-gradient(135deg,#9db8ad55,#fff0);clip-path:polygon(0 0,22% 0,15% 18%,30% 30%,15% 45%,0 40%)}
+.route{position:absolute;height:4px;background:#755b35aa;transform-origin:left center;border-radius:4px}
+.r1{width:170px;left:38%;top:29%;transform:rotate(35deg)}.r2{width:140px;left:37%;top:52%;transform:rotate(18deg)}
+.r3{width:120px;left:25%;top:69%;transform:rotate(-5deg)}.r4{width:210px;left:28%;top:51%;transform:rotate(-42deg)}
+.city{position:absolute;background:#3e3021;color:#f5e6bd;border:3px solid #d6a84f;border-radius:50%;width:72px;height:72px;box-shadow:0 5px 12px #0005}
+.city span{display:block;font-size:12px;margin-top:20px}.city em{display:block;font-size:10px;color:#d4c29f;font-style:normal}
+.ed{left:67%;top:18%}.ng{left:42%;top:34%}.ky{left:31%;top:49%}.os{left:20%;top:65%}.na{left:5%;top:74%}
+.card{background:var(--panel);border:1px solid #4d3c27;border-radius:16px;padding:16px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}.item{background:#31271c;border-radius:12px;padding:12px}.item strong{display:block;color:#f2d38d}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.progress{height:9px;background:#3a3025;border-radius:10px;overflow:hidden}.progress>i{display:block;height:100%;background:#d6a84f;width:35%}
+.log{color:#cbbda5;font-size:13px;line-height:1.6;max-height:130px;overflow:auto}
+.battle{background:linear-gradient(#33291e,#18130f);border-radius:18px;padding:18px;text-align:center}
+.enemy{font-size:70px;margin:18px}.party{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}.unit{background:#30251b;border:1px solid #604a2b;padding:10px;border-radius:10px}
+.back{background:#3a2e20;color:#e8d8b3;box-shadow:none;margin-bottom:8px}
+</style>
+</head>
+<body>
+<div id="app">
+<section id="title" class="screen title">
+<div class="kicker">PROJECT 巨商 MOBILE</div><h1>天下商旅</h1><div class="sub">Prototype 001 · 日本篇</div>
+<button onclick="show('role')">開始遊戲</button>
+</section>
+
+<section id="role" class="screen hidden">
+<div class="kicker">你的道路</div><h2>你想點樣立足？</h2>
+<div class="choices">
+<button class="choice" onclick="start('merchant')"><b>💰 商人</b><small>買賣、運貨、累積財富</small></button>
+<button class="choice" onclick="start('fighter')"><b>⚔️ 打手</b><small>打怪、升級、招募傭兵</small></button>
+</div>
+</section>
+
+<section id="map" class="screen hidden">
+<div class="top"><div><div class="kicker">日本 · 第一章</div><h2 id="roleName"></h2></div><div class="money" id="money">¥10,000</div></div>
+<div class="map">
+<div class="sea"></div><div class="route r1"></div><div class="route r2"></div><div class="route r3"></div><div class="route r4"></div>
+<button class="city ed" onclick="city('江戶')"><span>江戶</span><em>起點</em></button>
+<button class="city ng" onclick="city('名古屋')"><span>名古屋</span><em>城鎮</em></button>
+<button class="city ky" onclick="city('京都')"><span>京都</span><em>市場</em></button>
+<button class="city os" onclick="city('大阪')"><span>大阪</span><em>商都</em></button>
+<button class="city na" onclick="city('長崎')"><span>長崎</span><em>港口</em></button>
+</div>
+<div class="card"><b>📜 今日目標</b><div id="objective" style="margin-top:7px;color:#cbbda5">選擇一個城市開始。</div></div>
+</section>
+
+<section id="city" class="screen hidden">
+<button class="back" onclick="show('map')">← 返回地圖</button>
+<div class="top"><div><div class="kicker">城市</div><h2 id="cityTitle"></h2></div><div class="money" id="money2"></div></div>
+<div id="merchantPanel" class="hidden">
+<div class="card"><b>📦 市場</b><div class="grid" id="market"></div><div class="actions"><button onclick="travel('京都')">🚚 前往京都</button><button onclick="sell()">💰 嘗試出售</button></div></div>
+<div class="card"><b>🧳 貨物</b><div id="cargo">暫無貨物</div></div>
+</div>
+<div id="fighterPanel" class="hidden">
+<div class="battle"><div class="kicker">京都郊外</div><div class="enemy">🐺</div><h3>野狼 × 5</h3><p>完成戰鬥以獲得經驗值。</p><button onclick="fight()">⚔️ 開始戰鬥</button></div>
+<div class="card"><b>隊伍</b><div class="party" id="party"></div></div>
+</div>
+</section>
+</div>
+<script>
+let role='', cash=10000, current='', cargo=null, level=1, xp=0, merc=false;
+const prices={江戶:{米:100,茶:180,鹽:120},京都:{米:170,茶:280,鹽:100},名古屋:{米:130,茶:220,鹽:150},大阪:{米:90,茶:250,鹽:140},長崎:{米:210,茶:190,鹽:260}};
+function show(id){document.querySelectorAll('section').forEach(x=>x.classList.add('hidden'));document.getElementById(id).classList.remove('hidden')}
+function start(r){role=r;cash=10000;level=1;xp=0;cargo=null;merc=false;document.getElementById('roleName').textContent=r==='merchant'?'💰 商人':'⚔️ 打手';document.getElementById('objective').textContent=r==='merchant'?'去江戶買貨，再到京都出售。':'前往京都郊外，擊敗野狼。';show('map');}
+function money(){document.getElementById('money').textContent='¥'+cash.toLocaleString();document.getElementById('money2').textContent='¥'+cash.toLocaleString()}
+function city(c){current=c;document.getElementById('cityTitle').textContent=c;money();show('city');
+document.getElementById('merchantPanel').classList.toggle('hidden',role!=='merchant');document.getElementById('fighterPanel').classList.toggle('hidden',role!=='fighter');
+if(role==='merchant') renderMarket(); else renderParty();}
+function renderMarket(){let m=prices[current]||prices.江戶;document.getElementById('market').innerHTML=Object.entries(m).map(([n,p])=>`<div class="item"><strong>${n}</strong>¥${p}<button style="margin-top:8px;padding:8px;width:100%" onclick="buy('${n}',${p})">買入 1</button></div>`).join('');document.getElementById('cargo').textContent=cargo?`${cargo.n} × ${cargo.q}（成本 ¥${cargo.cost.toLocaleString()}）`:'暫無貨物';}
+function buy(n,p){if(cash<p){alert('資金不足');return}cash-=p;cargo={n,q:(cargo?.n===n?cargo.q+1:1),cost:(cargo?.n===n?cargo.cost+p:p)};money();renderMarket();}
+function travel(c){current=c;city(c)}
+function sell(){if(!cargo){alert('你冇貨可以賣');return}let p=prices[current][cargo.n]||0;let revenue=p*cargo.q;cash+=revenue;alert(`出售 ${cargo.n} × ${cargo.q}，收入 ¥${revenue.toLocaleString()}！`);cargo=null;money();renderMarket()}
+function fight(){let gain=45+Math.floor(Math.random()*35);xp+=gain;if(xp>=100){xp-=100;level++;alert(`勝利！LV ${level}！`)}else alert(`勝利！EXP +${gain}`);if(level>=2&&!merc){merc=true;alert('獲得傭兵招募券！你可以招募第一名傭兵。')}renderParty()}
+function renderParty(){document.getElementById('party').innerHTML=`<div class="unit">👤 你 · LV ${level}<div class="progress"><i style="width:${xp}%"></i></div></div>`+(merc?'<div class="unit">🥷 忍者 · LV 1</div>':'<div class="unit">📜 傭兵招募券：可用</div>')}
+</script>
+</body>
+</html>
