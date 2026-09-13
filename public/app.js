@@ -21,7 +21,7 @@ function nav(t,l){return `<button class="${S.tab===t?'active':''}" data-tab="${t
 function render(){
   const s=S.snap;if(!s)return;
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
-  document.querySelector('#app').innerHTML=`<div class="shell"><section class="card top"><div><div class="small">Combat Prototype v0.6.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section><div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell"><section class="card top"><div><div class="small">Combat Prototype v0.6.1</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section><div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -72,8 +72,7 @@ async function battleTap(cell){
   if(!S.selectedUnitIds.length)return toast('請先選擇我方單位');
   const assisted=unit?.side==='ENEMY'?unit:nearestEnemy(Number(cell.dataset.row),Number(cell.dataset.col));
   if(assisted)return targetEnemy(assisted.id);
-  if(S.selectedUnitIds.length>1)return toast('編隊移動會喺下一版加入');
-  const r=await command('/api/commands/battle/move',{unitId:S.selectedUnitIds[0],row:Number(cell.dataset.row),col:Number(cell.dataset.col)});if(r.status==='REJECTED')return toast(r.errorCode);toast('移動指令已落');await refresh();
+  const r=await command('/api/commands/battle/move',{unitIds:S.selectedUnitIds,row:Number(cell.dataset.row),col:Number(cell.dataset.col)});if(r.status==='REJECTED')return toast(r.errorCode);toast(S.selectedUnitIds.length>1?`${S.selectedUnitIds.length} 名單位編隊移動`:'移動指令已落');await refresh();
 }
 function nearestEnemy(row,col){
   return S.battle?.units.filter(x=>x.side==='ENEMY'&&x.alive).map(x=>({unit:x,distance:Math.hypot((x.col-col)*18,(x.row-row)*42)})).filter(x=>x.distance<=46).sort((a,b)=>a.distance-b.distance)[0]?.unit||null;

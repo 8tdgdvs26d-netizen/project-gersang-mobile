@@ -44,6 +44,17 @@ test('movement command is idempotent and server advances the unit',async()=>{
   assert.ok(hero.col>2);assert.deepEqual(hero.destination,{row:2,col:20});
 });
 
+test('group movement assigns unique formation destinations near the chosen cell',async()=>{
+  const body=envelope('formation-move',{unitIds:['hero','archer','guard'],row:4,col:25});
+  const first=await post('/api/commands/battle/move',body),retry=await post('/api/commands/battle/move',body);
+  assert.deepEqual(retry,first);assert.equal(first.data.destinations.length,3);
+  const cells=first.data.destinations.map(x=>`${x.row}:${x.col}`);
+  assert.equal(new Set(cells).size,3);assert.ok(cells.includes('4:25'));
+  assert.ok(first.data.destinations.every(x=>Math.max(Math.abs(x.row-4),Math.abs(x.col-25))<=1));
+  const battle=await request('/api/character/char-demo/battle');
+  assert.equal(new Set(battle.units.filter(x=>x.side==='PLAYER').map(x=>`${x.destination.row}:${x.destination.col}`)).size,3);
+});
+
 test('player unit can lock an enemy target',async()=>{
   const targeted=await post('/api/commands/battle/target',envelope('target-bandit',{unitId:'archer',targetId:'bandit-a'}));
   assert.equal(targeted.status,'ACCEPTED');
