@@ -51,6 +51,14 @@ test('player unit can lock an enemy target',async()=>{
   assert.equal(battle.units.find(x=>x.id==='archer').targetId,'bandit-a');
 });
 
+test('multiple selected units lock the same target with one idempotent command',async()=>{
+  const body=envelope('group-target',{unitIds:['hero','archer','guard'],targetId:'bandit-a'});
+  const first=await post('/api/commands/battle/target',body),retry=await post('/api/commands/battle/target',body);
+  assert.deepEqual(retry,first);assert.deepEqual([...first.data.unitIds].sort(),['archer','guard','hero']);
+  const battle=await request('/api/character/char-demo/battle');
+  assert.ok(battle.units.filter(x=>x.side==='PLAYER').every(x=>x.targetId==='bandit-a'));
+});
+
 test('locked target takes automatic basic-attack damage in range',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));
   fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=53 WHERE id='archer'`).run();fixture.close();
@@ -59,12 +67,12 @@ test('locked target takes automatic basic-attack damage in range',async()=>{
   assert.ok(battle.units.find(x=>x.id==='bandit-a').hp<65);
 });
 
-test('unit automatically acquires another enemy after its target dies',async()=>{
+test('group members automatically acquire another enemy after their target dies',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));
   fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE id='bandit-a'`).run();fixture.close();
   await new Promise(r=>setTimeout(r,350));
-  const battle=await request('/api/character/char-demo/battle'),archer=battle.units.find(x=>x.id==='archer');
-  assert.ok(['bandit-b','bandit-c'].includes(archer.targetId));
+  const battle=await request('/api/character/char-demo/battle'),players=battle.units.filter(x=>x.side==='PLAYER'&&x.alive);
+  assert.ok(players.every(x=>['bandit-b','bandit-c'].includes(x.targetId)));
 });
 
 test('idle player unit automatically attacks an enemy already in range',async()=>{
