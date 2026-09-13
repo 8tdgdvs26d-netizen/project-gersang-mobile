@@ -1,0 +1,13 @@
+{
+  "name": "myrial-unwritten-first-playable",
+  "private": true,
+  "version": "0.4.1",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

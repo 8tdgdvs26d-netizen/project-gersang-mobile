@@ -1,4 +1,4 @@
-# Gersang Mobile First Playable v0.4
+# MYRIAL: UNWRITTEN First Playable v0.4.1
 
 This repository now includes the deployable P0 First Playable.
 
@@ -30,7 +30,7 @@ GET /api/health
 Expected:
 
 ```json
-{"ok":true,"version":"0.4","phase":"First Playable"}
+{"ok":true,"version":"0.4.1","phase":"First Playable Hardening"}
 ```
 
 ## Render
@@ -48,3 +48,11 @@ Do not run multiple replicas against the same SQLite file. This is a single-proc
 ## P0 playable loop
 
 Login / Session → City Market → Buy → Cargo / Storage → Travel → Arrival → Sell → Persistence / Reconnect.
+
+## v0.4.1 hardening
+
+- Gameplay mutation and successful idempotency record now commit atomically.
+- Rejected and reconfirm-required commands no longer permanently consume a key.
+- Travel rerouting starts from the character's virtual position on the current road.
+- The deployed browser UI exposes rerouting while travelling.
+- Regression tests cover duplicate delivery, reconfirm retry, rejected retry, and rerouting.
