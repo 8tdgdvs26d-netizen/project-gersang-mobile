@@ -75,7 +75,7 @@ function advanceBattle(id,now=Date.now()){
     const units=battleRows(id).filter(x=>x.alive);
     for(const unit of units){
       let target=units.find(x=>x.id===unit.target_id&&x.side!==unit.side&&x.alive);
-      if(!target&&unit.side==='ENEMY')target=units.filter(x=>x.side==='PLAYER').sort((a,b)=>battleDistance(unit,a)-battleDistance(unit,b))[0];
+      if(!target&&(unit.side==='ENEMY'||unit.target_id)){target=units.filter(x=>x.side!==unit.side).sort((a,b)=>battleDistance(unit,a)-battleDistance(unit,b))[0];if(target)db.prepare(`UPDATE battle_units SET target_id=? WHERE battle_id=? AND id=?`).run(target.id,id,unit.id)}
       let dr=unit.dest_row,dc=unit.dest_col;
       if(target&&battleDistance(unit,target)>unit.attack_range){dr=target.row_no;dc=target.col_no}
       if(dr==null||dc==null)continue;
@@ -87,7 +87,7 @@ function advanceBattle(id,now=Date.now()){
   }
   const units=battleRows(id).filter(x=>x.alive);
   for(const unit of units){
-    const target=units.find(x=>x.id===unit.target_id&&x.side!==unit.side&&x.alive)??(unit.side==='ENEMY'?units.filter(x=>x.side==='PLAYER').sort((a,b)=>battleDistance(unit,a)-battleDistance(unit,b))[0]:null);
+    const target=units.find(x=>x.id===unit.target_id&&x.side!==unit.side&&x.alive)??((unit.side==='ENEMY'||unit.target_id)?units.filter(x=>x.side!==unit.side).sort((a,b)=>battleDistance(unit,a)-battleDistance(unit,b))[0]:null);
     if(!target||battleDistance(unit,target)>unit.attack_range||now-unit.last_attack_at<unit.attack_interval)continue;
     db.prepare(`UPDATE battle_units SET hp=MAX(0,hp-?),alive=CASE WHEN hp-?<=0 THEN 0 ELSE 1 END WHERE battle_id=? AND id=?`).run(unit.attack_power,unit.attack_power,id,target.id);
     db.prepare(`UPDATE battle_units SET last_attack_at=?,target_id=? WHERE battle_id=? AND id=?`).run(now,target.id,id,unit.id);
@@ -146,7 +146,7 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.5.0',phase:'P1 Combat Prototype'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.5.1',phase:'P1 Combat UX Fix'});
   if(req.method==='GET'&&u.pathname==='/api/cities')return reply(res,200,cities);
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/snapshot')return reply(res,200,snapshot());
   if(req.method==='GET'&&u.pathname.startsWith('/api/cities/')&&u.pathname.endsWith('/market'))return reply(res,200,market(u.pathname.split('/')[3]));

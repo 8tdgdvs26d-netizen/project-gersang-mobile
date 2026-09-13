@@ -1,4 +1,4 @@
-# MYRIAL: UNWRITTEN Combat Prototype v0.5.0
+# MYRIAL: UNWRITTEN Combat Prototype v0.5.1
 
 This repository now includes the deployable P0 First Playable.
 
@@ -30,7 +30,7 @@ GET /api/health
 Expected:
 
 ```json
-{"ok":true,"version":"0.5.0","phase":"P1 Combat Prototype"}
+{"ok":true,"version":"0.5.1","phase":"P1 Combat UX Fix"}
 ```
 
 ## Render
@@ -67,3 +67,10 @@ Login / Session → City Market → Buy → Cargo / Storage → Travel → Arriv
 - Server-owned HP, death removal, victory, defeat, and retreat states.
 - Browser battle view polls the server while combat is active.
 - Regression tests cover grid dimensions, authority, bounds, command idempotency, movement, targeting, and automatic damage.
+
+## v0.5.1 combat UX fix
+
+- Preserve the horizontal battlefield position across live server refreshes.
+- Add jump controls for the player side, battlefield centre, and enemy side.
+- Add visible hit flashes and a recent-damage combat log.
+- Automatically acquire the next nearest enemy after a locked target dies.

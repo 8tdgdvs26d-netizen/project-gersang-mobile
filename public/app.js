@@ -1,4 +1,4 @@
-const S={sessionId:'',snap:null,cities:[],market:[],storage:[],tx:[],battle:null,selectedUnitId:null,tab:'market',modal:null};
+const S={sessionId:'',snap:null,cities:[],market:[],storage:[],tx:[],battle:null,selectedUnitId:null,battleScrollLeft:0,hitUnitIds:[],battleLog:[],tab:'market',modal:null};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
 const post=(p,b)=>req(p,{method:'POST',body:JSON.stringify(b)});
 const env=(payload,idempotencyKey=crypto.randomUUID())=>({commandId:crypto.randomUUID(),idempotencyKey,sessionId:S.sessionId,characterId:'char-demo',clientSentAt:new Date().toISOString(),payload});
@@ -9,14 +9,20 @@ const cityName=id=>S.cities.find(x=>x.id===id)?.name||id;
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),1500)}
 async function refresh(){
   S.snap=await req('/api/character/char-demo/snapshot');
-  [S.market,S.storage,S.tx,S.battle]=await Promise.all([req(`/api/cities/${S.snap.cityId}/market`),req(`/api/character/char-demo/storage/${S.snap.cityId}`),req('/api/character/char-demo/transactions'),req('/api/character/char-demo/battle')]);
+  const [market,storage,tx,battle]=await Promise.all([req(`/api/cities/${S.snap.cityId}/market`),req(`/api/character/char-demo/storage/${S.snap.cityId}`),req('/api/character/char-demo/transactions'),req('/api/character/char-demo/battle')]);
+  S.market=market;S.storage=storage;S.tx=tx;setBattle(battle);
   render();
+}
+function setBattle(next){
+  if(S.battle&&next?.id===S.battle.id){for(const unit of next.units){const old=S.battle.units.find(x=>x.id===unit.id);if(old&&unit.hp<old.hp){S.hitUnitIds.push(unit.id);S.battleLog.unshift(`${unit.name} 受到 ${old.hp-unit.hp} 傷害`);}}S.battleLog=S.battleLog.slice(0,3)}
+  S.battle=next;
 }
 function nav(t,l){return `<button class="${S.tab===t?'active':''}" data-tab="${t}">${l}</button>`}
 function render(){
   const s=S.snap;if(!s)return;
-  document.querySelector('#app').innerHTML=`<div class="shell"><section class="card top"><div><div class="small">Combat Prototype v0.5.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section><div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>${view()}</div>`;
-  document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();if(S.modal)showModal();
+  const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
+  document.querySelector('#app').innerHTML=`<div class="shell"><section class="card top"><div><div class="small">Combat Prototype v0.5.1</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section><div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>${view()}</div>`;
+  document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();const scroll=document.querySelector('.battle-scroll');if(scroll){scroll.scrollLeft=S.battleScrollLeft;scroll.addEventListener('scroll',()=>S.battleScrollLeft=scroll.scrollLeft,{passive:true})}if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
   if(S.tab==='market')return `<section class="card"><b>城市市場</b><div class="small">Quote 唔鎖價，Confirm 時 Server 會重驗。</div>${S.market.map(m=>`<div class="row"><div><div class="good">${m.goodTypeId}</div><div class="prices">買 ${m.buyPrice} / 賣 ${m.sellPrice} · Stock ${m.stock} · v${m.version}</div></div><input class="qty" data-q="${m.goodTypeId}" type="number" min="1" value="1"><div class="actions"><button class="btn" data-buy="${m.goodTypeId}">買</button><button class="btn alt" data-sell="${m.goodTypeId}">賣</button></div></div>`).join('')}</section>`;
@@ -36,14 +42,14 @@ function battleView(){
   const selected=b.units.find(x=>x.id===S.selectedUnitId&&x.alive);let cells='';
   for(let row=0;row<b.rows;row++)for(let col=0;col<b.columns;col++){
     const u=b.units.find(x=>x.alive&&x.row===row&&x.col===col),classes=['battle-cell'];
-    if(u)classes.push(u.side==='PLAYER'?'friendly':'enemy');if(u?.id===S.selectedUnitId)classes.push('selected');if(u?.id===selected?.targetId)classes.push('targeted');
+    if(u)classes.push(u.side==='PLAYER'?'friendly':'enemy');if(u?.id===S.selectedUnitId)classes.push('selected');if(u?.id===selected?.targetId)classes.push('targeted');if(u&&S.hitUnitIds.includes(u.id))classes.push('hit');
     cells+=`<button class="${classes.join(' ')}" data-row="${row}" data-col="${col}" ${u?`data-unit="${u.id}"`:''} title="${u?`${u.name} ${u.hp}/${u.maxHp}`:`${row+1},${col+1}`}">${u?`${u.role==='RANGED'?'🏹':u.side==='PLAYER'?'⚔️':'👺'}<span>${u.hp}</span>`:''}</button>`;
   }
-  return `<section class="card battle-card"><div class="battle-head"><div><b>山賊戰 · ${b.status}</b><div class="small">${selected?`已選：${selected.name}｜攻距 ${selected.attackRange}｜點空格移動，點紅色敵人鎖定`:'先點選一名藍色我方單位'}</div></div><button class="btn danger" id="retreat">撤退</button></div><div class="battle-scroll"><div class="battle-grid">${cells}</div></div><div class="legend"><span>🔵 我方</span><span>🔴 敵方</span><span>棋子下方數字＝HP</span></div></section>`;
+  return `<section class="card battle-card"><div class="battle-head"><div><b>山賊戰 · ${b.status}</b><div class="small">${selected?`已選：${selected.name}｜攻距 ${selected.attackRange}｜點空格移動，點紅色敵人鎖定`:'先點選一名藍色我方單位'}</div></div><button class="btn danger" id="retreat">撤退</button></div><div class="battle-jump"><button class="btn alt" data-jump="start">我方 ◀</button><button class="btn alt" data-jump="middle">戰場中央</button><button class="btn alt" data-jump="end">▶ 敵方</button></div><div class="battle-scroll"><div class="battle-grid">${cells}</div></div><div class="legend"><span>🔵 我方</span><span>🔴 敵方</span><span>棋子下方數字＝HP</span></div><div class="battle-log">${S.battleLog.map(x=>`<div>⚔️ ${x}</div>`).join('')||'<div>等待首次交鋒…</div>'}</div></section>`;
 }
 function qty(g){return Math.max(1,Number(document.querySelector(`[data-q="${g}"]`)?.value||1))}
 function wire(){
-  document.querySelectorAll('[data-buy]').forEach(b=>b.onclick=()=>openQuote(b.dataset.buy,'BUY',qty(b.dataset.buy)));document.querySelectorAll('[data-sell]').forEach(b=>b.onclick=()=>openQuote(b.dataset.sell,'SELL',qty(b.dataset.sell)));document.querySelectorAll('[data-store]').forEach(b=>b.onclick=()=>move('CARGO_TO_STORAGE',b.dataset.store));document.querySelectorAll('[data-withdraw]').forEach(b=>b.onclick=()=>move('STORAGE_TO_CARGO',b.dataset.withdraw));document.querySelectorAll('[data-travel]').forEach(b=>b.onclick=()=>travel(b.dataset.travel));document.querySelectorAll('[data-reroute]').forEach(b=>b.onclick=()=>reroute(b.dataset.reroute));document.querySelector('#arrive')?.addEventListener('click',arrival);document.querySelector('#start-battle')?.addEventListener('click',startBattle);document.querySelector('#retreat')?.addEventListener('click',retreatBattle);document.querySelectorAll('.battle-cell').forEach(c=>c.onclick=()=>battleTap(c));
+  document.querySelectorAll('[data-buy]').forEach(b=>b.onclick=()=>openQuote(b.dataset.buy,'BUY',qty(b.dataset.buy)));document.querySelectorAll('[data-sell]').forEach(b=>b.onclick=()=>openQuote(b.dataset.sell,'SELL',qty(b.dataset.sell)));document.querySelectorAll('[data-store]').forEach(b=>b.onclick=()=>move('CARGO_TO_STORAGE',b.dataset.store));document.querySelectorAll('[data-withdraw]').forEach(b=>b.onclick=()=>move('STORAGE_TO_CARGO',b.dataset.withdraw));document.querySelectorAll('[data-travel]').forEach(b=>b.onclick=()=>travel(b.dataset.travel));document.querySelectorAll('[data-reroute]').forEach(b=>b.onclick=()=>reroute(b.dataset.reroute));document.querySelector('#arrive')?.addEventListener('click',arrival);document.querySelector('#start-battle')?.addEventListener('click',startBattle);document.querySelector('#retreat')?.addEventListener('click',retreatBattle);document.querySelectorAll('.battle-cell').forEach(c=>c.onclick=()=>battleTap(c));document.querySelectorAll('[data-jump]').forEach(b=>b.onclick=()=>jumpBattle(b.dataset.jump));
 }
 async function openQuote(goodTypeId,side,requestedQuantity){S.modal={quote:await post('/api/commands/market/quote',{characterId:'char-demo',goodTypeId,side,requestedQuantity}),re:false,key:crypto.randomUUID()};showModal()}
 function showModal(){document.querySelector('.modalbg')?.remove();const q=S.modal.quote,d=document.createElement('div');d.className='modalbg';d.innerHTML=`<div class="modal"><div class="small">${S.modal.re?'價格已變，請重新確認':'Confirm Quote'}</div><h2>${q.side} ${q.goodTypeId}</h2><p>數量 <b>${q.fillQuantity}</b> · 單價 <b>${q.unitPrice}</b> · Total <b>${q.total}</b></p><div class="actions"><button class="btn" id="ok">Confirm</button><button class="btn alt" id="cancel">取消</button></div></div>`;document.body.append(d);d.querySelector('#cancel').onclick=()=>{S.modal=null;d.remove()};d.querySelector('#ok').onclick=confirm}
@@ -52,7 +58,7 @@ async function move(direction,goodTypeId){const r=await command('/api/commands/c
 async function travel(destinationCityId){const r=await command('/api/commands/travel/start',{destinationCityId});if(r.status==='REJECTED')return toast(r.errorCode);S.tab='travel';toast('已出發');await refresh()}
 async function reroute(destinationCityId){const r=await command('/api/commands/travel/reroute',{destinationCityId});if(r.status==='REJECTED')return toast(r.errorCode);toast(`已改道去 ${cityName(destinationCityId)}`);await refresh()}
 async function arrival(){const r=await command('/api/commands/travel/resolve-arrival',{});if(r.status==='REJECTED')return toast(r.errorCode==='ERR_NOT_ARRIVED'?'仲未到埗':r.errorCode);S.tab='market';toast('已到埗');await refresh()}
-async function startBattle(){const r=await command('/api/commands/battle/start',{});if(r.status==='REJECTED')return toast(r.errorCode);S.selectedUnitId='hero';toast('戰鬥開始');await refresh()}
+async function startBattle(){const r=await command('/api/commands/battle/start',{});if(r.status==='REJECTED')return toast(r.errorCode);S.selectedUnitId='hero';S.battleScrollLeft=0;S.battleLog=[];toast('戰鬥開始');await refresh()}
 async function retreatBattle(){const r=await command('/api/commands/battle/retreat',{});if(r.status==='REJECTED')return toast(r.errorCode);S.selectedUnitId=null;toast('已撤退');await refresh()}
 async function battleTap(cell){
   const unit=S.battle?.units.find(x=>x.id===cell.dataset.unit);
@@ -62,5 +68,6 @@ async function battleTap(cell){
   const payload=unit?.side==='ENEMY'?{unitId:S.selectedUnitId,targetId:unit.id}:{unitId:S.selectedUnitId,row:Number(cell.dataset.row),col:Number(cell.dataset.col)};
   const r=await command(path,payload);if(r.status==='REJECTED')return toast(r.errorCode);toast(unit?'已鎖定敵人':'移動指令已落');await refresh();
 }
-async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;S.cities=await req('/api/cities');await refresh();setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{S.battle=await req('/api/character/char-demo/battle');render()}catch{}},600)}
+function jumpBattle(where){const scroll=document.querySelector('.battle-scroll');if(!scroll)return;const max=scroll.scrollWidth-scroll.clientWidth,target=where==='start'?0:where==='middle'?max/2:max;scroll.scrollLeft=target;S.battleScrollLeft=target}
+async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;S.cities=await req('/api/cities');await refresh();setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{setBattle(await req('/api/character/char-demo/battle'));render()}catch{}},600)}
 boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);

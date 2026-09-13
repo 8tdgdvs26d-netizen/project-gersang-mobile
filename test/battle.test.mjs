@@ -58,3 +58,11 @@ test('locked target takes automatic basic-attack damage in range',async()=>{
   const battle=await request('/api/character/char-demo/battle');
   assert.ok(battle.units.find(x=>x.id==='bandit-a').hp<65);
 });
+
+test('unit automatically acquires another enemy after its target dies',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE id='bandit-a'`).run();fixture.close();
+  await new Promise(r=>setTimeout(r,350));
+  const battle=await request('/api/character/char-demo/battle'),archer=battle.units.find(x=>x.id==='archer');
+  assert.ok(['bandit-b','bandit-c'].includes(archer.targetId));
+});
