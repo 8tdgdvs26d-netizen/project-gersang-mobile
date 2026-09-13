@@ -21,7 +21,7 @@ function nav(t,l){return `<button class="${S.tab===t?'active':''}" data-tab="${t
 function render(){
   const s=S.snap;if(!s)return;
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
-  document.querySelector('#app').innerHTML=`<div class="shell"><section class="card top"><div><div class="small">Combat Prototype v0.6.1</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section><div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell"><section class="card top"><div><div class="small">Combat Prototype v0.6.2</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section><div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -48,7 +48,7 @@ function battleView(){
   }
   const enemies=b.units.filter(x=>x.side==='ENEMY'&&x.alive);
   const targets=enemies.map(x=>`<button class="target-chip ${selected.some(u=>u.targetId===x.id)?'locked':''}" data-target-unit="${x.id}"><span>👺 ${x.name}</span><small>${x.hp}/${x.maxHp} HP</small></button>`).join('');
-  const selectedLabel=selected.length?`已選 ${selected.length} 名：${selected.map(x=>x.name).join('、')}`:'先點選藍色我方單位';
+  const selectedLabel=selected.length?`已選 ${selected.length} 名：${selected.map(x=>x.name).join('、')}｜遠攻可邊行邊射`:'先點選藍色我方單位';
   return `<section class="card battle-card"><div class="battle-head"><div><b>山賊戰 · ${b.status}</b><div class="small">${selectedLabel}</div></div><button class="btn danger" id="retreat">撤退</button></div><div class="unit-controls"><button class="btn alt" id="select-all">全選我方</button><button class="btn alt" id="clear-selection">清除選擇</button><span class="small">點我方棋子可加選／取消</span></div><div class="battle-targets"><div class="small">快速鎖定敵人</div>${targets}</div><div class="battle-pan-wrap"><span>我方</span><input id="battle-pan" class="battle-pan" type="range" min="0" max="1000" value="0" aria-label="移動戰場畫面"><span>敵方</span></div><div class="battle-scroll"><div class="battle-grid">${cells}</div></div><div class="legend"><span>🔵 我方</span><span>🔴 敵方</span><span>棋子下方數字＝HP</span></div><div class="battle-log">${S.battleLog.map(x=>`<div>⚔️ ${x}</div>`).join('')||'<div>等待首次交鋒…</div>'}</div></section>`;
 }
 function qty(g){return Math.max(1,Number(document.querySelector(`[data-q="${g}"]`)?.value||1))}

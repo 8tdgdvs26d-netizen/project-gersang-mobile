@@ -70,9 +70,28 @@ test('multiple selected units lock the same target with one idempotent command',
   assert.ok(battle.units.filter(x=>x.side==='PLAYER').every(x=>x.targetId==='bandit-a'));
 });
 
+test('movement clears melee lock but preserves ranged lock',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET target_id='bandit-b' WHERE id IN ('hero','archer')`).run();fixture.close();
+  await post('/api/commands/battle/move',envelope('role-move',{unitIds:['hero','archer'],row:2,col:30}));
+  const check=new DatabaseSync(join(dir,'test.sqlite'));
+  const hero=check.prepare(`SELECT target_id FROM battle_units WHERE id='hero'`).get(),archer=check.prepare(`SELECT target_id FROM battle_units WHERE id='archer'`).get();check.close();
+  assert.equal(hero.target_id,null);assert.equal(archer.target_id,'bandit-b');
+});
+
+test('ranged unit can move and damage its locked target simultaneously',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=53,dest_row=NULL,dest_col=NULL,target_id='bandit-c',last_attack_at=0 WHERE id='archer'`).run();
+  const before=fixture.prepare(`SELECT hp FROM battle_units WHERE id='bandit-c'`).get().hp;fixture.close();
+  await post('/api/commands/battle/move',envelope('ranged-move-fire',{unitIds:['archer'],row:0,col:50}));
+  await new Promise(r=>setTimeout(r,800));
+  const battle=await request('/api/character/char-demo/battle'),archer=battle.units.find(x=>x.id==='archer'),bandit=battle.units.find(x=>x.id==='bandit-c');
+  assert.ok(archer.col<53);assert.ok(bandit.hp<before);
+});
+
 test('locked target takes automatic basic-attack damage in range',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));
-  fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=53 WHERE id='archer'`).run();fixture.close();
+  fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=53,target_id='bandit-a',last_attack_at=0 WHERE id='archer'`).run();fixture.close();
   await new Promise(r=>setTimeout(r,800));
   const battle=await request('/api/character/char-demo/battle');
   assert.ok(battle.units.find(x=>x.id==='bandit-a').hp<65);
@@ -80,6 +99,7 @@ test('locked target takes automatic basic-attack damage in range',async()=>{
 
 test('group members automatically acquire another enemy after their target dies',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET target_id='bandit-a' WHERE side='PLAYER'`).run();
   fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE id='bandit-a'`).run();fixture.close();
   await new Promise(r=>setTimeout(r,350));
   const battle=await request('/api/character/char-demo/battle'),players=battle.units.filter(x=>x.side==='PLAYER'&&x.alive);
