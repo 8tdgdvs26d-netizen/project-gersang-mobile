@@ -1,4 +1,4 @@
-# MYRIAL: UNWRITTEN Combat Prototype v0.5.1
+# MYRIAL: UNWRITTEN Combat Prototype v0.5.2
 
 This repository now includes the deployable P0 First Playable.
 
@@ -30,7 +30,7 @@ GET /api/health
 Expected:
 
 ```json
-{"ok":true,"version":"0.5.1","phase":"P1 Combat UX Fix"}
+{"ok":true,"version":"0.5.2","phase":"P1 Combat Navigation"}
 ```
 
 ## Render
@@ -74,3 +74,8 @@ Login / Session → City Market → Buy → Cargo / Storage → Travel → Arriv
 - Add jump controls for the player side, battlefield centre, and enemy side.
 - Add visible hit flashes and a recent-damage combat log.
 - Automatically acquire the next nearest enemy after a locked target dies.
+
+## v0.5.2 combat navigation
+
+- Replace quick-jump buttons with a large draggable battlefield scrollbar.
+- Keep the range control and direct touch-scrolling synchronized in both directions.
