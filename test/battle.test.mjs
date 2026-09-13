@@ -66,3 +66,11 @@ test('unit automatically acquires another enemy after its target dies',async()=>
   const battle=await request('/api/character/char-demo/battle'),archer=battle.units.find(x=>x.id==='archer');
   assert.ok(['bandit-b','bandit-c'].includes(archer.targetId));
 });
+
+test('idle player unit automatically attacks an enemy already in range',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=54,target_id=NULL,last_attack_at=0 WHERE id='hero'`).run();fixture.close();
+  await new Promise(r=>setTimeout(r,800));
+  const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),bandit=battle.units.find(x=>x.id==='bandit-b');
+  assert.equal(hero.targetId,'bandit-b');assert.ok(bandit.hp<65);
+});
