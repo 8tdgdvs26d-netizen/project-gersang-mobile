@@ -1,4 +1,4 @@
-const S={sessionId:'',snap:null,cities:[],market:[],storage:[],tx:[],battle:null,selectedUnitId:null,battleScrollLeft:0,hitUnitIds:[],battleLog:[],tab:'market',modal:null};
+const S={sessionId:'',snap:null,cities:[],market:[],storage:[],tx:[],battle:null,selectedUnitId:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],battleLog:[],tab:'market',modal:null};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
 const post=(p,b)=>req(p,{method:'POST',body:JSON.stringify(b)});
 const env=(payload,idempotencyKey=crypto.randomUUID())=>({commandId:crypto.randomUUID(),idempotencyKey,sessionId:S.sessionId,characterId:'char-demo',clientSentAt:new Date().toISOString(),payload});
@@ -21,8 +21,8 @@ function nav(t,l){return `<button class="${S.tab===t?'active':''}" data-tab="${t
 function render(){
   const s=S.snap;if(!s)return;
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
-  document.querySelector('#app').innerHTML=`<div class="shell"><section class="card top"><div><div class="small">Combat Prototype v0.5.2</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section><div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>${view()}</div>`;
-  document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();const scroll=document.querySelector('.battle-scroll'),pan=document.querySelector('#battle-pan');if(scroll){scroll.scrollLeft=S.battleScrollLeft;const syncPan=()=>{S.battleScrollLeft=scroll.scrollLeft;if(pan){const max=scroll.scrollWidth-scroll.clientWidth;pan.value=max?String(Math.round(scroll.scrollLeft/max*1000)):'0'}};syncPan();scroll.addEventListener('scroll',syncPan,{passive:true})}if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
+  document.querySelector('#app').innerHTML=`<div class="shell"><section class="card top"><div><div class="small">Combat Prototype v0.5.3</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section><div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>${view()}</div>`;
+  document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
   if(S.tab==='market')return `<section class="card"><b>城市市場</b><div class="small">Quote 唔鎖價，Confirm 時 Server 會重驗。</div>${S.market.map(m=>`<div class="row"><div><div class="good">${m.goodTypeId}</div><div class="prices">買 ${m.buyPrice} / 賣 ${m.sellPrice} · Stock ${m.stock} · v${m.version}</div></div><input class="qty" data-q="${m.goodTypeId}" type="number" min="1" value="1"><div class="actions"><button class="btn" data-buy="${m.goodTypeId}">買</button><button class="btn alt" data-sell="${m.goodTypeId}">賣</button></div></div>`).join('')}</section>`;
@@ -68,6 +68,17 @@ async function battleTap(cell){
   const payload=unit?.side==='ENEMY'?{unitId:S.selectedUnitId,targetId:unit.id}:{unitId:S.selectedUnitId,row:Number(cell.dataset.row),col:Number(cell.dataset.col)};
   const r=await command(path,payload);if(r.status==='REJECTED')return toast(r.errorCode);toast(unit?'已鎖定敵人':'移動指令已落');await refresh();
 }
-function panBattle(event){const scroll=document.querySelector('.battle-scroll');if(!scroll)return;const max=scroll.scrollWidth-scroll.clientWidth;S.battleScrollLeft=max*Number(event.target.value)/1000;scroll.scrollLeft=S.battleScrollLeft}
-async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;S.cities=await req('/api/cities');await refresh();setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{setBattle(await req('/api/character/char-demo/battle'));render()}catch{}},600)}
+function setupBattlePan(){
+  const scroll=document.querySelector('.battle-scroll'),pan=document.querySelector('#battle-pan');if(!scroll||!pan)return;
+  scroll.scrollLeft=S.battleScrollLeft;
+  const syncPan=()=>{S.battleScrollLeft=scroll.scrollLeft;if(!S.battlePanDragging){const max=scroll.scrollWidth-scroll.clientWidth;pan.value=max?String(Math.round(scroll.scrollLeft/max*1000)):'0'}};
+  const start=()=>{S.battlePanDragging=true};
+  const finish=()=>{S.battlePanDragging=false;syncPan()};
+  syncPan();scroll.addEventListener('scroll',syncPan,{passive:true});pan.addEventListener('pointerdown',start,{passive:true});pan.addEventListener('touchstart',start,{passive:true});pan.addEventListener('change',finish);pan.addEventListener('pointerup',finish,{passive:true});pan.addEventListener('touchend',finish,{passive:true});
+}
+function panBattle(event){
+  const scroll=document.querySelector('.battle-scroll');if(!scroll)return;S.battlePanDragging=true;
+  const value=Number(event.target.value);cancelAnimationFrame(S.battlePanFrame);S.battlePanFrame=requestAnimationFrame(()=>{const max=scroll.scrollWidth-scroll.clientWidth;S.battleScrollLeft=max*value/1000;scroll.scrollLeft=S.battleScrollLeft});
+}
+async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;S.cities=await req('/api/cities');await refresh();setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{setBattle(await req('/api/character/char-demo/battle'));if(!S.battlePanDragging)render()}catch{}},600)}
 boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);
