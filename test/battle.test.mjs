@@ -113,3 +113,40 @@ test('idle player unit automatically attacks an enemy already in range',async()=
   const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),bandit=battle.units.find(x=>x.id==='bandit-b');
   assert.equal(hero.targetId,'bandit-b');assert.ok(bandit.hp<65);
 });
+
+test('heavy strike is server-authoritative, idempotent, and starts cooldown',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
+  fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE id='hero'`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=12,hp=55,alive=1 WHERE id='bandit-c'`).run();
+  fixture.prepare(`DELETE FROM battle_skill_cooldowns`).run();fixture.close();
+  const body=envelope('heavy-strike-once',{unitId:'hero',skillId:'heavy-strike',targetId:'bandit-c'});
+  const first=await post('/api/commands/battle/skill',body),retry=await post('/api/commands/battle/skill',body);
+  assert.deepEqual(retry,first);assert.equal(first.status,'ACCEPTED');assert.equal(first.data.damage,32);assert.equal(first.data.targetHp,23);
+  const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero');
+  assert.equal(battle.units.find(x=>x.id==='bandit-c').hp,23);assert.ok(hero.skills.find(x=>x.id==='heavy-strike').readyInMs>0);
+  const cooldown=await post('/api/commands/battle/skill',envelope('heavy-strike-too-soon',{unitId:'hero',skillId:'heavy-strike',targetId:'bandit-c'}));
+  assert.equal(cooldown.errorCode,'ERR_SKILL_COOLDOWN');
+});
+
+test('heavy strike rejects out-of-range targets without damage',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
+  fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=0,target_id=NULL WHERE id='hero'`).run();
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=20,hp=55,alive=1 WHERE id='bandit-c'`).run();
+  fixture.prepare(`UPDATE battle_skill_cooldowns SET ready_at=0 WHERE unit_id='hero' AND skill_id='heavy-strike'`).run();fixture.close();
+  const result=await post('/api/commands/battle/skill',envelope('heavy-strike-far',{unitId:'hero',skillId:'heavy-strike',targetId:'bandit-c'}));
+  assert.equal(result.errorCode,'ERR_SKILL_OUT_OF_RANGE');
+  const check=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(check.prepare(`SELECT hp FROM battle_units WHERE id='bandit-c'`).get().hp,55);check.close();
+});
+
+test('heavy strike removes a defeated target immediately',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
+  fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,target_id=NULL WHERE id='hero'`).run();
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=12,hp=20,alive=1 WHERE id='bandit-c'`).run();
+  fixture.prepare(`UPDATE battle_skill_cooldowns SET ready_at=0 WHERE unit_id='hero' AND skill_id='heavy-strike'`).run();fixture.close();
+  const result=await post('/api/commands/battle/skill',envelope('heavy-strike-kill',{unitId:'hero',skillId:'heavy-strike',targetId:'bandit-c'}));
+  assert.equal(result.status,'ACCEPTED');assert.equal(result.data.killed,true);
+  const battle=await request('/api/character/char-demo/battle');assert.equal(battle.units.find(x=>x.id==='bandit-c').alive,false);
+});
