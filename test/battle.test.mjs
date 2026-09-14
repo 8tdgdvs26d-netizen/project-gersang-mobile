@@ -140,6 +140,18 @@ test('heavy strike rejects out-of-range targets without damage',async()=>{
   const check=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(check.prepare(`SELECT hp FROM battle_units WHERE id='bandit-c'`).get().hp,55);check.close();
 });
 
+test('archer has an independent ranged skill and cooldown',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
+  fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=10,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE id='archer'`).run();
+  fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=17,hp=65,alive=1 WHERE id='bandit-b'`).run();
+  fixture.prepare(`DELETE FROM battle_skill_cooldowns WHERE unit_id='archer'`).run();fixture.close();
+  const result=await post('/api/commands/battle/skill',envelope('heartseeker-once',{unitId:'archer',skillId:'heartseeker-arrow',targetId:'bandit-b'}));
+  assert.equal(result.status,'ACCEPTED');assert.equal(result.data.skillName,'穿心箭');assert.equal(result.data.damage,24);assert.equal(result.data.targetHp,41);
+  const battle=await request('/api/character/char-demo/battle'),archer=battle.units.find(x=>x.id==='archer');
+  assert.ok(archer.skills.find(x=>x.id==='heartseeker-arrow').readyInMs>0);
+});
+
 test('heavy strike removes a defeated target immediately',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
   fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
