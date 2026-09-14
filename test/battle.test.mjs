@@ -172,6 +172,21 @@ test('iron wall is self-targeted and halves incoming damage',async()=>{
   assert.equal(guard.hp,115);assert.ok(guard.statusEffects.find(x=>x.id==='iron-wall').expiresInMs>0);assert.ok(guard.skills.find(x=>x.id==='iron-wall').readyInMs>0);
 });
 
+test('arrow rain damages every enemy in its ground-targeted area',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
+  fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE id='archer'`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=16,hp=65,alive=1,last_attack_at=? WHERE id='bandit-a'`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=16,hp=65,alive=1,last_attack_at=? WHERE id='bandit-b'`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=4,col_no=20,hp=55,alive=1,last_attack_at=? WHERE id='bandit-c'`).run(now);
+  fixture.prepare(`DELETE FROM battle_skill_cooldowns WHERE unit_id='archer' AND skill_id='arrow-rain'`).run();fixture.close();
+  const result=await post('/api/commands/battle/skill',envelope('arrow-rain-once',{unitId:'archer',skillId:'arrow-rain',row:2,col:16}));
+  assert.equal(result.status,'ACCEPTED');assert.equal(result.data.hits.length,2);assert.equal(result.data.damage,36);
+  const battle=await request('/api/character/char-demo/battle');
+  assert.equal(battle.units.find(x=>x.id==='bandit-a').hp,47);assert.equal(battle.units.find(x=>x.id==='bandit-b').hp,47);assert.equal(battle.units.find(x=>x.id==='bandit-c').hp,55);
+  assert.ok(battle.units.find(x=>x.id==='archer').skills.find(x=>x.id==='arrow-rain').readyInMs>0);
+});
+
 test('heavy strike removes a defeated target immediately',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
   fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
