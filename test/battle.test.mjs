@@ -226,3 +226,11 @@ test('new battles apply each role level growth to hp and attack',async()=>{
   assert.deepEqual({level:archer.level,maxHp:archer.maxHp,attack:archer.attack},{level:2,maxHp:88,attack:15});
   assert.deepEqual({level:guard.level,maxHp:guard.maxHp,attack:guard.attack},{level:2,maxHp:120,attack:16});
 });
+
+test('elite encounter has stronger composition and higher rewards',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();fixture.close();
+  const started=await post('/api/commands/battle/start',envelope('elite-encounter',{encounterId:'bandit-captain'}));assert.equal(started.status,'ACCEPTED');
+  const active=await request('/api/character/char-demo/battle');assert.equal(active.encounter.id,'bandit-captain');assert.equal(active.units.filter(x=>x.side==='ENEMY').length,4);assert.equal(active.units.find(x=>x.id==='captain').maxHp,120);
+  const defeated=new DatabaseSync(join(dir,'test.sqlite'));defeated.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(active.id);defeated.close();
+  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.reward.gold,180);assert.ok(victory.reward.xpRewards.every(x=>x.xp===80));
+});
