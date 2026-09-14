@@ -61,9 +61,9 @@ test('group movement assigns unique formation destinations near the chosen cell'
   assert.deepEqual(retry,first);assert.equal(first.data.destinations.length,3);
   const cells=first.data.destinations.map(x=>`${x.row}:${x.col}`);
   assert.equal(new Set(cells).size,3);assert.ok(cells.includes('4:25'));
-  assert.ok(first.data.destinations.every(x=>Math.max(Math.abs(x.row-4),Math.abs(x.col-25))<=1));
-  assert.equal(first.data.formation,'ORDERED_COMPACT');
-  const ordered=['archer','hero','guard'].map(id=>first.data.destinations.find(x=>x.unitId===id));assert.ok(ordered[0].row<=ordered[1].row&&ordered[1].row<=ordered[2].row);
+  assert.ok(first.data.destinations.every(x=>x.row>=0&&x.row<5&&x.col>=0&&x.col<60));
+  assert.equal(first.data.formation,'PRESERVED_FLEX');
+  const ordered=['archer','hero','guard'].map(id=>first.data.destinations.find(x=>x.unitId===id));assert.deepEqual({row:ordered[0].row-ordered[1].row,col:ordered[0].col-ordered[1].col},{row:-1,col:-1});assert.deepEqual({row:ordered[2].row-ordered[1].row,col:ordered[2].col-ordered[1].col},{row:1,col:-1});
   const battle=await request('/api/character/char-demo/battle');
   assert.equal(new Set(battle.units.filter(x=>x.side==='PLAYER').map(x=>`${x.destination.row}:${x.destination.col}`)).size,3);
 });
@@ -285,4 +285,14 @@ test('pre-battle deployment validates the friendly zone and unique cells',async(
   const started=await post('/api/commands/battle/start',envelope('deployment-valid',{unitIds:['hero','guard'],deployments:[{unitId:'hero',row:4,col:8},{unitId:'guard',row:3,col:7}]}));assert.equal(started.status,'ACCEPTED');assert.equal(started.data.deployments.length,2);
   const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),guard=battle.units.find(x=>x.id==='guard');
   assert.deepEqual({row:hero.row,col:hero.col},{row:4,col:8});assert.deepEqual({row:guard.row,col:guard.col},{row:3,col:7});
+  const moved=await post('/api/commands/battle/move',envelope('preserve-deployed-formation',{unitIds:['hero','guard'],row:2,col:20}));assert.equal(moved.status,'ACCEPTED');assert.equal(moved.data.formation,'PRESERVED_FLEX');
+  const heroStop=moved.data.destinations.find(x=>x.unitId==='hero'),guardStop=moved.data.destinations.find(x=>x.unitId==='guard');assert.deepEqual({row:heroStop.row-guardStop.row,col:heroStop.col-guardStop.col},{row:1,col:1});
+});
+
+test('attack objective overrides formation depth until every unit reaches its own range',async()=>{
+  const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
+  const started=await post('/api/commands/battle/start',envelope('flex-formation-attack',{unitIds:['hero','archer','guard'],deployments:[{unitId:'hero',row:2,col:0},{unitId:'archer',row:1,col:8},{unitId:'guard',row:3,col:6}]}));assert.equal(started.status,'ACCEPTED');
+  const now=Date.now(),fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND side='ENEMY' AND id<>'bandit-b'`).run(started.data.battleId);fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=15,hp=65,alive=1,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE battle_id=? AND id='bandit-b'`).run(now,started.data.battleId);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,started.data.battleId);fixture.close();
+  const order=await post('/api/commands/battle/target',envelope('all-focus-boss',{unitIds:['hero','archer','guard'],targetId:'bandit-b'}));assert.equal(order.status,'ACCEPTED');await new Promise(resolve=>setTimeout(resolve,3500));
+  const battle=await request('/api/character/char-demo/battle'),boss=battle.units.find(x=>x.id==='bandit-b');for(const id of ['hero','archer','guard']){const unit=battle.units.find(x=>x.id===id);assert.ok(Math.max(Math.abs(unit.row-boss.row),Math.abs(unit.col-boss.col))<=unit.attackRange,`${id} did not reach attack range`)}
 });
