@@ -238,8 +238,9 @@ test('elite encounter has stronger composition and higher rewards',async()=>{
 test('custom deployment is validated and only survivors earn experience',async()=>{
   const empty=await post('/api/commands/battle/start',envelope('empty-team',{encounterId:'bandit-patrol',unitIds:[]}));assert.equal(empty.errorCode,'ERR_TEAM_REQUIRED');
   const invalid=await post('/api/commands/battle/start',envelope('fake-team',{encounterId:'bandit-patrol',unitIds:['fake-unit']}));assert.equal(invalid.errorCode,'ERR_INVALID_TEAM');
-  const started=await post('/api/commands/battle/start',envelope('two-unit-team',{encounterId:'bandit-patrol',unitIds:['archer','guard']}));assert.equal(started.status,'ACCEPTED');
-  const active=await request('/api/character/char-demo/battle');assert.deepEqual(active.units.filter(x=>x.side==='PLAYER').map(x=>x.id).sort(),['archer','guard']);
-  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(active.id);fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND id='guard'`).run(active.id);fixture.close();
-  const victory=await request('/api/character/char-demo/battle');assert.deepEqual(victory.reward.xpRewards.map(x=>x.unitId),['archer']);
+  const noHero=await post('/api/commands/battle/start',envelope('no-hero',{encounterId:'bandit-patrol',unitIds:['archer','guard']}));assert.equal(noHero.errorCode,'ERR_HERO_REQUIRED');
+  const started=await post('/api/commands/battle/start',envelope('two-unit-team',{encounterId:'bandit-patrol',unitIds:['hero','archer']}));assert.equal(started.status,'ACCEPTED');
+  const active=await request('/api/character/char-demo/battle');assert.deepEqual(active.units.filter(x=>x.side==='PLAYER').map(x=>x.id).sort(),['archer','hero']);
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(active.id);fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND id='archer'`).run(active.id);fixture.close();
+  const victory=await request('/api/character/char-demo/battle');assert.deepEqual(victory.reward.xpRewards.map(x=>x.unitId),['hero']);
 });
