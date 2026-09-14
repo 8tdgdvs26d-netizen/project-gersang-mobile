@@ -277,3 +277,12 @@ test('opponents stop at attack range instead of chasing through each other',asyn
   assert.equal(hero.destination,null);assert.equal(boss.destination,null);
   const check=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(check.prepare(`SELECT COUNT(*) count FROM battle_movement_modes WHERE battle_id=?`).get(started.data.battleId).count,0);check.close();
 });
+
+test('pre-battle deployment validates the friendly zone and unique cells',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();fixture.close();
+  const overlap=await post('/api/commands/battle/start',envelope('deployment-overlap',{unitIds:['hero','guard'],deployments:[{unitId:'hero',row:2,col:4},{unitId:'guard',row:2,col:4}]}));assert.equal(overlap.errorCode,'ERR_INVALID_DEPLOYMENT');
+  const outside=await post('/api/commands/battle/start',envelope('deployment-outside',{unitIds:['hero'],deployments:[{unitId:'hero',row:2,col:10}]}));assert.equal(outside.errorCode,'ERR_INVALID_DEPLOYMENT');
+  const started=await post('/api/commands/battle/start',envelope('deployment-valid',{unitIds:['hero','guard'],deployments:[{unitId:'hero',row:4,col:8},{unitId:'guard',row:3,col:7}]}));assert.equal(started.status,'ACCEPTED');assert.equal(started.data.deployments.length,2);
+  const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),guard=battle.units.find(x=>x.id==='guard');
+  assert.deepEqual({row:hero.row,col:hero.col},{row:4,col:8});assert.deepEqual({row:guard.row,col:guard.col},{row:3,col:7});
+});
