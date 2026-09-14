@@ -197,3 +197,16 @@ test('heavy strike removes a defeated target immediately',async()=>{
   assert.equal(result.status,'ACCEPTED');assert.equal(result.data.killed,true);
   const battle=await request('/api/character/char-demo/battle');assert.equal(battle.units.find(x=>x.id==='bandit-c').alive,false);
 });
+
+test('victory grants one persistent gold reward and transaction',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),before=fixture.prepare(`SELECT wallet FROM characters WHERE id='char-demo'`).get().wallet;
+  fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(Date.now());
+  fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE side='ENEMY'`).run();fixture.close();
+  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.status,'VICTORY');assert.equal(victory.reward.gold,100);
+  await request('/api/character/char-demo/battle');
+  const check=new DatabaseSync(join(dir,'test.sqlite'));
+  assert.equal(check.prepare(`SELECT wallet FROM characters WHERE id='char-demo'`).get().wallet,before+100);
+  assert.equal(check.prepare(`SELECT COUNT(*) count FROM battle_rewards WHERE battle_id=?`).get(victory.id).count,1);
+  const tx=check.prepare(`SELECT kind,gold_delta FROM economy_tx WHERE id=?`).get(`battle-reward:${victory.id}`);check.close();
+  assert.equal(tx.kind,'BATTLE_REWARD');assert.equal(tx.gold_delta,100);
+});

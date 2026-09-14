@@ -29,6 +29,12 @@ CREATE TABLE IF NOT EXISTS battles(id TEXT PRIMARY KEY, character_id TEXT NOT NU
 CREATE TABLE IF NOT EXISTS battle_units(battle_id TEXT NOT NULL, id TEXT NOT NULL, side TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL, row_no INTEGER NOT NULL, col_no INTEGER NOT NULL, dest_row INTEGER, dest_col INTEGER, hp INTEGER NOT NULL, max_hp INTEGER NOT NULL, attack_power INTEGER NOT NULL, attack_range INTEGER NOT NULL, attack_interval INTEGER NOT NULL, last_attack_at INTEGER NOT NULL, target_id TEXT, alive INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(battle_id,id));
 CREATE TABLE IF NOT EXISTS battle_skill_cooldowns(battle_id TEXT NOT NULL, unit_id TEXT NOT NULL, skill_id TEXT NOT NULL, ready_at INTEGER NOT NULL, PRIMARY KEY(battle_id,unit_id,skill_id));
 CREATE TABLE IF NOT EXISTS battle_status_effects(battle_id TEXT NOT NULL, unit_id TEXT NOT NULL, effect_id TEXT NOT NULL, value REAL NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(battle_id,unit_id,effect_id));
+CREATE TABLE IF NOT EXISTS battle_rewards(battle_id TEXT PRIMARY KEY, character_id TEXT NOT NULL, gold INTEGER NOT NULL CHECK(gold>=0), granted_at INTEGER NOT NULL);
+CREATE TRIGGER IF NOT EXISTS grant_battle_reward AFTER INSERT ON battle_rewards BEGIN
+  UPDATE characters SET wallet=wallet+NEW.gold WHERE id=NEW.character_id;
+  INSERT OR IGNORE INTO economy_tx(id,character_id,kind,gold_delta,city_id,good_id,quantity,created_at)
+  SELECT 'battle-reward:'||NEW.battle_id,NEW.character_id,'BATTLE_REWARD',NEW.gold,city_id,NULL,NULL,NEW.granted_at FROM characters WHERE id=NEW.character_id;
+END;
 `);
 
 function seed(){
@@ -70,7 +76,8 @@ function transactions(){return db.prepare(`SELECT * FROM economy_tx WHERE charac
 const battleRows=id=>db.prepare(`SELECT * FROM battle_units WHERE battle_id=? ORDER BY side DESC,id`).all(id);
 const battleDistance=(a,b)=>Math.max(Math.abs(a.row_no-b.row_no),Math.abs(a.col_no-b.col_no));
 const skillDefinitions={hero:[{id:'heavy-strike',name:'重擊',damage:32,range:2,cooldownMs:4000,type:'NORMAL',targetType:'ENEMY'}],archer:[{id:'heartseeker-arrow',name:'穿心箭',damage:24,range:7,cooldownMs:5000,type:'NORMAL',targetType:'ENEMY'},{id:'arrow-rain',name:'箭雨',damage:18,range:7,radius:1,cooldownMs:8000,type:'NORMAL',targetType:'CELL',description:'選擇落點 · 半徑 1 格 · 18 傷害'}],guard:[{id:'iron-wall',name:'鐵壁',cooldownMs:10000,durationMs:5000,reduction:.5,type:'NORMAL',targetType:'SELF',description:'所受傷害減半 · 5 秒'}]};
-function resolveBattleStatus(id,now=Date.now()){const left=db.prepare(`SELECT side,COUNT(*) count FROM battle_units WHERE battle_id=? AND alive=1 GROUP BY side`).all(id),players=left.find(x=>x.side==='PLAYER')?.count??0,enemies=left.find(x=>x.side==='ENEMY')?.count??0,status=!players?'DEFEAT':!enemies?'VICTORY':'ACTIVE';db.prepare(`UPDATE battles SET status=?,updated_at=? WHERE id=?`).run(status,now,id);return status}
+function grantBattleReward(id,now=Date.now()){const battle=db.prepare(`SELECT character_id FROM battles WHERE id=? AND status='VICTORY'`).get(id);if(!battle)return null;db.prepare(`INSERT OR IGNORE INTO battle_rewards VALUES(?,?,100,?)`).run(id,battle.character_id,now);return db.prepare(`SELECT gold,granted_at FROM battle_rewards WHERE battle_id=?`).get(id)}
+function resolveBattleStatus(id,now=Date.now()){const left=db.prepare(`SELECT side,COUNT(*) count FROM battle_units WHERE battle_id=? AND alive=1 GROUP BY side`).all(id),players=left.find(x=>x.side==='PLAYER')?.count??0,enemies=left.find(x=>x.side==='ENEMY')?.count??0,status=!players?'DEFEAT':!enemies?'VICTORY':'ACTIVE';db.prepare(`UPDATE battles SET status=?,updated_at=? WHERE id=?`).run(status,now,id);if(status==='VICTORY')grantBattleReward(id,now);return status}
 function advanceBattle(id,now=Date.now()){
   const battle=db.prepare(`SELECT * FROM battles WHERE id=?`).get(id);
   if(!battle||battle.status!=='ACTIVE')return;
@@ -104,8 +111,8 @@ function battleSnapshot(){
   const battle=db.prepare(`SELECT * FROM battles WHERE character_id='char-demo' ORDER BY created_at DESC LIMIT 1`).get();
   if(!battle)return null;
   advanceBattle(battle.id);
-  const fresh=db.prepare(`SELECT * FROM battles WHERE id=?`).get(battle.id),units=battleRows(battle.id),now=Date.now(),effects=db.prepare(`SELECT * FROM battle_status_effects WHERE battle_id=? AND expires_at>?`).all(fresh.id,now);
-  return{id:fresh.id,status:fresh.status,rows:5,columns:60,units:units.map(x=>({id:x.id,side:x.side,name:x.name,role:x.role,row:x.row_no,col:x.col_no,destination:x.dest_row==null?null:{row:x.dest_row,col:x.dest_col},hp:x.hp,maxHp:x.max_hp,attack:x.attack_power,attackRange:x.attack_range,targetId:x.target_id,alive:!!x.alive,statusEffects:effects.filter(e=>e.unit_id===x.id).map(e=>({id:e.effect_id,value:e.value,expiresAt:e.expires_at,expiresInMs:Math.max(0,e.expires_at-now)})),skills:(skillDefinitions[x.id]??[]).map(s=>{const readyAt=db.prepare(`SELECT ready_at FROM battle_skill_cooldowns WHERE battle_id=? AND unit_id=? AND skill_id=?`).get(fresh.id,x.id,s.id)?.ready_at??0;return{...s,readyAt,readyInMs:Math.max(0,readyAt-now)}})}))};
+  const fresh=db.prepare(`SELECT * FROM battles WHERE id=?`).get(battle.id),units=battleRows(battle.id),now=Date.now(),effects=db.prepare(`SELECT * FROM battle_status_effects WHERE battle_id=? AND expires_at>?`).all(fresh.id,now),reward=fresh.status==='VICTORY'?grantBattleReward(fresh.id,now):null;
+  return{id:fresh.id,status:fresh.status,reward:reward?{gold:reward.gold,grantedAt:new Date(reward.granted_at).toISOString()}:null,rows:5,columns:60,units:units.map(x=>({id:x.id,side:x.side,name:x.name,role:x.role,row:x.row_no,col:x.col_no,destination:x.dest_row==null?null:{row:x.dest_row,col:x.dest_col},hp:x.hp,maxHp:x.max_hp,attack:x.attack_power,attackRange:x.attack_range,targetId:x.target_id,alive:!!x.alive,statusEffects:effects.filter(e=>e.unit_id===x.id).map(e=>({id:e.effect_id,value:e.value,expiresAt:e.expires_at,expiresInMs:Math.max(0,e.expires_at-now)})),skills:(skillDefinitions[x.id]??[]).map(s=>{const readyAt=db.prepare(`SELECT ready_at FROM battle_skill_cooldowns WHERE battle_id=? AND unit_id=? AND skill_id=?`).get(fresh.id,x.id,s.id)?.ready_at??0;return{...s,readyAt,readyInMs:Math.max(0,readyAt-now)}})}))};
 }
 function startBattle(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot();if(s.state!=='IN_CITY')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};const old=db.prepare(`SELECT id FROM battles WHERE character_id='char-demo' AND status='ACTIVE'`).get();if(old)return{status:'REJECTED',errorCode:'ERR_BATTLE_ALREADY_ACTIVE'};const id=randomUUID(),now=Date.now();db.prepare(`INSERT INTO battles VALUES(?,'char-demo','ACTIVE',?,?)`).run(id,now,now);const add=db.prepare(`INSERT INTO battle_units VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);[
   ['hero','PLAYER','主角','MELEE',2,2,120,120,18,2,900],['archer','PLAYER','弓手','RANGED',1,1,80,80,13,5,750],['guard','PLAYER','護衛','MELEE',3,1,105,105,15,2,1000],
@@ -166,7 +173,7 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.9.0',phase:'P2 Ground-target Area Skill'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.10.0',phase:'P2 Battle Rewards'});
   if(req.method==='GET'&&u.pathname==='/api/cities')return reply(res,200,cities);
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/snapshot')return reply(res,200,snapshot());
   if(req.method==='GET'&&u.pathname.startsWith('/api/cities/')&&u.pathname.endsWith('/market'))return reply(res,200,market(u.pathname.split('/')[3]));

@@ -24,7 +24,7 @@ function render(){
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
   const activeBattle=S.tab==='battle'&&S.battle?.status==='ACTIVE';
   const tabs=activeBattle?'':`<div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
-  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.9.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.10.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -41,7 +41,7 @@ function view(){
 }
 function battleView(){
   const b=S.battle;
-  if(!b||b.status!=='ACTIVE')return `<section class="card battle-card"><b>5 × 60 戰場</b><p class="small">P1：直接控制我方單位、指定移動、鎖定敵人、自動普攻。</p>${b?`<div class="result ${b.status.toLowerCase()}">${b.status}</div>`:''}<button class="btn" id="start-battle">開始山賊戰</button></section>`;
+  if(!b||b.status!=='ACTIVE'){const label={VICTORY:'勝利',DEFEAT:'戰敗',RETREATED:'已撤退'}[b?.status]||b?.status||'';return `<section class="card battle-card result-card"><b>5 × 60 戰場</b><p class="small">戰鬥、技能與獎勵結果由 Server 判定。</p>${b?`<div class="result ${b.status.toLowerCase()}">${label}</div>${b.reward?`<div class="battle-reward"><span>戰利金</span><b>💰 +${b.reward.gold}</b><small>已存入錢包及交易紀錄</small></div>`:''}`:''}<button class="btn" id="start-battle">${b?'再戰一場':'開始山賊戰'}</button></section>`}
   S.selectedUnitIds=S.selectedUnitIds.filter(id=>b.units.some(x=>x.id===id&&x.alive));
   const selected=b.units.filter(x=>S.selectedUnitIds.includes(x.id)&&x.alive);let cells='';
   for(let row=0;row<b.rows;row++)for(let col=0;col<b.columns;col++){
@@ -113,5 +113,5 @@ function panBattle(event){
   const scroll=document.querySelector('.battle-scroll');if(!scroll)return;S.battlePanDragging=true;
   const value=Number(event.target.value);cancelAnimationFrame(S.battlePanFrame);S.battlePanFrame=requestAnimationFrame(()=>{const max=scroll.scrollWidth-scroll.clientWidth;S.battleScrollLeft=max*value/1000;scroll.scrollLeft=S.battleScrollLeft});
 }
-async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;S.cities=await req('/api/cities');await refresh();setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{setBattle(await req('/api/character/char-demo/battle'));if(!S.battlePanDragging)render()}catch{}},600)}
+async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;S.cities=await req('/api/cities');await refresh();setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600)}
 boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);
