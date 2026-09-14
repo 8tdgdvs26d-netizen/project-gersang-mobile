@@ -24,7 +24,7 @@ function render(){
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
   const activeBattle=S.tab==='battle'&&S.battle?.status==='ACTIVE';
   const tabs=activeBattle?'':`<div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
-  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.11.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.11.1</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -53,7 +53,7 @@ function battleView(){
   const enemies=b.units.filter(x=>x.side==='ENEMY'&&x.alive),inferredTarget=selected.map(x=>x.targetId).find(id=>enemies.some(e=>e.id===id));
   if(!enemies.some(x=>x.id===S.focusTargetId))S.focusTargetId=inferredTarget||null;
   const targets=enemies.map(x=>`<button class="target-chip ${S.focusTargetId===x.id?'locked':''}" data-target-unit="${x.id}"><span>👺 ${x.name}</span><small>${x.hp}/${x.maxHp} HP</small></button>`).join('');
-  const selectedLabel=selected.length?`已選 ${selected.length} 名：${selected.map(x=>`${x.name} Lv.${x.level}`).join('、')}｜遠攻可邊行邊射`:'先點選藍色我方單位';
+  const selectedLabel=selected.length?`已選 ${selected.length} 名：${selected.map(x=>`${x.name} Lv.${x.level}（攻 ${x.attack}）`).join('、')}｜遠攻可邊行邊射`:'先點選藍色我方單位';
   if(S.armedSkill&&!selected.some(x=>x.id===S.armedSkill.unitId))S.armedSkill=null;
   const skillTarget=b.units.find(x=>x.id===S.focusTargetId&&x.alive),skillBars=selected.flatMap(unit=>(unit.skills||[]).map(skill=>{
     const needsEnemy=skill.targetType==='ENEMY',distance=skillTarget?Math.max(Math.abs(unit.row-skillTarget.row),Math.abs(unit.col-skillTarget.col)):Infinity,cooling=skill.readyInMs>0,armed=S.armedSkill?.unitId===unit.id&&S.armedSkill?.skillId===skill.id,disabled=cooling||(needsEnemy&&(!skillTarget||distance>skill.range));

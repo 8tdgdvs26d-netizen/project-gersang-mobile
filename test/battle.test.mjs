@@ -218,3 +218,11 @@ test('a second victory accumulates experience and levels survivors',async()=>{
   const victory=await request('/api/character/char-demo/battle');assert.equal(victory.status,'VICTORY');
   assert.equal(victory.reward.xpRewards.length,3);assert.ok(victory.reward.xpRewards.every(x=>x.level===2&&x.totalXp===100));
 });
+
+test('new battles apply each role level growth to hp and attack',async()=>{
+  const started=await post('/api/commands/battle/start',envelope('level-two-stats',{}));assert.equal(started.status,'ACCEPTED');
+  const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),archer=battle.units.find(x=>x.id==='archer'),guard=battle.units.find(x=>x.id==='guard');
+  assert.deepEqual({level:hero.level,maxHp:hero.maxHp,attack:hero.attack},{level:2,maxHp:132,attack:20});
+  assert.deepEqual({level:archer.level,maxHp:archer.maxHp,attack:archer.attack},{level:2,maxHp:88,attack:15});
+  assert.deepEqual({level:guard.level,maxHp:guard.maxHp,attack:guard.attack},{level:2,maxHp:120,attack:16});
+});
