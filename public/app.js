@@ -6,6 +6,7 @@ const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function sendCommand(path,body){try{return await post(path,body)}catch{await wait(350);return post(path,body)}}
 const command=(path,payload,key)=>sendCommand(path,env(payload,key));
 const cityName=id=>S.cities.find(x=>x.id===id)?.name||id;
+const coord=(row,col)=>`R${row+1} C${col+1}`;
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),1500)}
 async function refresh(){
   S.snap=await req('/api/character/char-demo/snapshot');
@@ -24,7 +25,7 @@ function render(){
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
   const activeBattle=S.tab==='battle'&&S.battle?.status==='ACTIVE';
   const tabs=activeBattle?'':`<div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
-  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.11.1</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.12.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -43,17 +44,19 @@ function battleView(){
   const b=S.battle;
   if(!b||b.status!=='ACTIVE'){const label={VICTORY:'勝利',DEFEAT:'戰敗',RETREATED:'已撤退'}[b?.status]||b?.status||'',xp=b?.reward?.xpRewards?.map(x=>`<div class="xp-row"><span>${x.name} <small>Lv.${x.level}</small></span><b>+${x.xp} EXP</b><small>總 EXP ${x.totalXp}</small></div>`).join('')||'';return `<section class="card battle-card result-card"><b>5 × 60 戰場</b><p class="small">戰鬥、技能與獎勵結果由 Server 判定。</p>${b?`<div class="result ${b.status.toLowerCase()}">${label}</div>${b.reward?`<div class="battle-reward"><span>戰利金</span><b>💰 +${b.reward.gold}</b><small>已存入錢包及交易紀錄</small>${xp?`<div class="xp-list">${xp}</div>`:''}</div>`:''}`:''}<button class="btn" id="start-battle">${b?'再戰一場':'開始山賊戰'}</button></section>`}
   S.selectedUnitIds=S.selectedUnitIds.filter(id=>b.units.some(x=>x.id===id&&x.alive));
-  const selected=b.units.filter(x=>S.selectedUnitIds.includes(x.id)&&x.alive);let cells='';
+  const selected=b.units.filter(x=>S.selectedUnitIds.includes(x.id)&&x.alive),destinations=b.units.filter(x=>x.side==='PLAYER'&&x.alive&&x.destination);let cells='';
   for(let row=0;row<b.rows;row++)for(let col=0;col<b.columns;col++){
-    const u=b.units.find(x=>x.alive&&x.row===row&&x.col===col),effects=S.skillEffects.filter(x=>x.row===row&&x.col===col),classes=['battle-cell'];
+    const u=b.units.find(x=>x.alive&&x.row===row&&x.col===col),arrivals=destinations.filter(x=>x.destination.row===row&&x.destination.col===col),effects=S.skillEffects.filter(x=>x.row===row&&x.col===col),classes=['battle-cell'];
     if(u)classes.push(u.side==='PLAYER'?'friendly':'enemy');if(u&&S.selectedUnitIds.includes(u.id))classes.push('selected');if(u&&selected.some(x=>x.targetId===u.id))classes.push('targeted');if(u&&S.hitUnitIds.includes(u.id))classes.push('hit');if(u?.statusEffects?.some(x=>x.id==='iron-wall'))classes.push('iron-wall');
-    if(effects.length)classes.push('skill-impact');if(S.armedSkill)classes.push('skill-aim-cell');
-    cells+=`<button class="${classes.join(' ')}" data-row="${row}" data-col="${col}" ${u?`data-unit="${u.id}"`:''} title="${u?`${u.name} ${u.hp}/${u.maxHp}`:`${row+1},${col+1}`}">${u?`${u.role==='RANGED'?'🏹':u.side==='PLAYER'?'⚔️':'👺'}<span>${u.hp}</span>`:''}${effects.map(effect=>`<strong class="floating-damage">-${effect.damage}</strong>`).join('')}</button>`;
+    if(arrivals.length)classes.push('destination');if(effects.length)classes.push('skill-impact');if(S.armedSkill)classes.push('skill-aim-cell');
+    const title=u?`${u.name} ${u.hp}/${u.maxHp} · ${coord(row,col)}`:arrivals.length?`${arrivals.map(x=>x.name).join('、')}目的地 · ${coord(row,col)}`:coord(row,col);
+    cells+=`<button class="${classes.join(' ')}" data-row="${row}" data-col="${col}" ${u?`data-unit="${u.id}"`:''} title="${title}">${u?`${u.role==='RANGED'?'🏹':u.side==='PLAYER'?'⚔️':'👺'}<span>${u.hp}</span>`:''}${arrivals.length?`<em class="destination-marker">⚑</em>`:''}${effects.map(effect=>`<strong class="floating-damage">-${effect.damage}</strong>`).join('')}</button>`;
   }
   const enemies=b.units.filter(x=>x.side==='ENEMY'&&x.alive),inferredTarget=selected.map(x=>x.targetId).find(id=>enemies.some(e=>e.id===id));
   if(!enemies.some(x=>x.id===S.focusTargetId))S.focusTargetId=inferredTarget||null;
   const targets=enemies.map(x=>`<button class="target-chip ${S.focusTargetId===x.id?'locked':''}" data-target-unit="${x.id}"><span>👺 ${x.name}</span><small>${x.hp}/${x.maxHp} HP</small></button>`).join('');
   const selectedLabel=selected.length?`已選 ${selected.length} 名：${selected.map(x=>`${x.name} Lv.${x.level}（攻 ${x.attack}）`).join('、')}｜遠攻可邊行邊射`:'先點選藍色我方單位';
+  const movementReadout=selected.length?selected.map(x=>`<span class="unit-route"><strong>${x.name}</strong> ${coord(x.row,x.col)} ${x.destination?`<b>→ ${coord(x.destination.row,x.destination.col)}</b>`:'<small>· 待命</small>'}</span>`).join(''):'<span class="small">選擇我方角色後顯示位置與目的地</span>';
   if(S.armedSkill&&!selected.some(x=>x.id===S.armedSkill.unitId))S.armedSkill=null;
   const skillTarget=b.units.find(x=>x.id===S.focusTargetId&&x.alive),skillBars=selected.flatMap(unit=>(unit.skills||[]).map(skill=>{
     const needsEnemy=skill.targetType==='ENEMY',distance=skillTarget?Math.max(Math.abs(unit.row-skillTarget.row),Math.abs(unit.col-skillTarget.col)):Infinity,cooling=skill.readyInMs>0,armed=S.armedSkill?.unitId===unit.id&&S.armedSkill?.skillId===skill.id,disabled=cooling||(needsEnemy&&(!skillTarget||distance>skill.range));
@@ -61,7 +64,7 @@ function battleView(){
     const cooldownPercent=cooling?Math.min(100,skill.readyInMs/skill.cooldownMs*100):0,buttonText=cooling?`${(skill.readyInMs/1000).toFixed(1)}s`:armed?'取消':skill.targetType==='CELL'?'選落點':skill.name;
     return `<div class="skill-bar ${armed?'armed':''}"><span class="skill-icon">${unit.role==='RANGED'?'🏹':'💥'}</span><div><b>${unit.name} · ${skill.name}</b><div class="small">${text}</div></div><button class="btn skill-btn ${cooling?'cooling':''}" style="--cooldown:${cooldownPercent}%" data-skill-unit="${unit.id}" data-skill-id="${skill.id}" ${disabled?'disabled':''}><span>${buttonText}</span></button></div>`;
   })).join('')||'<div class="skill-empty small">所選角色暫時未有主動技能</div>';
-  return `<section class="card battle-card"><div class="battle-head"><div><b>山賊戰 · ${b.status}</b><div class="small">${selectedLabel}</div></div><button class="btn danger" id="retreat">撤退</button></div><div class="battle-legend"><span>🔵 我方</span><span>🔴 敵方</span><span>棋子下方數字＝HP</span></div><div class="battle-log">${S.battleLog.map(x=>`<div>⚔️ ${x}</div>`).join('')||'<div>等待首次交鋒…</div>'}</div><div class="battle-pan-wrap"><span>我方</span><input id="battle-pan" class="battle-pan" type="range" min="0" max="1000" value="0" aria-label="移動戰場畫面"><span>敵方</span></div><div class="battle-scroll"><div class="battle-grid">${cells}</div></div><div class="battle-controls"><div class="battle-targets"><div class="small">快速鎖定敵人</div>${targets}</div><div class="unit-controls"><button class="btn alt" id="select-all">全選我方</button><button class="btn alt" id="clear-selection">清除選擇</button><span class="small">點我方棋子可加選／取消</span></div><div class="skill-stack">${skillBars}</div></div></section>`;
+  return `<section class="card battle-card"><div class="battle-head"><div><b>山賊戰 · ${b.status}</b><div class="small">${selectedLabel}</div></div><button class="btn danger" id="retreat">撤退</button></div><div class="battle-legend"><span>🔵 我方</span><span>🔴 敵方</span><span>⚑ 目的地</span><span>R＝行 · C＝列</span></div><div class="movement-readout">${movementReadout}</div><div class="battle-log">${S.battleLog.map(x=>`<div>⚔️ ${x}</div>`).join('')||'<div>等待首次交鋒…</div>'}</div><div class="battle-pan-wrap"><span>我方</span><input id="battle-pan" class="battle-pan" type="range" min="0" max="1000" value="0" aria-label="移動戰場畫面"><span>敵方</span></div><div class="battle-scroll"><div class="battle-grid">${cells}</div></div><div class="battle-controls"><div class="battle-targets"><div class="small">快速鎖定敵人</div>${targets}</div><div class="unit-controls"><button class="btn alt" id="select-all">全選我方</button><button class="btn alt" id="clear-selection">清除選擇</button><span class="small">點我方棋子可加選／取消</span></div><div class="skill-stack">${skillBars}</div></div></section>`;
 }
 function qty(g){return Math.max(1,Number(document.querySelector(`[data-q="${g}"]`)?.value||1))}
 function wire(){
@@ -85,7 +88,7 @@ async function battleTap(cell){
   if(!S.selectedUnitIds.length)return toast('請先選擇我方單位');
   const assisted=unit?.side==='ENEMY'?unit:nearestEnemy(Number(cell.dataset.row),Number(cell.dataset.col));
   if(assisted)return targetEnemy(assisted.id);
-  const r=await command('/api/commands/battle/move',{unitIds:S.selectedUnitIds,row:Number(cell.dataset.row),col:Number(cell.dataset.col)});if(r.status==='REJECTED')return toast(r.errorCode);toast(S.selectedUnitIds.length>1?`${S.selectedUnitIds.length} 名單位編隊移動`:'移動指令已落');await refresh();
+  const row=Number(cell.dataset.row),col=Number(cell.dataset.col),r=await command('/api/commands/battle/move',{unitIds:S.selectedUnitIds,row,col});if(r.status==='REJECTED')return toast(r.errorCode);toast(S.selectedUnitIds.length>1?`${S.selectedUnitIds.length} 名編隊移動 → ${coord(row,col)}`:`移動目的地 → ${coord(row,col)}`);await refresh();
 }
 function nearestEnemy(row,col){
   return S.battle?.units.filter(x=>x.side==='ENEMY'&&x.alive).map(x=>({unit:x,distance:Math.hypot((x.col-col)*18,(x.row-row)*42)})).filter(x=>x.distance<=46).sort((a,b)=>a.distance-b.distance)[0]?.unit||null;
