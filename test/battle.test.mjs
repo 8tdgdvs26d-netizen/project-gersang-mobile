@@ -44,6 +44,17 @@ test('movement command is idempotent and server advances the unit',async()=>{
   assert.ok(hero.col>2);assert.deepEqual(hero.destination,{row:2,col:20});
 });
 
+test('moving units may pass through occupied cells but never share a final stop',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
+  fixture.prepare(`UPDATE battles SET updated_at=? WHERE status='ACTIVE'`).run(now-350);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,dest_row=2,dest_col=12,target_id=NULL WHERE id='hero'`).run();
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=11,dest_row=NULL,dest_col=NULL,target_id=NULL WHERE id='guard'`).run();fixture.close();
+  const passing=await request('/api/character/char-demo/battle'),heroPassing=passing.units.find(x=>x.id==='hero'),guardPassing=passing.units.find(x=>x.id==='guard');
+  assert.deepEqual({row:heroPassing.row,col:heroPassing.col},{row:guardPassing.row,col:guardPassing.col});assert.deepEqual(heroPassing.destination,{row:2,col:12});
+  await new Promise(r=>setTimeout(r,350));const stopped=await request('/api/character/char-demo/battle'),players=stopped.units.filter(x=>x.side==='PLAYER'&&x.alive&&x.destination===null);
+  assert.equal(new Set(players.map(x=>`${x.row}:${x.col}`)).size,players.length);assert.deepEqual({row:stopped.units.find(x=>x.id==='hero').row,col:stopped.units.find(x=>x.id==='hero').col},{row:2,col:12});
+});
+
 test('group movement assigns unique formation destinations near the chosen cell',async()=>{
   const body=envelope('formation-move',{unitIds:['hero','archer','guard'],row:4,col:25});
   const first=await post('/api/commands/battle/move',body),retry=await post('/api/commands/battle/move',body);
@@ -51,6 +62,8 @@ test('group movement assigns unique formation destinations near the chosen cell'
   const cells=first.data.destinations.map(x=>`${x.row}:${x.col}`);
   assert.equal(new Set(cells).size,3);assert.ok(cells.includes('4:25'));
   assert.ok(first.data.destinations.every(x=>Math.max(Math.abs(x.row-4),Math.abs(x.col-25))<=1));
+  assert.equal(first.data.formation,'ORDERED_COMPACT');
+  const ordered=['archer','hero','guard'].map(id=>first.data.destinations.find(x=>x.unitId===id));assert.ok(ordered[0].row<=ordered[1].row&&ordered[1].row<=ordered[2].row);
   const battle=await request('/api/character/char-demo/battle');
   assert.equal(new Set(battle.units.filter(x=>x.side==='PLAYER').map(x=>`${x.destination.row}:${x.destination.col}`)).size,3);
 });
@@ -68,6 +81,8 @@ test('multiple selected units lock the same target with one idempotent command',
   assert.deepEqual(retry,first);assert.deepEqual([...first.data.unitIds].sort(),['archer','guard','hero']);
   const battle=await request('/api/character/char-demo/battle');
   assert.ok(battle.units.filter(x=>x.side==='PLAYER').every(x=>x.targetId==='bandit-a'));
+  await new Promise(r=>setTimeout(r,350));const approaching=await request('/api/character/char-demo/battle'),stops=approaching.units.filter(x=>x.side==='PLAYER').map(x=>x.destination).filter(Boolean);
+  assert.equal(stops.length,3);assert.equal(new Set(stops.map(x=>`${x.row}:${x.col}`)).size,3);assert.ok(stops.every(x=>`${x.row}:${x.col}`!==`${approaching.units.find(x=>x.id==='bandit-a').row}:${approaching.units.find(x=>x.id==='bandit-a').col}`));
 });
 
 test('movement clears melee lock but preserves ranged lock',async()=>{
@@ -109,6 +124,7 @@ test('group members automatically acquire another enemy after their target dies'
 test('idle player unit automatically attacks an enemy already in range',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));
   fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=54,target_id=NULL,last_attack_at=0 WHERE id='hero'`).run();fixture.close();
+  const targetFixture=new DatabaseSync(join(dir,'test.sqlite'));targetFixture.prepare(`UPDATE battle_units SET row_no=2,col_no=56,dest_row=NULL,dest_col=NULL,hp=65,alive=1 WHERE id='bandit-b'`).run();targetFixture.close();
   await new Promise(r=>setTimeout(r,800));
   const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),bandit=battle.units.find(x=>x.id==='bandit-b');
   assert.equal(hero.targetId,'bandit-b');assert.ok(bandit.hp<65);
@@ -133,6 +149,8 @@ test('heavy strike rejects out-of-range targets without damage',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
   fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
   fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=0,target_id=NULL WHERE id='hero'`).run();
+  fixture.prepare(`UPDATE battle_units SET row_no=0,col_no=0,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE id='archer'`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=4,col_no=0,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE id='guard'`).run(now);
   fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=20,hp=55,alive=1 WHERE id='bandit-c'`).run();
   fixture.prepare(`UPDATE battle_skill_cooldowns SET ready_at=0 WHERE unit_id='hero' AND skill_id='heavy-strike'`).run();fixture.close();
   const result=await post('/api/commands/battle/skill',envelope('heavy-strike-far',{unitId:'hero',skillId:'heavy-strike',targetId:'bandit-c'}));
