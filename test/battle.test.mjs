@@ -48,6 +48,7 @@ test('moving units may pass through occupied cells but never share a final stop'
   const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
   fixture.prepare(`UPDATE battles SET updated_at=? WHERE status='ACTIVE'`).run(now-350);
   fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,dest_row=2,dest_col=12,target_id=NULL WHERE id='hero'`).run();
+  fixture.prepare(`UPDATE battle_mobility SET move_credit_ms=move_interval WHERE unit_id='hero'`).run();
   fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=11,dest_row=NULL,dest_col=NULL,target_id=NULL WHERE id='guard'`).run();fixture.close();
   const passing=await request('/api/character/char-demo/battle'),heroPassing=passing.units.find(x=>x.id==='hero'),guardPassing=passing.units.find(x=>x.id==='guard');
   assert.deepEqual({row:heroPassing.row,col:heroPassing.col},{row:guardPassing.row,col:guardPassing.col});assert.deepEqual(heroPassing.destination,{row:2,col:12});
@@ -293,7 +294,7 @@ test('attack objective overrides formation depth until every unit reaches its ow
   const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
   const started=await post('/api/commands/battle/start',envelope('flex-formation-attack',{unitIds:['hero','archer','guard'],deployments:[{unitId:'hero',row:2,col:0},{unitId:'archer',row:1,col:5},{unitId:'guard',row:3,col:4}]}));assert.equal(started.status,'ACCEPTED');
   const now=Date.now(),fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND side='ENEMY' AND id<>'bandit-b'`).run(started.data.battleId);fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=15,hp=65,alive=1,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE battle_id=? AND id='bandit-b'`).run(now,started.data.battleId);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,started.data.battleId);fixture.close();
-  const order=await post('/api/commands/battle/target',envelope('all-focus-boss',{unitIds:['hero','archer','guard'],targetId:'bandit-b'}));assert.equal(order.status,'ACCEPTED');await new Promise(resolve=>setTimeout(resolve,3500));
+  const order=await post('/api/commands/battle/target',envelope('all-focus-boss',{unitIds:['hero','archer','guard'],targetId:'bandit-b'}));assert.equal(order.status,'ACCEPTED');await new Promise(resolve=>setTimeout(resolve,6200));
   const battle=await request('/api/character/char-demo/battle'),boss=battle.units.find(x=>x.id==='bandit-b'),hero=battle.units.find(x=>x.id==='hero'),guard=battle.units.find(x=>x.id==='guard');for(const id of ['hero','archer','guard']){const unit=battle.units.find(x=>x.id===id);assert.ok(Math.max(Math.abs(unit.row-boss.row),Math.abs(unit.col-boss.col))<=unit.attackRange,`${id} did not reach attack range`)}assert.ok(guard.col>=hero.col,'front melee slot should remain ahead when attack range permits');
 });
 
@@ -303,4 +304,21 @@ test('hold position stops chasing, attacks in range, and releases on a new order
   const body=envelope('hold-hero',{unitIds:['hero']}),held=await post('/api/commands/battle/hold',body),retry=await post('/api/commands/battle/hold',body);assert.deepEqual(retry,held);await new Promise(resolve=>setTimeout(resolve,700));let battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero');assert.equal(hero.col,10);assert.equal(hero.holding,true);assert.equal(hero.destination,null);
   const nearby=new DatabaseSync(join(dir,'test.sqlite'));nearby.prepare(`UPDATE battle_units SET row_no=2,col_no=12,hp=65,alive=1,target_id=NULL WHERE battle_id=? AND id='bandit-b'`).run(started.data.battleId);nearby.prepare(`UPDATE battle_units SET last_attack_at=0 WHERE battle_id=? AND id='hero'`).run(started.data.battleId);nearby.close();await new Promise(resolve=>setTimeout(resolve,350));battle=await request('/api/character/char-demo/battle');assert.ok(battle.units.find(x=>x.id==='bandit-b').hp<65);assert.equal(battle.units.find(x=>x.id==='hero').col,10);
   const far=new DatabaseSync(join(dir,'test.sqlite'));far.prepare(`UPDATE battle_units SET row_no=2,col_no=20,hp=65,alive=1,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id='bandit-b'`).run(started.data.battleId);far.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(Date.now(),started.data.battleId);far.close();const released=await post('/api/commands/battle/target',envelope('release-hold',{unitIds:['hero'],targetId:'bandit-b'}));assert.equal(released.status,'ACCEPTED');await new Promise(resolve=>setTimeout(resolve,700));battle=await request('/api/character/char-demo/battle');hero=battle.units.find(x=>x.id==='hero');assert.equal(hero.holding,false);assert.ok(hero.col>10);
+});
+
+test('agility gives units distinct movement and attack cadence',async()=>{
+  const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
+  const started=await post('/api/commands/battle/start',envelope('agility-tempo',{unitIds:['hero','archer','guard']}));assert.equal(started.status,'ACCEPTED');
+  const now=Date.now(),fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET hp=0,alive=0,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND side='ENEMY' AND id<>'bandit-b'`).run(started.data.battleId);
+  fixture.prepare(`UPDATE battle_units SET row_no=4,col_no=59,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id='bandit-b'`).run(started.data.battleId);
+  for(const [id,row] of [['hero',1],['archer',2],['guard',3]]){fixture.prepare(`UPDATE battle_units SET row_no=?,col_no=5,target_id=NULL,dest_row=?,dest_col=25 WHERE battle_id=? AND id=?`).run(row,row,started.data.battleId,id);fixture.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'ORDER') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='ORDER'`).run(started.data.battleId,id)}
+  fixture.prepare(`UPDATE battle_mobility SET move_credit_ms=0 WHERE battle_id=? AND unit_id IN ('hero','archer','guard')`).run(started.data.battleId);
+  fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,started.data.battleId);fixture.close();
+  await new Promise(resolve=>setTimeout(resolve,950));
+  const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),archer=battle.units.find(x=>x.id==='archer'),guard=battle.units.find(x=>x.id==='guard');
+  assert.ok(archer.col>hero.col&&hero.col>guard.col,`expected archer > hero > guard movement, got ${archer.col}, ${hero.col}, ${guard.col}`);
+  assert.deepEqual([archer.agility,hero.agility,guard.agility],[14,10,8]);
+  assert.ok(archer.moveIntervalMs<hero.moveIntervalMs&&hero.moveIntervalMs<guard.moveIntervalMs);
+  assert.ok(archer.attackIntervalMs<hero.attackIntervalMs&&hero.attackIntervalMs<guard.attackIntervalMs);
 });
