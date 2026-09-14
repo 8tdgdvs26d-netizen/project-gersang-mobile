@@ -262,3 +262,18 @@ test('custom deployment is validated and only survivors earn experience',async()
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(active.id);fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND id='archer'`).run(active.id);fixture.close();
   const victory=await request('/api/character/char-demo/battle');assert.deepEqual(victory.reward.xpRewards.map(x=>x.unitId),['hero']);
 });
+
+test('opponents stop at attack range instead of chasing through each other',async()=>{
+  const started=await post('/api/commands/battle/start',envelope('chase-stop-regression',{encounterId:'bandit-patrol',unitIds:['hero']}));assert.equal(started.status,'ACCEPTED');
+  const now=Date.now(),fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET hp=0,alive=0,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND side='ENEMY' AND id<>'bandit-b'`).run(started.data.battleId);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=20,target_id='bandit-b',dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE battle_id=? AND id='hero'`).run(now,started.data.battleId);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=26,target_id='hero',dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE battle_id=? AND id='bandit-b'`).run(now,started.data.battleId);
+  fixture.prepare(`DELETE FROM battle_movement_modes WHERE battle_id=?`).run(started.data.battleId);
+  fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,started.data.battleId);fixture.close();
+  await new Promise(resolve=>setTimeout(resolve,2200));
+  const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),boss=battle.units.find(x=>x.id==='bandit-b');
+  assert.ok(hero.col<boss.col);assert.ok(Math.max(Math.abs(hero.row-boss.row),Math.abs(hero.col-boss.col))<=hero.attackRange);
+  assert.equal(hero.destination,null);assert.equal(boss.destination,null);
+  const check=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(check.prepare(`SELECT COUNT(*) count FROM battle_movement_modes WHERE battle_id=?`).get(started.data.battleId).count,0);check.close();
+});

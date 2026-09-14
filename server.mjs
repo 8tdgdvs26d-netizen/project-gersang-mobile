@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS item_trace(id TEXT PRIMARY KEY, character_id TEXT NOT
 CREATE TABLE IF NOT EXISTS battles(id TEXT PRIMARY KEY, character_id TEXT NOT NULL, status TEXT NOT NULL, updated_at INTEGER NOT NULL, created_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS battle_meta(battle_id TEXT PRIMARY KEY, encounter_id TEXT NOT NULL, reward_gold INTEGER NOT NULL, reward_xp INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS battle_units(battle_id TEXT NOT NULL, id TEXT NOT NULL, side TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL, row_no INTEGER NOT NULL, col_no INTEGER NOT NULL, dest_row INTEGER, dest_col INTEGER, hp INTEGER NOT NULL, max_hp INTEGER NOT NULL, attack_power INTEGER NOT NULL, attack_range INTEGER NOT NULL, attack_interval INTEGER NOT NULL, last_attack_at INTEGER NOT NULL, target_id TEXT, alive INTEGER NOT NULL DEFAULT 1, PRIMARY KEY(battle_id,id));
+CREATE TABLE IF NOT EXISTS battle_movement_modes(battle_id TEXT NOT NULL, unit_id TEXT NOT NULL, mode TEXT NOT NULL CHECK(mode IN ('ORDER','CHASE')), PRIMARY KEY(battle_id,unit_id));
 CREATE TABLE IF NOT EXISTS battle_skill_cooldowns(battle_id TEXT NOT NULL, unit_id TEXT NOT NULL, skill_id TEXT NOT NULL, ready_at INTEGER NOT NULL, PRIMARY KEY(battle_id,unit_id,skill_id));
 CREATE TABLE IF NOT EXISTS battle_status_effects(battle_id TEXT NOT NULL, unit_id TEXT NOT NULL, effect_id TEXT NOT NULL, value REAL NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY(battle_id,unit_id,effect_id));
 CREATE TABLE IF NOT EXISTS roster_units(character_id TEXT NOT NULL, unit_id TEXT NOT NULL, name TEXT NOT NULL, level INTEGER NOT NULL DEFAULT 1 CHECK(level>=1), xp INTEGER NOT NULL DEFAULT 0 CHECK(xp>=0), PRIMARY KEY(character_id,unit_id));
@@ -108,15 +109,21 @@ function advanceBattle(id,now=Date.now()){
       let target=units.find(x=>x.id===unit.target_id&&x.side!==unit.side&&x.alive);
       if(!target){const nearest=units.filter(x=>x.side!==unit.side).sort((a,b)=>battleDistance(unit,a)-battleDistance(unit,b))[0];if(nearest&&(unit.side==='ENEMY'||unit.target_id||battleDistance(unit,nearest)<=unit.attack_range)){target=nearest;db.prepare(`UPDATE battle_units SET target_id=? WHERE battle_id=? AND id=?`).run(target.id,id,unit.id)}}
       let dr=unit.dest_row,dc=unit.dest_col;
+      let mode=db.prepare(`SELECT mode FROM battle_movement_modes WHERE battle_id=? AND unit_id=?`).get(id,unit.id)?.mode;
+      if(!mode&&dr!=null)mode=target?'CHASE':'ORDER';
       if(dr!=null)reserved.delete(`${dr}:${dc}`);
-      if(target&&battleDistance(unit,target)>unit.attack_range&&dr==null&&dc==null){const stop=approachCell(unit,target,units,reserved);if(stop){dr=stop.row;dc=stop.col;db.prepare(`UPDATE battle_units SET dest_row=?,dest_col=? WHERE battle_id=? AND id=?`).run(dr,dc,id,unit.id)}}
+      if(!target&&mode==='CHASE'){dr=null;dc=null;db.prepare(`UPDATE battle_units SET dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id=?`).run(id,unit.id);db.prepare(`DELETE FROM battle_movement_modes WHERE battle_id=? AND unit_id=?`).run(id,unit.id)}
+      if(target&&mode!=='ORDER'){
+        if(battleDistance(unit,target)<=unit.attack_range){dr=null;dc=null;db.prepare(`UPDATE battle_units SET dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id=?`).run(id,unit.id);db.prepare(`DELETE FROM battle_movement_modes WHERE battle_id=? AND unit_id=?`).run(id,unit.id)}
+        else{const stop=approachCell(unit,target,units,reserved);if(stop){dr=stop.row;dc=stop.col;mode='CHASE';db.prepare(`UPDATE battle_units SET dest_row=?,dest_col=? WHERE battle_id=? AND id=?`).run(dr,dc,id,unit.id);db.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'CHASE') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='CHASE'`).run(id,unit.id)}}
+      }
       if(dr==null||dc==null)continue;
       const nr=unit.row_no+Math.sign(dr-unit.row_no),nc=unit.col_no+Math.sign(dc-unit.col_no);
       const occupied=units.some(x=>x.id!==unit.id&&x.row_no===nr&&x.col_no===nc);
       if(occupied&&nr===dr&&nc===dc){const alternate=nearestOpenCell(dr,dc,units,reserved,unit.id);if(alternate){dr=alternate.row;dc=alternate.col;db.prepare(`UPDATE battle_units SET dest_row=?,dest_col=? WHERE battle_id=? AND id=?`).run(dr,dc,id,unit.id)}}
       const nextRow=unit.row_no+Math.sign(dr-unit.row_no),nextCol=unit.col_no+Math.sign(dc-unit.col_no),finalOccupied=units.some(x=>x.id!==unit.id&&x.row_no===nextRow&&x.col_no===nextCol);
       if(!finalOccupied||nextRow!==dr||nextCol!==dc){db.prepare(`UPDATE battle_units SET row_no=?,col_no=? WHERE battle_id=? AND id=?`).run(nextRow,nextCol,id,unit.id);unit.row_no=nextRow;unit.col_no=nextCol}
-      if(unit.row_no===dr&&unit.col_no===dc){db.prepare(`UPDATE battle_units SET dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id=?`).run(id,unit.id);unit.dest_row=null;unit.dest_col=null}else reserved.add(`${dr}:${dc}`);
+      if(unit.row_no===dr&&unit.col_no===dc){db.prepare(`UPDATE battle_units SET dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id=?`).run(id,unit.id);db.prepare(`DELETE FROM battle_movement_modes WHERE battle_id=? AND unit_id=?`).run(id,unit.id);unit.dest_row=null;unit.dest_col=null}else reserved.add(`${dr}:${dc}`);
     }
   }
   const units=battleRows(id).filter(x=>x.alive);
@@ -141,9 +148,9 @@ function battleMove(env){const e=check(env);if(e)return e;return idem(env.idempo
   const p=env.payload,b=battleSnapshot();if(!b||b.status!=='ACTIVE')return{status:'REJECTED',errorCode:'ERR_NO_ACTIVE_BATTLE'};if(!Number.isInteger(p.row)||!Number.isInteger(p.col)||p.row<0||p.row>=5||p.col<0||p.col>=60)return{status:'REJECTED',errorCode:'ERR_OUT_OF_BOUNDS'};
   const requested=[...new Set(Array.isArray(p.unitIds)?p.unitIds:[p.unitId].filter(Boolean))],units=b.units.filter(x=>requested.includes(x.id)&&x.side==='PLAYER'&&x.alive).sort((a,z)=>a.row-z.row||a.col-z.col||a.id.localeCompare(z.id));if(!requested.length||units.length!==requested.length)return{status:'REJECTED',errorCode:'ERR_UNIT_NOT_CONTROLLABLE'};
   const blocked=new Set(b.units.filter(x=>x.alive&&!requested.includes(x.id)).map(x=>`${x.row}:${x.col}`)),available=[];for(let row=0;row<5;row++)for(let col=0;col<60;col++)if(!blocked.has(`${row}:${col}`))available.push({row,col});available.sort((a,z)=>pointDistance(a,p)-pointDistance(z,p)||(Math.abs(a.row-p.row)+Math.abs(a.col-p.col))-(Math.abs(z.row-p.row)+Math.abs(z.col-p.col))||a.row-z.row||a.col-z.col);
-  const slots=available.slice(0,units.length).sort((a,z)=>a.row-z.row||a.col-z.col),destinations=[],update=db.prepare(`UPDATE battle_units SET dest_row=?,dest_col=?,target_id=CASE WHEN role='RANGED' THEN target_id ELSE NULL END WHERE battle_id=? AND id=?`);if(slots.length!==units.length)throw new Error('ERR_NO_FORMATION_SPACE');for(let i=0;i<units.length;i++){const unit=units[i],slot=slots[i];update.run(slot.row,slot.col,b.id,unit.id);destinations.push({unitId:unit.id,row:slot.row,col:slot.col})}return{status:'ACCEPTED',data:{destinations,formationCenter:{row:p.row,col:p.col},formation:'ORDERED_COMPACT'}}
+  const slots=available.slice(0,units.length).sort((a,z)=>a.row-z.row||a.col-z.col),destinations=[],update=db.prepare(`UPDATE battle_units SET dest_row=?,dest_col=?,target_id=CASE WHEN role='RANGED' THEN target_id ELSE NULL END WHERE battle_id=? AND id=?`),setMode=db.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'ORDER') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='ORDER'`);if(slots.length!==units.length)throw new Error('ERR_NO_FORMATION_SPACE');for(let i=0;i<units.length;i++){const unit=units[i],slot=slots[i];update.run(slot.row,slot.col,b.id,unit.id);setMode.run(b.id,unit.id);destinations.push({unitId:unit.id,row:slot.row,col:slot.col})}return{status:'ACCEPTED',data:{destinations,formationCenter:{row:p.row,col:p.col},formation:'ORDERED_COMPACT'}}
 })}
-function battleTarget(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const p=env.payload,b=battleSnapshot();if(!b||b.status!=='ACTIVE')return{status:'REJECTED',errorCode:'ERR_NO_ACTIVE_BATTLE'};const requested=[...new Set(Array.isArray(p.unitIds)?p.unitIds:[p.unitId].filter(Boolean))],units=b.units.filter(x=>requested.includes(x.id)&&x.side==='PLAYER'&&x.alive),target=b.units.find(x=>x.id===p.targetId&&x.side==='ENEMY'&&x.alive);if(!requested.length||units.length!==requested.length||!target)return{status:'REJECTED',errorCode:'ERR_INVALID_TARGET'};const update=db.prepare(`UPDATE battle_units SET target_id=?,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id=?`);for(const unit of units)update.run(target.id,b.id,unit.id);return{status:'ACCEPTED',data:{unitIds:units.map(x=>x.id),targetId:target.id}}})}
+function battleTarget(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const p=env.payload,b=battleSnapshot();if(!b||b.status!=='ACTIVE')return{status:'REJECTED',errorCode:'ERR_NO_ACTIVE_BATTLE'};const requested=[...new Set(Array.isArray(p.unitIds)?p.unitIds:[p.unitId].filter(Boolean))],units=b.units.filter(x=>requested.includes(x.id)&&x.side==='PLAYER'&&x.alive),target=b.units.find(x=>x.id===p.targetId&&x.side==='ENEMY'&&x.alive);if(!requested.length||units.length!==requested.length||!target)return{status:'REJECTED',errorCode:'ERR_INVALID_TARGET'};const update=db.prepare(`UPDATE battle_units SET target_id=?,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id=?`),clearMode=db.prepare(`DELETE FROM battle_movement_modes WHERE battle_id=? AND unit_id=?`);for(const unit of units){update.run(target.id,b.id,unit.id);clearMode.run(b.id,unit.id)}return{status:'ACCEPTED',data:{unitIds:units.map(x=>x.id),targetId:target.id}}})}
 function battleSkill(env){
   const e=check(env);if(e)return e;const b=battleSnapshot();if(!b||b.status!=='ACTIVE')return{status:'REJECTED',errorCode:'ERR_NO_ACTIVE_BATTLE'};
   return idem(env.idempotencyKey,env.payload,()=>{
@@ -197,7 +204,7 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.15.0',phase:'P2 Formation and Occupancy'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.15.1',phase:'P2 Chase Stop Fix'});
   if(req.method==='GET'&&u.pathname==='/api/battle/encounters')return reply(res,200,encounterSummaries());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/roster')return reply(res,200,rosterSnapshot());
   if(req.method==='GET'&&u.pathname==='/api/cities')return reply(res,200,cities);

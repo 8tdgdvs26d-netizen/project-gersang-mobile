@@ -25,7 +25,7 @@ function render(){
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
   const activeBattle=S.tab==='battle'&&S.battle?.status==='ACTIVE';
   const tabs=activeBattle?'':`<div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
-  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.15.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.15.1</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
