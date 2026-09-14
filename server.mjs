@@ -116,7 +116,7 @@ function advanceBattle(id,now=Date.now()){
       if(!target&&mode==='CHASE'){dr=null;dc=null;db.prepare(`UPDATE battle_units SET dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id=?`).run(id,unit.id);db.prepare(`DELETE FROM battle_movement_modes WHERE battle_id=? AND unit_id=?`).run(id,unit.id)}
       if(target&&mode!=='ORDER'){
         if(battleDistance(unit,target)<=unit.attack_range){dr=null;dc=null;db.prepare(`UPDATE battle_units SET dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id=?`).run(id,unit.id);db.prepare(`DELETE FROM battle_movement_modes WHERE battle_id=? AND unit_id=?`).run(id,unit.id)}
-        else{const slot=db.prepare(`SELECT offset_row,offset_col FROM battle_formation_slots WHERE battle_id=? AND unit_id=?`).get(id,unit.id),direction=target.col_no>=unit.col_no?-1:1,ideal=slot?{row:Math.max(0,Math.min(4,target.row_no+slot.offset_row)),col:Math.max(0,Math.min(59,target.col_no+direction*unit.attack_range))}:null,stop=approachCell(unit,target,units,reserved,ideal);if(stop){dr=stop.row;dc=stop.col;mode='CHASE';db.prepare(`UPDATE battle_units SET dest_row=?,dest_col=? WHERE battle_id=? AND id=?`).run(dr,dc,id,unit.id);db.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'CHASE') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='CHASE'`).run(id,unit.id)}}
+        else{const slot=db.prepare(`SELECT offset_row,offset_col FROM battle_formation_slots WHERE battle_id=? AND unit_id=?`).get(id,unit.id),direction=target.col_no>=unit.col_no?-1:1,ideal=slot?{row:Math.max(0,Math.min(4,target.row_no+slot.offset_row)),col:Math.max(0,Math.min(59,target.col_no+direction*unit.attack_range+slot.offset_col))}:null,stop=approachCell(unit,target,units,reserved,ideal);if(stop){dr=stop.row;dc=stop.col;mode='CHASE';db.prepare(`UPDATE battle_units SET dest_row=?,dest_col=? WHERE battle_id=? AND id=?`).run(dr,dc,id,unit.id);db.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'CHASE') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='CHASE'`).run(id,unit.id)}}
       }
       if(dr==null||dc==null)continue;
       const nr=unit.row_no+Math.sign(dr-unit.row_no),nc=unit.col_no+Math.sign(dc-unit.col_no);
@@ -204,7 +204,7 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.17.0',phase:'P2 Flexible Formation'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.17.1',phase:'P2 Full-Axis Flexible Formation'});
   if(req.method==='GET'&&u.pathname==='/api/battle/encounters')return reply(res,200,encounterSummaries());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/roster')return reply(res,200,rosterSnapshot());
   if(req.method==='GET'&&u.pathname==='/api/cities')return reply(res,200,cities);

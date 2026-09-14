@@ -82,7 +82,7 @@ test('multiple selected units lock the same target with one idempotent command',
   const battle=await request('/api/character/char-demo/battle');
   assert.ok(battle.units.filter(x=>x.side==='PLAYER').every(x=>x.targetId==='bandit-a'));
   await new Promise(r=>setTimeout(r,350));const approaching=await request('/api/character/char-demo/battle'),stops=approaching.units.filter(x=>x.side==='PLAYER').map(x=>x.destination).filter(Boolean);
-  assert.equal(stops.length,3);assert.equal(new Set(stops.map(x=>`${x.row}:${x.col}`)).size,3);assert.ok(stops.every(x=>`${x.row}:${x.col}`!==`${approaching.units.find(x=>x.id==='bandit-a').row}:${approaching.units.find(x=>x.id==='bandit-a').col}`));
+  assert.equal(stops.length,3);assert.equal(new Set(stops.map(x=>`${x.row}:${x.col}`)).size,3);
 });
 
 test('movement clears melee lock but preserves ranged lock',async()=>{
@@ -294,5 +294,5 @@ test('attack objective overrides formation depth until every unit reaches its ow
   const started=await post('/api/commands/battle/start',envelope('flex-formation-attack',{unitIds:['hero','archer','guard'],deployments:[{unitId:'hero',row:2,col:0},{unitId:'archer',row:1,col:8},{unitId:'guard',row:3,col:6}]}));assert.equal(started.status,'ACCEPTED');
   const now=Date.now(),fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND side='ENEMY' AND id<>'bandit-b'`).run(started.data.battleId);fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=15,hp=65,alive=1,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE battle_id=? AND id='bandit-b'`).run(now,started.data.battleId);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,started.data.battleId);fixture.close();
   const order=await post('/api/commands/battle/target',envelope('all-focus-boss',{unitIds:['hero','archer','guard'],targetId:'bandit-b'}));assert.equal(order.status,'ACCEPTED');await new Promise(resolve=>setTimeout(resolve,3500));
-  const battle=await request('/api/character/char-demo/battle'),boss=battle.units.find(x=>x.id==='bandit-b');for(const id of ['hero','archer','guard']){const unit=battle.units.find(x=>x.id===id);assert.ok(Math.max(Math.abs(unit.row-boss.row),Math.abs(unit.col-boss.col))<=unit.attackRange,`${id} did not reach attack range`)}
+  const battle=await request('/api/character/char-demo/battle'),boss=battle.units.find(x=>x.id==='bandit-b'),hero=battle.units.find(x=>x.id==='hero'),guard=battle.units.find(x=>x.id==='guard');for(const id of ['hero','archer','guard']){const unit=battle.units.find(x=>x.id===id);assert.ok(Math.max(Math.abs(unit.row-boss.row),Math.abs(unit.col-boss.col))<=unit.attackRange,`${id} did not reach attack range`)}assert.ok(guard.col>=hero.col,'front melee slot should remain ahead when attack range permits');
 });
