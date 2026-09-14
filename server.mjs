@@ -147,7 +147,7 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.7.2',phase:'P2 Layout Polish'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.7.3',phase:'P2 Skill Target and Cooldown UX'});
   if(req.method==='GET'&&u.pathname==='/api/cities')return reply(res,200,cities);
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/snapshot')return reply(res,200,snapshot());
   if(req.method==='GET'&&u.pathname.startsWith('/api/cities/')&&u.pathname.endsWith('/market'))return reply(res,200,market(u.pathname.split('/')[3]));
