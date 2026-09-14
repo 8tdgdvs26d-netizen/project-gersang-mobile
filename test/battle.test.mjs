@@ -122,7 +122,7 @@ test('heavy strike is server-authoritative, idempotent, and starts cooldown',asy
   fixture.prepare(`DELETE FROM battle_skill_cooldowns`).run();fixture.close();
   const body=envelope('heavy-strike-once',{unitId:'hero',skillId:'heavy-strike',targetId:'bandit-c'});
   const first=await post('/api/commands/battle/skill',body),retry=await post('/api/commands/battle/skill',body);
-  assert.deepEqual(retry,first);assert.equal(first.status,'ACCEPTED');assert.equal(first.data.damage,32);assert.equal(first.data.targetHp,23);
+  assert.deepEqual(retry,first);assert.equal(first.status,'ACCEPTED');assert.equal(first.data.damage,32);assert.equal(first.data.targetHp,23);assert.deepEqual(first.data.targetPosition,{row:2,col:12});
   const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero');
   assert.equal(battle.units.find(x=>x.id==='bandit-c').hp,23);assert.ok(hero.skills.find(x=>x.id==='heavy-strike').readyInMs>0);
   const cooldown=await post('/api/commands/battle/skill',envelope('heavy-strike-too-soon',{unitId:'hero',skillId:'heavy-strike',targetId:'bandit-c'}));

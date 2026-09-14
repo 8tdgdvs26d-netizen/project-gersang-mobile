@@ -1,4 +1,4 @@
-const S={sessionId:'',snap:null,cities:[],market:[],storage:[],tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],battleLog:[],tab:'market',modal:null};
+const S={sessionId:'',snap:null,cities:[],market:[],storage:[],tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffect:null,battleLog:[],tab:'market',modal:null};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
 const post=(p,b)=>req(p,{method:'POST',body:JSON.stringify(b)});
 const env=(payload,idempotencyKey=crypto.randomUUID())=>({commandId:crypto.randomUUID(),idempotencyKey,sessionId:S.sessionId,characterId:'char-demo',clientSentAt:new Date().toISOString(),payload});
@@ -24,7 +24,7 @@ function render(){
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
   const activeBattle=S.tab==='battle'&&S.battle?.status==='ACTIVE';
   const tabs=activeBattle?'':`<div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
-  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.7.3</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.7.4</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -45,9 +45,10 @@ function battleView(){
   S.selectedUnitIds=S.selectedUnitIds.filter(id=>b.units.some(x=>x.id===id&&x.alive));
   const selected=b.units.filter(x=>S.selectedUnitIds.includes(x.id)&&x.alive);let cells='';
   for(let row=0;row<b.rows;row++)for(let col=0;col<b.columns;col++){
-    const u=b.units.find(x=>x.alive&&x.row===row&&x.col===col),classes=['battle-cell'];
+    const u=b.units.find(x=>x.alive&&x.row===row&&x.col===col),effect=S.skillEffect?.row===row&&S.skillEffect?.col===col,classes=['battle-cell'];
     if(u)classes.push(u.side==='PLAYER'?'friendly':'enemy');if(u&&S.selectedUnitIds.includes(u.id))classes.push('selected');if(u&&selected.some(x=>x.targetId===u.id))classes.push('targeted');if(u&&S.hitUnitIds.includes(u.id))classes.push('hit');
-    cells+=`<button class="${classes.join(' ')}" data-row="${row}" data-col="${col}" ${u?`data-unit="${u.id}"`:''} title="${u?`${u.name} ${u.hp}/${u.maxHp}`:`${row+1},${col+1}`}">${u?`${u.role==='RANGED'?'🏹':u.side==='PLAYER'?'⚔️':'👺'}<span>${u.hp}</span>`:''}</button>`;
+    if(effect)classes.push('skill-impact');
+    cells+=`<button class="${classes.join(' ')}" data-row="${row}" data-col="${col}" ${u?`data-unit="${u.id}"`:''} title="${u?`${u.name} ${u.hp}/${u.maxHp}`:`${row+1},${col+1}`}">${u?`${u.role==='RANGED'?'🏹':u.side==='PLAYER'?'⚔️':'👺'}<span>${u.hp}</span>`:''}${effect?`<strong class="floating-damage">-${S.skillEffect.damage}</strong>`:''}</button>`;
   }
   const enemies=b.units.filter(x=>x.side==='ENEMY'&&x.alive),inferredTarget=selected.map(x=>x.targetId).find(id=>enemies.some(e=>e.id===id));
   if(!enemies.some(x=>x.id===S.focusTargetId))S.focusTargetId=inferredTarget||null;
@@ -56,7 +57,8 @@ function battleView(){
   const hero=selected.find(x=>x.id==='hero'),skill=hero?.skills?.find(x=>x.id==='heavy-strike'),skillTarget=hero&&b.units.find(x=>x.id===S.focusTargetId&&x.alive),skillDistance=skillTarget?Math.max(Math.abs(hero.row-skillTarget.row),Math.abs(hero.col-skillTarget.col)):Infinity;
   const skillText=!hero?'選擇主角使用技能':skill.readyInMs>0?`重擊冷卻 ${(skill.readyInMs/1000).toFixed(1)}s`:!skillTarget?'先鎖定敵人':skillDistance>skill.range?`目標太遠（需 ${skill.range} 格內）`:'重擊 · 32 傷害';
   const skillDisabled=!hero||!skillTarget||skill.readyInMs>0||skillDistance>skill.range;
-  return `<section class="card battle-card"><div class="battle-head"><div><b>山賊戰 · ${b.status}</b><div class="small">${selectedLabel}</div></div><button class="btn danger" id="retreat">撤退</button></div><div class="battle-legend"><span>🔵 我方</span><span>🔴 敵方</span><span>棋子下方數字＝HP</span></div><div class="battle-log">${S.battleLog.map(x=>`<div>⚔️ ${x}</div>`).join('')||'<div>等待首次交鋒…</div>'}</div><div class="battle-pan-wrap"><span>我方</span><input id="battle-pan" class="battle-pan" type="range" min="0" max="1000" value="0" aria-label="移動戰場畫面"><span>敵方</span></div><div class="battle-scroll"><div class="battle-grid">${cells}</div></div><div class="battle-controls"><div class="battle-targets"><div class="small">快速鎖定敵人</div>${targets}</div><div class="unit-controls"><button class="btn alt" id="select-all">全選我方</button><button class="btn alt" id="clear-selection">清除選擇</button><span class="small">點我方棋子可加選／取消</span></div><div class="skill-bar"><span class="skill-icon">💥</span><div><b>普通技能</b><div class="small">${skillText}</div></div><button class="btn skill-btn" data-skill-unit="hero" data-skill-id="heavy-strike" ${skillDisabled?'disabled':''}>重擊</button></div></div></section>`;
+  const cooling=skill?.readyInMs>0,cooldownPercent=cooling?Math.min(100,skill.readyInMs/skill.cooldownMs*100):0,skillButtonText=cooling?`${(skill.readyInMs/1000).toFixed(1)}s`:'重擊';
+  return `<section class="card battle-card"><div class="battle-head"><div><b>山賊戰 · ${b.status}</b><div class="small">${selectedLabel}</div></div><button class="btn danger" id="retreat">撤退</button></div><div class="battle-legend"><span>🔵 我方</span><span>🔴 敵方</span><span>棋子下方數字＝HP</span></div><div class="battle-log">${S.battleLog.map(x=>`<div>⚔️ ${x}</div>`).join('')||'<div>等待首次交鋒…</div>'}</div><div class="battle-pan-wrap"><span>我方</span><input id="battle-pan" class="battle-pan" type="range" min="0" max="1000" value="0" aria-label="移動戰場畫面"><span>敵方</span></div><div class="battle-scroll"><div class="battle-grid">${cells}</div></div><div class="battle-controls"><div class="battle-targets"><div class="small">快速鎖定敵人</div>${targets}</div><div class="unit-controls"><button class="btn alt" id="select-all">全選我方</button><button class="btn alt" id="clear-selection">清除選擇</button><span class="small">點我方棋子可加選／取消</span></div><div class="skill-bar"><span class="skill-icon">💥</span><div><b>普通技能</b><div class="small">${skillText}</div></div><button class="btn skill-btn ${cooling?'cooling':''}" style="--cooldown:${cooldownPercent}%" data-skill-unit="hero" data-skill-id="heavy-strike" ${skillDisabled?'disabled':''}><span>${skillButtonText}</span></button></div></div></section>`;
 }
 function qty(g){return Math.max(1,Number(document.querySelector(`[data-q="${g}"]`)?.value||1))}
 function wire(){
@@ -90,7 +92,7 @@ async function targetEnemy(targetId){
 }
 async function useSkill(unitId,skillId){
   const targetId=S.focusTargetId;if(!targetId)return toast('請先鎖定敵人');
-  const r=await command('/api/commands/battle/skill',{unitId,skillId,targetId});if(r.status==='REJECTED'){if(r.errorCode==='ERR_INVALID_SKILL_TARGET'){S.focusTargetId=null;await refresh()}const message={ERR_SKILL_OUT_OF_RANGE:'目標超出技能範圍',ERR_SKILL_COOLDOWN:'技能冷卻中',ERR_INVALID_SKILL_TARGET:'目標已失效，請重新鎖定'}[r.errorCode]||'技能使用失敗';return toast(message)}toast(`重擊！造成 ${r.data.damage} 傷害`);await refresh();
+  const r=await command('/api/commands/battle/skill',{unitId,skillId,targetId});if(r.status==='REJECTED'){if(r.errorCode==='ERR_INVALID_SKILL_TARGET'){S.focusTargetId=null;await refresh()}const message={ERR_SKILL_OUT_OF_RANGE:'目標超出技能範圍',ERR_SKILL_COOLDOWN:'技能冷卻中',ERR_INVALID_SKILL_TARGET:'目標已失效，請重新鎖定'}[r.errorCode]||'技能使用失敗';return toast(message)}S.skillEffect={...r.data.targetPosition,damage:r.data.damage};S.battleLog.unshift(`主角施放重擊，造成 ${r.data.damage} 傷害`);S.battleLog=S.battleLog.slice(0,3);toast(`重擊！造成 ${r.data.damage} 傷害`);await refresh();setTimeout(()=>{S.skillEffect=null;if(S.tab==='battle')render()},720);
 }
 function setupBattlePan(){
   const scroll=document.querySelector('.battle-scroll'),pan=document.querySelector('#battle-pan');if(!scroll||!pan)return;
