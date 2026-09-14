@@ -209,4 +209,12 @@ test('victory grants one persistent gold reward and transaction',async()=>{
   assert.equal(check.prepare(`SELECT COUNT(*) count FROM battle_rewards WHERE battle_id=?`).get(victory.id).count,1);
   const tx=check.prepare(`SELECT kind,gold_delta FROM economy_tx WHERE id=?`).get(`battle-reward:${victory.id}`);check.close();
   assert.equal(tx.kind,'BATTLE_REWARD');assert.equal(tx.gold_delta,100);
+  assert.equal(victory.reward.xpRewards.length,3);assert.ok(victory.reward.xpRewards.every(x=>x.xp===50&&x.level===1&&x.totalXp===50));
+});
+
+test('a second victory accumulates experience and levels survivors',async()=>{
+  const started=await post('/api/commands/battle/start',envelope('second-victory',{}));assert.equal(started.status,'ACCEPTED');
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(started.data.battleId);fixture.close();
+  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.status,'VICTORY');
+  assert.equal(victory.reward.xpRewards.length,3);assert.ok(victory.reward.xpRewards.every(x=>x.level===2&&x.totalXp===100));
 });
