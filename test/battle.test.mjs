@@ -152,6 +152,26 @@ test('archer has an independent ranged skill and cooldown',async()=>{
   assert.ok(archer.skills.find(x=>x.id==='heartseeker-arrow').readyInMs>0);
 });
 
+test('iron wall is self-targeted and halves incoming damage',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
+  fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=54,hp=120,alive=1,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE id='guard'`).run();
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=56,hp=65,alive=1,target_id='guard',dest_row=NULL,dest_col=NULL,last_attack_at=0 WHERE id='bandit-a'`).run();
+  fixture.prepare(`UPDATE battle_units SET row_no=0,col_no=0,target_id=NULL WHERE id='bandit-b'`).run();
+  fixture.prepare(`UPDATE battle_units SET row_no=0,col_no=1,target_id=NULL WHERE id='bandit-c'`).run();
+  fixture.prepare(`DELETE FROM battle_skill_cooldowns WHERE unit_id='guard'`).run();fixture.close();
+  const result=await post('/api/commands/battle/skill',envelope('iron-wall-once',{unitId:'guard',skillId:'iron-wall'}));
+  assert.equal(result.status,'ACCEPTED');assert.equal(result.data.effectId,'iron-wall');assert.equal(result.data.damage,0);
+  const armed=new DatabaseSync(join(dir,'test.sqlite'));
+  assert.equal(armed.prepare(`SELECT value FROM battle_status_effects WHERE unit_id='guard' AND effect_id='iron-wall'`).get().value,.5);
+  armed.prepare(`UPDATE battle_units SET hp=120 WHERE id='guard'`).run();
+  armed.prepare(`UPDATE battle_units SET last_attack_at=0 WHERE id='bandit-a'`).run();
+  armed.prepare(`UPDATE battles SET updated_at=?`).run(Date.now());armed.close();
+  await new Promise(r=>setTimeout(r,350));
+  const battle=await request('/api/character/char-demo/battle'),guard=battle.units.find(x=>x.id==='guard');
+  assert.equal(guard.hp,115);assert.ok(guard.statusEffects.find(x=>x.id==='iron-wall').expiresInMs>0);assert.ok(guard.skills.find(x=>x.id==='iron-wall').readyInMs>0);
+});
+
 test('heavy strike removes a defeated target immediately',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
   fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
