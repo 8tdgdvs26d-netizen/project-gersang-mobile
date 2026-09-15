@@ -100,6 +100,7 @@ test('ranged unit can move and damage its locked target simultaneously',async()=
   fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=53,dest_row=NULL,dest_col=NULL,target_id='bandit-c',last_attack_at=0 WHERE id='archer'`).run();
   const before=fixture.prepare(`SELECT hp FROM battle_units WHERE id='bandit-c'`).get().hp;fixture.close();
   await post('/api/commands/battle/move',envelope('ranged-move-fire',{unitIds:['archer'],row:0,col:50}));
+  const ordered=await request('/api/character/char-demo/battle');assert.equal(ordered.units.find(x=>x.id==='archer').actionState,'MOVING_ATTACKING');
   await new Promise(r=>setTimeout(r,800));
   const battle=await request('/api/character/char-demo/battle'),archer=battle.units.find(x=>x.id==='archer'),bandit=battle.units.find(x=>x.id==='bandit-c');
   assert.ok(archer.col<53);assert.ok(bandit.hp<before);
@@ -304,6 +305,21 @@ test('hold position stops chasing, attacks in range, and releases on a new order
   const body=envelope('hold-hero',{unitIds:['hero']}),held=await post('/api/commands/battle/hold',body),retry=await post('/api/commands/battle/hold',body);assert.deepEqual(retry,held);await new Promise(resolve=>setTimeout(resolve,700));let battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero');assert.equal(hero.col,10);assert.equal(hero.holding,true);assert.equal(hero.destination,null);
   const nearby=new DatabaseSync(join(dir,'test.sqlite'));nearby.prepare(`UPDATE battle_units SET row_no=2,col_no=12,hp=65,alive=1,target_id=NULL WHERE battle_id=? AND id='bandit-b'`).run(started.data.battleId);nearby.prepare(`UPDATE battle_units SET last_attack_at=0 WHERE battle_id=? AND id='hero'`).run(started.data.battleId);nearby.close();await new Promise(resolve=>setTimeout(resolve,350));battle=await request('/api/character/char-demo/battle');assert.ok(battle.units.find(x=>x.id==='bandit-b').hp<65);assert.equal(battle.units.find(x=>x.id==='hero').col,10);
   const far=new DatabaseSync(join(dir,'test.sqlite'));far.prepare(`UPDATE battle_units SET row_no=2,col_no=20,hp=65,alive=1,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id='bandit-b'`).run(started.data.battleId);far.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(Date.now(),started.data.battleId);far.close();const released=await post('/api/commands/battle/target',envelope('release-hold',{unitIds:['hero'],targetId:'bandit-b'}));assert.equal(released.status,'ACCEPTED');await new Promise(resolve=>setTimeout(resolve,700));battle=await request('/api/character/char-demo/battle');hero=battle.units.find(x=>x.id==='hero');assert.equal(hero.holding,false);assert.ok(hero.col>10);
+});
+
+test('melee alternates attacks with movement and keeps its ordered destination',async()=>{
+  const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
+  const started=await post('/api/commands/battle/start',envelope('melee-march-start',{unitIds:['hero']}));assert.equal(started.status,'ACCEPTED');
+  const now=Date.now(),fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET hp=0,alive=0,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND side='ENEMY' AND id<>'bandit-b'`).run(started.data.battleId);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,target_id=NULL,dest_row=2,dest_col=20,last_attack_at=0 WHERE battle_id=? AND id='hero'`).run(started.data.battleId);
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=13,hp=65,alive=1,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE battle_id=? AND id='bandit-b'`).run(now+60000,started.data.battleId);
+  fixture.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'ORDER') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='ORDER'`).run(started.data.battleId,'hero');
+  fixture.prepare(`UPDATE battle_mobility SET move_credit_ms=move_interval WHERE battle_id=? AND unit_id='hero'`).run(started.data.battleId);
+  fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now-350,started.data.battleId);fixture.close();
+  let battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero'),boss=battle.units.find(x=>x.id==='bandit-b');assert.equal(hero.col,11);assert.equal(boss.hp,65);assert.deepEqual(hero.destination,{row:2,col:20});
+  await new Promise(resolve=>setTimeout(resolve,350));battle=await request('/api/character/char-demo/battle');hero=battle.units.find(x=>x.id==='hero');boss=battle.units.find(x=>x.id==='bandit-b');assert.equal(hero.col,11);assert.ok(boss.hp<65);assert.deepEqual(hero.destination,{row:2,col:20});assert.equal(hero.actionState,'ADVANCING');
+  await new Promise(resolve=>setTimeout(resolve,350));battle=await request('/api/character/char-demo/battle');hero=battle.units.find(x=>x.id==='hero');assert.ok(hero.col>11);assert.deepEqual(hero.destination,{row:2,col:20});
 });
 
 test('agility gives units distinct movement and attack cadence',async()=>{
