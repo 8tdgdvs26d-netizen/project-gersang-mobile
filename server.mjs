@@ -81,7 +81,11 @@ function seed(){
 }
 seed();
 
-const cities=[{id:'starter-village',name:'Starter Village'},{id:'harbour-city',name:'Harbour City'},{id:'hill-market',name:'Hill Market'}];
+const cities=[
+  {id:'starter-village',name:'Starter Village',region:'NT_WEST',coordinates:{x:220,y:150},facilities:['MARKET','STORAGE'],theme:'starter'},
+  {id:'harbour-city',name:'Harbour City',region:'HK_ISLAND',coordinates:{x:500,y:820},facilities:['MARKET','STORAGE'],theme:'harbour'},
+  {id:'hill-market',name:'Hill Market',region:'NT_EAST',coordinates:{x:780,y:150},facilities:['MARKET','STORAGE'],theme:'hill'}
+];
 const cargoUnits={rice:1,tea:1,cloth:2,iron:3,timber:4};
 const h=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const reply=(res,status,body)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(body));};
@@ -93,7 +97,7 @@ function snapshot(){
   const stacks=db.prepare(`SELECT good_id,quantity,cargo_units FROM cargo WHERE character_id='char-demo' AND quantity>0`).all();
   const used=stacks.reduce((n,s)=>n+s.quantity*s.cargo_units,0);
   const t=db.prepare(`SELECT * FROM travel WHERE character_id='char-demo'`).get();
-  return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null};
+  return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),segments:normalizedSegments(t),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null};
 }
 function marketRow(city,good){return db.prepare(`SELECT * FROM market WHERE city_id=? AND good_id=?`).get(city,good)}
 function market(city){return db.prepare(`SELECT * FROM market WHERE city_id=? ORDER BY good_id`).all(city).map(m=>({cityId:m.city_id,goodTypeId:m.good_id,stock:m.stock,referencePrice:m.ref_price,baseSpread:m.spread,version:m.version,buyPrice:m.ref_price+m.spread,sellPrice:Math.max(1,m.ref_price-m.spread)}))}
@@ -283,11 +287,12 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.31.0',phase:'P2 Multi-city Warehouse Overview'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.32.0',phase:'P3 World Map & City Hub Vertical Slice'});
   if(req.method==='GET'&&u.pathname==='/api/battle/encounters')return reply(res,200,encounterSummaries());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/roster')return reply(res,200,rosterSnapshot());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/equipment')return reply(res,200,equipmentSnapshot());
   if(req.method==='GET'&&u.pathname==='/api/cities')return reply(res,200,cities);
+  if(req.method==='GET'&&u.pathname==='/api/roads')return reply(res,200,db.prepare(`SELECT id,from_city,to_city,travel_ms FROM roads ORDER BY id`).all().map(r=>({id:r.id,fromCityId:r.from_city,toCityId:r.to_city,durationMs:r.travel_ms})));
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/snapshot')return reply(res,200,snapshot());
   if(req.method==='GET'&&u.pathname.startsWith('/api/cities/')&&u.pathname.endsWith('/market'))return reply(res,200,market(u.pathname.split('/')[3]));
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/storage')return reply(res,200,allStorage());

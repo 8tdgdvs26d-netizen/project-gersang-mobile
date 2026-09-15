@@ -1,4 +1,4 @@
-# MYRIAL: UNWRITTEN Combat Prototype v0.31.0
+# MYRIAL: UNWRITTEN Combat Prototype v0.32.0
 
 This repository now includes the deployable P0 First Playable.
 
@@ -30,7 +30,7 @@ GET /api/health
 Expected:
 
 ```json
-{"ok":true,"version":"0.31.0","phase":"P2 Multi-city Warehouse Overview"}
+{"ok":true,"version":"0.32.0","phase":"P3 World Map & City Hub Vertical Slice"}
 ```
 
 ## Render
@@ -136,3 +136,42 @@ or Render configuration.
   `public/index.html`, `public/app.js`, and the `server.mjs` health
   endpoint. The health endpoint's `phase` field is intentionally left
   unchanged.
+
+## v0.32.0 — World Map & City Hub Vertical Slice
+
+This release adds a Hong Kong four-region World Map and a City Hub screen.
+It reuses the existing `travel`/`reroute`/`resolve-arrival` backend and
+client functions unchanged, and reuses the existing market/storage render
+logic unchanged — only their navigation entry point moved. No database
+schema or save-format change, and only two additive read-only pieces of
+server surface: a new `GET /api/roads` endpoint and a `segments` field
+added to `GET /api/character/char-demo/snapshot`'s `activeTravel`.
+
+- World Map (`public/worldmap.js`) replaces the previous "旅行" tab. It
+  shows the four Hong Kong-inspired regions (港島 / 九龍 / 新界西 / 新界東)
+  as an SVG, with the existing 3 demo cities placed as temporary metadata:
+  `harbour-city` → 港島, `hill-market` → 新界東, `starter-village` → 新界西.
+  九龍 (Kowloon) currently has no city and is shown as not yet open. The
+  map supports touch drag/pan (native scroll, no zoom in this slice).
+- Tapping a city on the map calls the existing `travel()` function when
+  the character is `IN_CITY`, or the existing `reroute()` function when
+  already `TRAVELING` — no second travel implementation was written.
+- The hero marker's position while `TRAVELING` is computed by a pure,
+  independently-tested function (`computeTravelPosition`) from the
+  segment breakdown, `startedAt`/`estimatedArrivalAt`, `GET /api/roads`,
+  and city coordinates — fully reconstructable after a reload with no
+  client-held state, including the reroute "virtual position" segment.
+- City Hub (new screen, entered only once `state==='IN_CITY'` and the
+  hub's city id matches the character's current city) replaces the old
+  top-level 市場/倉庫 tabs with 7 entries: 市場 and 貨倉 (reused, unchanged
+  business logic) are open; 銀行, 傭兵店, 裝備店, 工廠 show "尚未開放"
+  (not yet implemented — not claimed as done); 離開城市 returns to the
+  World Map without any server call.
+- 貨艙 (personal cargo), 戰鬥, and 紀錄 remain top-level tabs, unchanged.
+- Bumped the visible version string to `0.32.0` and the health endpoint's
+  `phase` to `P3 World Map & City Hub Vertical Slice`.
+
+Known limitation: only 3 demo cities exist; the World Map, City Hub, and
+city metadata are designed to be data-driven so more cities (up to the
+long-term ~100-city goal) can be added later without rewriting rendering
+logic — this slice does not add any new city.

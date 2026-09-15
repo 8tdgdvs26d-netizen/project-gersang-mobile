@@ -27,3 +27,24 @@
 - 存檔影響：無。
 - 已知問題：暫無。
 - Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
+
+## V32 — 2026-09-15 — World Map & City Hub Vertical Slice
+
+- 分類：Hong Kong Four-Region World Map & City Entry Vertical Slice
+- 起點：`main` @ `39577aa06b0a8db99d3687528f61019468adf487`(即V31 merge之後)
+- `package.json` 版本：`0.31.0` → `0.32.0`；health `phase`：`P2 Multi-city Warehouse Overview` → `P3 World Map & City Hub Vertical Slice`
+- 新增：
+  - `public/worldmap.js`：World Map(港島／九龍／新界西／新界東)、City Hub畫面、pure functions（`computeTravelPosition`、`canEnterCityHub`、`cityHubEntries`、`chooseTravelAction`、`handleCityTap`、`leaveCityHub`）。
+  - `test/worldmap.test.mjs`：14個新測試。
+- 修改：
+  - `server.mjs`：`cities`加`region`/`coordinates`/`facilities`/`theme`（`harbour-city`→港島、`hill-market`→新界東、`starter-village`→新界西，九龍暫時未開放）；新增`GET /api/roads`（read-only，直接讀現有`roads`表）；`snapshot()`嘅`activeTravel`加`segments`欄位（reuse現有`normalizedSegments()`）；health endpoint版本/phase更新。
+  - `public/app.js`：World Map取代舊「旅行」頂層入口；市場／倉庫移入City Hub（render function原封不動，只改導航入口）；頂層nav改為地圖／貨艙／戰鬥／紀錄；重用現有`travel()`/`reroute()`/`arrival()`函數。
+  - `public/styles.css`：地圖/區域/City Hub樣式。
+  - `package.json`、`public/index.html`：版本號同步0.32.0。
+  - `test/health.test.mjs`：更新version/phase斷言。
+  - `FIRST_PLAYABLE_README.md`：新增v0.32.0段落，保留全部歷史記錄。
+- **不涉及**：database schema、save format、Render設定、secrets、環境變數；現有`travel`/`reroute`/`resolve-arrival`後端邏輯及市場/倉庫業務邏輯完全冇改。
+- 測試結果：44（現有，內容不變除health.test.mjs版本斷言）+ 14（新增）= 58 tests passed, 0 failed。
+- 存檔影響：無。
+- 已知問題：暫時只有3座示範城市；九龍未有城市；銀行/傭兵店/裝備店/工廠尚未開放。
+- Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`；V31基準 `39577aa06b0a8db99d3687528f61019468adf487`。
