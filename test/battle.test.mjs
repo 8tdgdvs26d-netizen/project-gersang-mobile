@@ -322,6 +322,27 @@ test('melee alternates attacks with movement and keeps its ordered destination',
   await new Promise(resolve=>setTimeout(resolve,350));battle=await request('/api/character/char-demo/battle');hero=battle.units.find(x=>x.id==='hero');assert.ok(hero.col>11);assert.deepEqual(hero.destination,{row:2,col:20});
 });
 
+test('tactical pause, slow arrow, and ice wall control server movement',async()=>{
+  const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
+  const started=await post('/api/commands/battle/start',envelope('control-skills-start',{unitIds:['hero','archer','guard']}));assert.equal(started.status,'ACCEPTED');const id=started.data.battleId;
+  let now=Date.now(),fixture=new DatabaseSync(join(dir,'test.sqlite'));
+  fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=40,dest_row=2,dest_col=30,target_id=NULL,last_attack_at=? WHERE battle_id=? AND side='ENEMY'`).run(now+60000,id);
+  for(const enemy of ['bandit-a','bandit-b','bandit-c'])fixture.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'ORDER') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='ORDER'`).run(id,enemy);
+  fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,id);fixture.close();
+  const paused=await post('/api/commands/battle/skill',envelope('pause-enemies',{unitId:'hero',skillId:'tactical-pause'}));assert.equal(paused.status,'ACCEPTED');assert.equal(paused.data.affectedUnitIds.length,3);
+  fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(Date.now()-650,id);fixture.close();
+  let battle=await request('/api/character/char-demo/battle');assert.ok(battle.units.filter(x=>x.side==='ENEMY').every(x=>x.col===40&&x.actionState==='PAUSED'));
+
+  now=Date.now();fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`DELETE FROM battle_status_effects WHERE battle_id=?`).run(id);fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=10,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id='archer'`).run(id);fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=17,hp=65,alive=1,target_id=NULL,dest_row=1,dest_col=5,last_attack_at=? WHERE battle_id=? AND id='bandit-a'`).run(now+60000,id);fixture.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'ORDER') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='ORDER'`).run(id,'bandit-a');fixture.prepare(`UPDATE battle_mobility SET move_credit_ms=0 WHERE battle_id=? AND unit_id='bandit-a'`).run(id);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,id);fixture.close();
+  const slowed=await post('/api/commands/battle/skill',envelope('slow-enemy',{unitId:'archer',skillId:'slow-arrow',targetId:'bandit-a'}));assert.equal(slowed.status,'ACCEPTED');assert.equal(slowed.data.effectId,'slowed');
+  fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(Date.now()-650,id);fixture.close();battle=await request('/api/character/char-demo/battle');assert.equal(battle.units.find(x=>x.id==='bandit-a').col,17);assert.equal(battle.units.find(x=>x.id==='bandit-a').slowed,true);
+  fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`DELETE FROM battle_status_effects WHERE battle_id=? AND unit_id='bandit-a' AND effect_id='slowed'`).run(id);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(Date.now()-650,id);fixture.close();battle=await request('/api/character/char-demo/battle');assert.ok(battle.units.find(x=>x.id==='bandit-a').col<17);
+
+  now=Date.now();fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id='guard'`).run(id);fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=15,hp=65,alive=1,target_id=NULL,dest_row=2,dest_col=25 WHERE battle_id=? AND id='bandit-a'`).run(id);fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=16,hp=65,alive=1,target_id=NULL,dest_row=1,dest_col=25 WHERE battle_id=? AND id='bandit-b'`).run(id);for(const enemy of ['bandit-a','bandit-b'])fixture.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'ORDER') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='ORDER'`).run(id,enemy);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,id);fixture.close();
+  const frozen=await post('/api/commands/battle/skill',envelope('freeze-area',{unitId:'guard',skillId:'ice-wall',row:2,col:15}));assert.equal(frozen.status,'ACCEPTED');assert.deepEqual([...frozen.data.affectedUnitIds].sort(),['bandit-a','bandit-b']);
+  fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(Date.now()-650,id);fixture.close();battle=await request('/api/character/char-demo/battle');for(const enemy of ['bandit-a','bandit-b'])assert.equal(battle.units.find(x=>x.id===enemy).actionState,'FROZEN');
+});
+
 test('agility gives units distinct movement and attack cadence',async()=>{
   const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
   const started=await post('/api/commands/battle/start',envelope('agility-tempo',{unitIds:['hero','archer','guard']}));assert.equal(started.status,'ACCEPTED');
