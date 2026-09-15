@@ -27,7 +27,7 @@ function render(){
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
   const activeBattle=S.tab==='battle'&&S.battle?.status==='ACTIVE';
   const tabs=activeBattle?'':`<div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
-  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.21.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell ${activeBattle?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.21.1</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -56,11 +56,11 @@ function battleView(){
   S.selectedUnitIds=S.selectedUnitIds.filter(id=>b.units.some(x=>x.id===id&&x.alive));
   const selected=b.units.filter(x=>S.selectedUnitIds.includes(x.id)&&x.alive),destinations=b.units.filter(x=>x.side==='PLAYER'&&x.alive&&x.destination);let cells='';
   for(let row=0;row<b.rows;row++)for(let col=0;col<b.columns;col++){
-    const u=b.units.find(x=>x.alive&&x.row===row&&x.col===col),arrivals=destinations.filter(x=>x.destination.row===row&&x.destination.col===col),effects=S.skillEffects.filter(x=>x.row===row&&x.col===col),classes=['battle-cell'];
+    const u=b.units.find(x=>x.alive&&x.row===row&&x.col===col),arrivals=destinations.filter(x=>x.destination.row===row&&x.destination.col===col),effects=S.skillEffects.filter(x=>x.row===row&&x.col===col),iceWall=b.iceWalls?.some(w=>col>=w.startCol&&col<=w.endCol),classes=['battle-cell'];
     if(u)classes.push(u.side==='PLAYER'?'friendly':'enemy');if(u&&S.selectedUnitIds.includes(u.id))classes.push('selected');if(u&&selected.some(x=>x.targetId===u.id))classes.push('targeted');if(u&&S.hitUnitIds.includes(u.id))classes.push('hit');if(u?.holding)classes.push('holding');if(u?.statusEffects?.some(x=>x.id==='iron-wall'))classes.push('iron-wall');if(u?.slowed)classes.push('slowed');if(u?.actionState==='FROZEN')classes.push('frozen');if(u?.actionState==='PAUSED')classes.push('paused');
-    if(arrivals.length)classes.push('destination');if(effects.length)classes.push('skill-impact');if(S.armedSkill)classes.push('skill-aim-cell');
+    if(arrivals.length)classes.push('destination');if(effects.length)classes.push('skill-impact');if(iceWall)classes.push('ice-wall-cell');if(S.armedSkill)classes.push('skill-aim-cell');
     const title=u?`${u.name} ${u.hp}/${u.maxHp} · 敏捷 ${u.agility} · ${coord(row,col)}`:arrivals.length?`${arrivals.map(x=>x.name).join('、')}目的地 · ${coord(row,col)}`:coord(row,col);
-    cells+=`<button class="${classes.join(' ')}" data-row="${row}" data-col="${col}" ${u?`data-unit="${u.id}"`:''} title="${title}">${u?`${u.role==='RANGED'?'🏹':u.side==='PLAYER'?'⚔️':'👺'}<span>${u.hp}</span>${u.holding?'<em class="hold-marker">⏸</em>':''}`:''}${arrivals.length?`<em class="destination-marker">⚑</em>`:''}${effects.map(effect=>`<strong class="floating-damage">-${effect.damage}</strong>`).join('')}</button>`;
+    cells+=`<button class="${classes.join(' ')}" data-row="${row}" data-col="${col}" ${u?`data-unit="${u.id}"`:''} title="${title}">${iceWall&&!u?'<i class="ice-wall-marker">🧊</i>':''}${u?`${u.role==='RANGED'?'🏹':u.side==='PLAYER'?'⚔️':'👺'}<span>${u.hp}</span>${u.holding?'<em class="hold-marker">⏸</em>':''}`:''}${arrivals.length?`<em class="destination-marker">⚑</em>`:''}${effects.map(effect=>`<strong class="floating-damage">-${effect.damage}</strong>`).join('')}</button>`;
   }
   const enemies=b.units.filter(x=>x.side==='ENEMY'&&x.alive),inferredTarget=selected.map(x=>x.targetId).find(id=>enemies.some(e=>e.id===id));
   if(!enemies.some(x=>x.id===S.focusTargetId))S.focusTargetId=inferredTarget||null;
