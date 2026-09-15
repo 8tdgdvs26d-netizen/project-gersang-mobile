@@ -247,8 +247,9 @@ test('victory grants gold once and requires an idempotent loot settlement before
   assert.equal(victory.reward.xpRewards.length,3);assert.ok(victory.reward.xpRewards.every(x=>x.xp===50&&x.level===1&&x.totalXp===50));
   const blockedBattle=await post('/api/commands/battle/start',envelope('blocked-before-settlement',{}));assert.equal(blockedBattle.errorCode,'ERR_BATTLE_SETTLEMENT_REQUIRED');
   const blockedTravel=await post('/api/commands/travel/start',envelope('blocked-travel-before-settlement',{destinationCityId:'harbour-city'}));assert.equal(blockedTravel.errorCode,'ERR_BATTLE_SETTLEMENT_REQUIRED');
-  const body=envelope('keep-first-loot',{battleId:victory.id,decision:'KEEP'}),kept=await post('/api/commands/battle/settle-loot',body),retry=await post('/api/commands/battle/settle-loot',body);assert.deepEqual(retry,kept);assert.equal(kept.status,'ACCEPTED');
-  const settled=await request('/api/character/char-demo/battle');assert.equal(settled.reward.settlementRequired,false);assert.equal(settled.reward.loot.status,'KEEP');const keptCheck=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(keptCheck.prepare(`SELECT COUNT(*) count FROM equipment_inventory WHERE id=?`).get(`loot:${victory.id}`).count,1);keptCheck.close();
+  const missingOwner=await post('/api/commands/battle/settle-loot',envelope('keep-without-owner',{battleId:victory.id,decision:'KEEP'}));assert.equal(missingOwner.errorCode,'ERR_BACKPACK_OWNER_REQUIRED');
+  const body=envelope('keep-first-loot',{battleId:victory.id,decision:'KEEP',ownerUnitId:'guard'}),kept=await post('/api/commands/battle/settle-loot',body),retry=await post('/api/commands/battle/settle-loot',body);assert.deepEqual(retry,kept);assert.equal(kept.status,'ACCEPTED');assert.equal(kept.data.ownerUnitId,'guard');
+  const settled=await request('/api/character/char-demo/battle');assert.equal(settled.reward.settlementRequired,false);assert.equal(settled.reward.loot.status,'KEEP');const keptCheck=new DatabaseSync(join(dir,'test.sqlite'));const keptItem=keptCheck.prepare(`SELECT owner_unit_id FROM equipment_inventory WHERE id=?`).get(`loot:${victory.id}`);assert.equal(keptItem.owner_unit_id,'guard');keptCheck.close();
 });
 
 test('a second victory accumulates experience and levels survivors',async()=>{
@@ -272,13 +273,15 @@ test('elite encounter has stronger composition and higher rewards',async()=>{
   const started=await post('/api/commands/battle/start',envelope('elite-encounter',{encounterId:'bandit-captain'}));assert.equal(started.status,'ACCEPTED');
   const active=await request('/api/character/char-demo/battle');assert.equal(active.encounter.id,'bandit-captain');assert.equal(active.units.filter(x=>x.side==='ENEMY').length,4);assert.equal(active.units.find(x=>x.id==='captain').maxHp,120);
   const defeated=new DatabaseSync(join(dir,'test.sqlite'));defeated.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(active.id);defeated.close();
-  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.reward.gold,180);assert.ok(victory.reward.xpRewards.every(x=>x.xp===80));const kept=await post('/api/commands/battle/settle-loot',envelope('keep-elite-loot',{battleId:victory.id,decision:'KEEP'}));assert.equal(kept.status,'ACCEPTED');
+  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.reward.gold,180);assert.ok(victory.reward.xpRewards.every(x=>x.xp===80));const kept=await post('/api/commands/battle/settle-loot',envelope('keep-elite-loot',{battleId:victory.id,decision:'KEEP',ownerUnitId:'hero'}));assert.equal(kept.status,'ACCEPTED');
 });
 
-test('loot can be equipped and its bonus is applied to the next battle',async()=>{
-  const items=await request('/api/character/char-demo/equipment'),blade=items.find(x=>x.itemId==='captain-blade');assert.ok(blade);assert.equal(blade.attackBonus,5);
+test('separate character backpacks restrict equipment and apply its bonus to the next battle',async()=>{
+  const items=await request('/api/character/char-demo/equipment'),blade=items.find(x=>x.itemId==='captain-blade'),charm=items.find(x=>x.itemId==='bandit-charm');assert.ok(blade);assert.equal(blade.attackBonus,5);assert.equal(blade.ownerUnitId,'hero');assert.equal(charm.ownerUnitId,'guard');
+  const wrongOwner=await post('/api/commands/equipment/equip',envelope('wrong-backpack-owner',{itemId:charm.id,unitId:'hero'}));assert.equal(wrongOwner.errorCode,'ERR_ITEM_NOT_IN_UNIT_BACKPACK');
   const body=envelope('equip-captain-blade',{itemId:blade.id,unitId:'hero'}),first=await post('/api/commands/equipment/equip',body),retry=await post('/api/commands/equipment/equip',body);assert.deepEqual(retry,first);assert.equal(first.status,'ACCEPTED');
   const roster=await request('/api/character/char-demo/roster'),hero=roster.find(x=>x.id==='hero');assert.equal(hero.equipmentBonuses.attack,5);
+  const removed=await post('/api/commands/equipment/unequip',envelope('unequip-captain-blade',{itemId:blade.id,unitId:'hero'}));assert.equal(removed.status,'ACCEPTED');const unequippedRoster=await request('/api/character/char-demo/roster');assert.equal(unequippedRoster.find(x=>x.id==='hero').equipmentBonuses.attack,0);const reequipped=await post('/api/commands/equipment/equip',envelope('reequip-captain-blade',{itemId:blade.id,unitId:'hero'}));assert.equal(reequipped.status,'ACCEPTED');
   const started=await post('/api/commands/battle/start',envelope('equipped-stats',{}));assert.equal(started.status,'ACCEPTED');const battle=await request('/api/character/char-demo/battle');assert.equal(battle.units.find(x=>x.id==='hero').attack,hero.attack);
   const retreated=await post('/api/commands/battle/retreat',envelope('equipped-retreat',{}));assert.equal(retreated.status,'ACCEPTED');
 });
