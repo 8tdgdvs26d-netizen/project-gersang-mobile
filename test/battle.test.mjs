@@ -286,6 +286,22 @@ test('separate character backpacks restrict equipment and apply its bonus to the
   const retreated=await post('/api/commands/battle/retreat',envelope('equipped-retreat',{}));assert.equal(retreated.status,'ACCEPTED');
 });
 
+test('equipment transfers between unit backpacks and the local city warehouse',async()=>{
+  let items=await request('/api/character/char-demo/equipment'),blade=items.find(x=>x.itemId==='captain-blade');
+  const transferred=await post('/api/commands/equipment/transfer',envelope('transfer-blade-to-archer',{itemId:blade.id,toUnitId:'archer'}));assert.equal(transferred.status,'ACCEPTED');items=await request('/api/character/char-demo/equipment');blade=items.find(x=>x.id===blade.id);assert.equal(blade.ownerUnitId,'archer');assert.equal(blade.equippedUnitId,null);
+  const stored=await post('/api/commands/equipment/store',envelope('store-blade',{itemId:blade.id,cityId:'starter-village'}));assert.equal(stored.status,'ACCEPTED');items=await request('/api/character/char-demo/equipment');blade=items.find(x=>x.id===blade.id);assert.equal(blade.ownerUnitId,null);assert.equal(blade.storageCityId,'starter-village');
+  const remote=await post('/api/commands/equipment/withdraw',envelope('remote-withdraw-blade',{itemId:blade.id,cityId:'harbour-city',toUnitId:'guard'}));assert.equal(remote.errorCode,'ERR_PHYSICAL_PRESENCE_REQUIRED');
+  const withdrawn=await post('/api/commands/equipment/withdraw',envelope('withdraw-blade-to-guard',{itemId:blade.id,cityId:'starter-village',toUnitId:'guard'}));assert.equal(withdrawn.status,'ACCEPTED');items=await request('/api/character/char-demo/equipment');blade=items.find(x=>x.id===blade.id);assert.equal(blade.ownerUnitId,'guard');assert.equal(blade.storageCityId,null);
+});
+
+test('equipment has different city prices and an idempotent market sale',async()=>{
+  let items=await request('/api/character/char-demo/equipment'),blade=items.find(x=>x.itemId==='captain-blade'),starterQuote=await post('/api/commands/market/equipment-quote',{itemId:blade.id});assert.equal(starterQuote.unitPrice,72);
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE characters SET city_id='harbour-city' WHERE id='char-demo'`).run();const before=fixture.prepare(`SELECT wallet FROM characters WHERE id='char-demo'`).get().wallet;fixture.close();
+  const harbourQuote=await post('/api/commands/market/equipment-quote',{itemId:blade.id});assert.equal(harbourQuote.unitPrice,96);assert.notEqual(harbourQuote.unitPrice,starterQuote.unitPrice);
+  const body=envelope('sell-blade-in-harbour',{approvedQuote:harbourQuote}),sold=await post('/api/commands/market/equipment-sell',body),retry=await post('/api/commands/market/equipment-sell',body);assert.deepEqual(retry,sold);assert.equal(sold.status,'ACCEPTED');
+  const check=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(check.prepare(`SELECT wallet FROM characters WHERE id='char-demo'`).get().wallet,before+96);assert.equal(check.prepare(`SELECT COUNT(*) count FROM equipment_inventory WHERE id=?`).get(blade.id).count,0);const tx=check.prepare(`SELECT kind,gold_delta,city_id FROM economy_tx WHERE kind='EQUIPMENT_SELL' ORDER BY created_at DESC LIMIT 1`).get();assert.equal(tx.kind,'EQUIPMENT_SELL');assert.equal(tx.gold_delta,96);assert.equal(tx.city_id,'harbour-city');check.prepare(`UPDATE characters SET city_id='starter-village' WHERE id='char-demo'`).run();check.close();
+});
+
 test('elite boss telegraphs an area attack that can be dodged and resolves only once',async()=>{
   const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
   const started=await post('/api/commands/battle/start',envelope('telegraph-start',{encounterId:'bandit-captain'}));assert.equal(started.status,'ACCEPTED');const id=started.data.battleId;

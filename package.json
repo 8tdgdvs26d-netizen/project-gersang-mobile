@@ -1,7 +1,7 @@
 {
   "name": "myrial-unwritten-first-playable",
   "private": true,
-  "version": "0.28.1",
+  "version": "0.29.0",
   "type": "module",
   "scripts": {
     "start": "node server.mjs",
