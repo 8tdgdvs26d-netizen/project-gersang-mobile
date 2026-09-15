@@ -406,6 +406,16 @@ test('tactical pause breaks on damage, slow arrow slows, and a 15-second 5x2 ice
   now=Date.now();fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET row_no=1,col_no=14,target_id=NULL,dest_row=1,dest_col=20 WHERE battle_id=? AND id='hero'`).run(id);fixture.prepare(`INSERT INTO battle_movement_modes VALUES(?,?,'ORDER') ON CONFLICT(battle_id,unit_id) DO UPDATE SET mode='ORDER'`).run(id,'hero');fixture.prepare(`UPDATE battle_mobility SET move_credit_ms=move_interval WHERE battle_id=? AND unit_id='hero'`).run(id);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now-650,id);fixture.close();battle=await request('/api/character/char-demo/battle');assert.equal(battle.units.find(x=>x.id==='hero').col,14);
 });
 
+test('an out-of-range ice wall queues an approach and casts automatically in range',async()=>{
+  const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
+  const started=await post('/api/commands/battle/start',envelope('ice-wall-approach-start',{unitIds:['hero','guard']}));assert.equal(started.status,'ACCEPTED');const id=started.data.battleId;
+  let fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=2,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id='guard'`).run(id);fixture.prepare(`UPDATE battle_units SET target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE battle_id=? AND side='ENEMY'`).run(now+60000,id);fixture.prepare(`DELETE FROM battle_skill_cooldowns WHERE battle_id=? AND unit_id='guard' AND skill_id='ice-wall'`).run(id);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,id);fixture.close();
+  const queued=await post('/api/commands/battle/skill',envelope('queue-distant-ice-wall',{unitId:'guard',skillId:'ice-wall',row:2,col:20}));assert.equal(queued.status,'ACCEPTED');assert.equal(queued.data.queued,true);assert.ok(queued.data.destination.col>2);
+  let battle=await request('/api/character/char-demo/battle');assert.equal(battle.skillOrders.length,1);assert.equal(battle.iceWalls.length,0);assert.deepEqual(battle.units.find(x=>x.id==='guard').destination,queued.data.destination);
+  fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=14 WHERE battle_id=? AND id='guard'`).run(id);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(Date.now(),id);fixture.close();
+  battle=await request('/api/character/char-demo/battle');assert.equal(battle.skillOrders.length,0);assert.equal(battle.iceWalls.length,1);assert.deepEqual({startCol:battle.iceWalls[0].startCol,endCol:battle.iceWalls[0].endCol},{startCol:20,endCol:21});assert.ok(battle.units.find(x=>x.id==='guard').skills.find(x=>x.id==='ice-wall').readyInMs>0);
+});
+
 test('agility gives units distinct movement and attack cadence',async()=>{
   const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
   const started=await post('/api/commands/battle/start',envelope('agility-tempo',{unitIds:['hero','archer','guard']}));assert.equal(started.status,'ACCEPTED');
@@ -421,4 +431,12 @@ test('agility gives units distinct movement and attack cadence',async()=>{
   assert.deepEqual([archer.agility,hero.agility,guard.agility],[14,10,8]);
   assert.ok(archer.moveIntervalMs<hero.moveIntervalMs&&hero.moveIntervalMs<guard.moveIntervalMs);
   assert.ok(archer.attackIntervalMs<hero.attackIntervalMs&&hero.attackIntervalMs<guard.attackIntervalMs);
+});
+
+test('travel blocks challenges and snapshot automatically completes an overdue journey',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();fixture.prepare(`DELETE FROM travel WHERE character_id='char-demo'`).run();fixture.prepare(`UPDATE characters SET city_id='starter-village',state='IN_CITY' WHERE id='char-demo'`).run();fixture.close();
+  const started=await post('/api/commands/travel/start',envelope('travel-auto-arrival',{destinationCityId:'harbour-city'}));assert.equal(started.status,'ACCEPTED');
+  const blocked=await post('/api/commands/battle/start',envelope('battle-during-travel',{}));assert.equal(blocked.errorCode,'ERR_INVALID_STATE');
+  const overdue=new DatabaseSync(join(dir,'test.sqlite'));overdue.prepare(`UPDATE travel SET eta=? WHERE character_id='char-demo'`).run(Date.now()-1);overdue.close();
+  const snap=await request('/api/character/char-demo/snapshot');assert.equal(snap.state,'IN_CITY');assert.equal(snap.cityId,'harbour-city');assert.equal(snap.activeTravel.status,'ARRIVED');
 });
