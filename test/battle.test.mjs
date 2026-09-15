@@ -255,6 +255,16 @@ test('elite encounter has stronger composition and higher rewards',async()=>{
   const victory=await request('/api/character/char-demo/battle');assert.equal(victory.reward.gold,180);assert.ok(victory.reward.xpRewards.every(x=>x.xp===80));
 });
 
+test('elite boss telegraphs an area attack that can be dodged and resolves only once',async()=>{
+  const close=new DatabaseSync(join(dir,'test.sqlite'));close.prepare(`UPDATE battles SET status='RETREATED' WHERE status='ACTIVE'`).run();close.close();
+  const started=await post('/api/commands/battle/start',envelope('telegraph-start',{encounterId:'bandit-captain'}));assert.equal(started.status,'ACCEPTED');const id=started.data.battleId;
+  let battle=await request('/api/character/char-demo/battle');assert.equal(battle.enemyCasts.length,1);const cast=battle.enemyCasts[0];assert.equal(cast.skillId,'ground-smash');assert.equal(cast.radius,1);assert.equal(cast.damage,28);assert.ok(cast.remainingMs>0&&cast.remainingMs<=2500);
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),heroBefore=battle.units.find(x=>x.id==='hero').hp,guardBefore=battle.units.find(x=>x.id==='guard').hp,now=Date.now();fixture.prepare(`UPDATE battle_units SET row_no=4,col_no=10,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE battle_id=? AND id='hero'`).run(id);fixture.prepare(`UPDATE battle_units SET target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE battle_id=? AND side='ENEMY'`).run(now+60000,id);fixture.prepare(`UPDATE battle_enemy_casts SET resolve_at=? WHERE battle_id=? AND id=?`).run(now-1,id,cast.id);fixture.prepare(`UPDATE battles SET updated_at=? WHERE id=?`).run(now,id);fixture.close();
+  battle=await request('/api/character/char-demo/battle');assert.equal(battle.enemyCasts.length,0);assert.equal(battle.units.find(x=>x.id==='hero').hp,heroBefore);assert.equal(battle.units.find(x=>x.id==='guard').hp,guardBefore-28);
+  const after=battle.units.find(x=>x.id==='guard').hp;battle=await request('/api/character/char-demo/battle');assert.equal(battle.units.find(x=>x.id==='guard').hp,after);
+  const retreated=await post('/api/commands/battle/retreat',envelope('telegraph-retreat',{}));assert.equal(retreated.status,'ACCEPTED');
+});
+
 test('custom deployment is validated and only survivors earn experience',async()=>{
   const empty=await post('/api/commands/battle/start',envelope('empty-team',{encounterId:'bandit-patrol',unitIds:[]}));assert.equal(empty.errorCode,'ERR_TEAM_REQUIRED');
   const invalid=await post('/api/commands/battle/start',envelope('fake-team',{encounterId:'bandit-patrol',unitIds:['fake-unit']}));assert.equal(invalid.errorCode,'ERR_INVALID_TEAM');
