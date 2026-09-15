@@ -237,10 +237,11 @@ test('victory grants one persistent gold reward and transaction',async()=>{
   fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(Date.now());
   fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE side='ENEMY'`).run();fixture.close();
   const victory=await request('/api/character/char-demo/battle');assert.equal(victory.status,'VICTORY');assert.equal(victory.reward.gold,100);
-  await request('/api/character/char-demo/battle');
+  await request('/api/character/char-demo/battle');assert.equal(victory.reward.loot.name,'山賊護符');
   const check=new DatabaseSync(join(dir,'test.sqlite'));
   assert.equal(check.prepare(`SELECT wallet FROM characters WHERE id='char-demo'`).get().wallet,before+100);
   assert.equal(check.prepare(`SELECT COUNT(*) count FROM battle_rewards WHERE battle_id=?`).get(victory.id).count,1);
+  assert.equal(check.prepare(`SELECT COUNT(*) count FROM equipment_inventory WHERE id=?`).get(`loot:${victory.id}`).count,1);
   const tx=check.prepare(`SELECT kind,gold_delta FROM economy_tx WHERE id=?`).get(`battle-reward:${victory.id}`);check.close();
   assert.equal(tx.kind,'BATTLE_REWARD');assert.equal(tx.gold_delta,100);
   assert.equal(victory.reward.xpRewards.length,3);assert.ok(victory.reward.xpRewards.every(x=>x.xp===50&&x.level===1&&x.totalXp===50));
@@ -267,6 +268,14 @@ test('elite encounter has stronger composition and higher rewards',async()=>{
   const active=await request('/api/character/char-demo/battle');assert.equal(active.encounter.id,'bandit-captain');assert.equal(active.units.filter(x=>x.side==='ENEMY').length,4);assert.equal(active.units.find(x=>x.id==='captain').maxHp,120);
   const defeated=new DatabaseSync(join(dir,'test.sqlite'));defeated.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(active.id);defeated.close();
   const victory=await request('/api/character/char-demo/battle');assert.equal(victory.reward.gold,180);assert.ok(victory.reward.xpRewards.every(x=>x.xp===80));
+});
+
+test('loot can be equipped and its bonus is applied to the next battle',async()=>{
+  const items=await request('/api/character/char-demo/equipment'),blade=items.find(x=>x.itemId==='captain-blade');assert.ok(blade);assert.equal(blade.attackBonus,5);
+  const body=envelope('equip-captain-blade',{itemId:blade.id,unitId:'hero'}),first=await post('/api/commands/equipment/equip',body),retry=await post('/api/commands/equipment/equip',body);assert.deepEqual(retry,first);assert.equal(first.status,'ACCEPTED');
+  const roster=await request('/api/character/char-demo/roster'),hero=roster.find(x=>x.id==='hero');assert.equal(hero.equipmentBonuses.attack,5);
+  const started=await post('/api/commands/battle/start',envelope('equipped-stats',{}));assert.equal(started.status,'ACCEPTED');const battle=await request('/api/character/char-demo/battle');assert.equal(battle.units.find(x=>x.id==='hero').attack,hero.attack);
+  const retreated=await post('/api/commands/battle/retreat',envelope('equipped-retreat',{}));assert.equal(retreated.status,'ACCEPTED');
 });
 
 test('elite boss telegraphs an area attack that can be dodged and resolves only once',async()=>{
