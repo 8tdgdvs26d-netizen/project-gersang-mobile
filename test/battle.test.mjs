@@ -160,6 +160,13 @@ test('heavy strike rejects out-of-range targets without damage',async()=>{
   const check=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(check.prepare(`SELECT hp FROM battle_units WHERE id='bandit-c'`).get().hp,55);check.close();
 });
 
+test('thunder rune requires a valid drawn rune and applies one server-authoritative hit',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,target_id=NULL,dest_row=NULL,dest_col=NULL WHERE id='hero'`).run();fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=16,hp=55,alive=1,last_attack_at=? WHERE id='bandit-c'`).run(now+60000);fixture.prepare(`DELETE FROM battle_skill_cooldowns WHERE unit_id='hero' AND skill_id='thunder-rune'`).run();fixture.close();
+  const missing=await post('/api/commands/battle/skill',envelope('rune-missing',{unitId:'hero',skillId:'thunder-rune',targetId:'bandit-c'}));assert.equal(missing.errorCode,'ERR_INVALID_RUNE');let check=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(check.prepare(`SELECT hp FROM battle_units WHERE id='bandit-c'`).get().hp,55);check.close();
+  const body=envelope('rune-valid',{unitId:'hero',skillId:'thunder-rune',targetId:'bandit-c',rune:'Z'}),first=await post('/api/commands/battle/skill',body),retry=await post('/api/commands/battle/skill',body);assert.deepEqual(retry,first);assert.equal(first.status,'ACCEPTED');assert.equal(first.data.damage,45);assert.equal(first.data.targetHp,10);
+  const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero');assert.ok(hero.skills.find(x=>x.id==='thunder-rune').readyInMs>0);
+});
+
 test('archer has an independent ranged skill and cooldown',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
   fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
