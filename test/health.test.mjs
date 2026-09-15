@@ -20,6 +20,6 @@ test('health endpoint reports ok, version, and phase',async()=>{
   assert.equal(res.status,200);
   const body=await res.json();
   assert.equal(body.ok,true);
-  assert.equal(body.version,'0.31.0');
-  assert.equal(body.phase,'P2 Multi-city Warehouse Overview');
+  assert.equal(body.version,'0.32.0');
+  assert.equal(body.phase,'P3 World Map & City Hub Vertical Slice');
 });
