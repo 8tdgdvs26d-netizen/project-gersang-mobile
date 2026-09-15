@@ -232,19 +232,23 @@ test('heavy strike removes a defeated target immediately',async()=>{
   const battle=await request('/api/character/char-demo/battle');assert.equal(battle.units.find(x=>x.id==='bandit-c').alive,false);
 });
 
-test('victory grants one persistent gold reward and transaction',async()=>{
+test('victory grants gold once and requires an idempotent loot settlement before battle or travel',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite')),before=fixture.prepare(`SELECT wallet FROM characters WHERE id='char-demo'`).get().wallet;
   fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(Date.now());
   fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE side='ENEMY'`).run();fixture.close();
-  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.status,'VICTORY');assert.equal(victory.reward.gold,100);
-  await request('/api/character/char-demo/battle');assert.equal(victory.reward.loot.name,'山賊護符');
+  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.status,'VICTORY');assert.equal(victory.reward.gold,100);assert.equal(victory.reward.settlementRequired,true);
+  await request('/api/character/char-demo/battle');assert.equal(victory.reward.loot.name,'山賊護符');assert.equal(victory.reward.loot.status,'PENDING');
   const check=new DatabaseSync(join(dir,'test.sqlite'));
   assert.equal(check.prepare(`SELECT wallet FROM characters WHERE id='char-demo'`).get().wallet,before+100);
   assert.equal(check.prepare(`SELECT COUNT(*) count FROM battle_rewards WHERE battle_id=?`).get(victory.id).count,1);
-  assert.equal(check.prepare(`SELECT COUNT(*) count FROM equipment_inventory WHERE id=?`).get(`loot:${victory.id}`).count,1);
+  assert.equal(check.prepare(`SELECT COUNT(*) count FROM equipment_inventory WHERE id=?`).get(`loot:${victory.id}`).count,0);
   const tx=check.prepare(`SELECT kind,gold_delta FROM economy_tx WHERE id=?`).get(`battle-reward:${victory.id}`);check.close();
   assert.equal(tx.kind,'BATTLE_REWARD');assert.equal(tx.gold_delta,100);
   assert.equal(victory.reward.xpRewards.length,3);assert.ok(victory.reward.xpRewards.every(x=>x.xp===50&&x.level===1&&x.totalXp===50));
+  const blockedBattle=await post('/api/commands/battle/start',envelope('blocked-before-settlement',{}));assert.equal(blockedBattle.errorCode,'ERR_BATTLE_SETTLEMENT_REQUIRED');
+  const blockedTravel=await post('/api/commands/travel/start',envelope('blocked-travel-before-settlement',{destinationCityId:'harbour-city'}));assert.equal(blockedTravel.errorCode,'ERR_BATTLE_SETTLEMENT_REQUIRED');
+  const body=envelope('keep-first-loot',{battleId:victory.id,decision:'KEEP'}),kept=await post('/api/commands/battle/settle-loot',body),retry=await post('/api/commands/battle/settle-loot',body);assert.deepEqual(retry,kept);assert.equal(kept.status,'ACCEPTED');
+  const settled=await request('/api/character/char-demo/battle');assert.equal(settled.reward.settlementRequired,false);assert.equal(settled.reward.loot.status,'KEEP');const keptCheck=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(keptCheck.prepare(`SELECT COUNT(*) count FROM equipment_inventory WHERE id=?`).get(`loot:${victory.id}`).count,1);keptCheck.close();
 });
 
 test('a second victory accumulates experience and levels survivors',async()=>{
@@ -252,6 +256,7 @@ test('a second victory accumulates experience and levels survivors',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(started.data.battleId);fixture.close();
   const victory=await request('/api/character/char-demo/battle');assert.equal(victory.status,'VICTORY');
   assert.equal(victory.reward.xpRewards.length,3);assert.ok(victory.reward.xpRewards.every(x=>x.level===2&&x.totalXp===100));
+  const discarded=await post('/api/commands/battle/settle-loot',envelope('discard-second-loot',{battleId:victory.id,decision:'DISCARD'}));assert.equal(discarded.status,'ACCEPTED');const check=new DatabaseSync(join(dir,'test.sqlite'));assert.equal(check.prepare(`SELECT COUNT(*) count FROM equipment_inventory WHERE id=?`).get(`loot:${victory.id}`).count,0);check.close();
 });
 
 test('new battles apply each role level growth to hp and attack',async()=>{
@@ -267,7 +272,7 @@ test('elite encounter has stronger composition and higher rewards',async()=>{
   const started=await post('/api/commands/battle/start',envelope('elite-encounter',{encounterId:'bandit-captain'}));assert.equal(started.status,'ACCEPTED');
   const active=await request('/api/character/char-demo/battle');assert.equal(active.encounter.id,'bandit-captain');assert.equal(active.units.filter(x=>x.side==='ENEMY').length,4);assert.equal(active.units.find(x=>x.id==='captain').maxHp,120);
   const defeated=new DatabaseSync(join(dir,'test.sqlite'));defeated.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(active.id);defeated.close();
-  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.reward.gold,180);assert.ok(victory.reward.xpRewards.every(x=>x.xp===80));
+  const victory=await request('/api/character/char-demo/battle');assert.equal(victory.reward.gold,180);assert.ok(victory.reward.xpRewards.every(x=>x.xp===80));const kept=await post('/api/commands/battle/settle-loot',envelope('keep-elite-loot',{battleId:victory.id,decision:'KEEP'}));assert.equal(kept.status,'ACCEPTED');
 });
 
 test('loot can be equipped and its bonus is applied to the next battle',async()=>{
@@ -298,7 +303,7 @@ test('custom deployment is validated and only survivors earn experience',async()
   const started=await post('/api/commands/battle/start',envelope('two-unit-team',{encounterId:'bandit-patrol',unitIds:['hero','archer']}));assert.equal(started.status,'ACCEPTED');
   const active=await request('/api/character/char-demo/battle');assert.deepEqual(active.units.filter(x=>x.side==='PLAYER').map(x=>x.id).sort(),['archer','hero']);
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND side='ENEMY'`).run(active.id);fixture.prepare(`UPDATE battle_units SET hp=0,alive=0 WHERE battle_id=? AND id='archer'`).run(active.id);fixture.close();
-  const victory=await request('/api/character/char-demo/battle');assert.deepEqual(victory.reward.xpRewards.map(x=>x.unitId),['hero']);
+  const victory=await request('/api/character/char-demo/battle');assert.deepEqual(victory.reward.xpRewards.map(x=>x.unitId),['hero']);const discarded=await post('/api/commands/battle/settle-loot',envelope('discard-survivor-loot',{battleId:victory.id,decision:'DISCARD'}));assert.equal(discarded.status,'ACCEPTED');
 });
 
 test('opponents stop at attack range instead of chasing through each other',async()=>{
