@@ -440,3 +440,9 @@ test('travel blocks challenges and snapshot automatically completes an overdue j
   const overdue=new DatabaseSync(join(dir,'test.sqlite'));overdue.prepare(`UPDATE travel SET eta=? WHERE character_id='char-demo'`).run(Date.now()-1);overdue.close();
   const snap=await request('/api/character/char-demo/snapshot');assert.equal(snap.state,'IN_CITY');assert.equal(snap.cityId,'harbour-city');assert.equal(snap.activeTravel.status,'ARRIVED');
 });
+
+test('warehouse overview returns every city while remote stock remains read-only',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`INSERT INTO storage VALUES('char-demo','starter-village','rice',3) ON CONFLICT(character_id,city_id,good_id) DO UPDATE SET quantity=3`).run();fixture.prepare(`INSERT INTO storage VALUES('char-demo','hill-market','tea',2) ON CONFLICT(character_id,city_id,good_id) DO UPDATE SET quantity=2`).run();fixture.close();
+  const overview=await request('/api/character/char-demo/storage');assert.deepEqual(overview.map(x=>x.cityId),['starter-village','harbour-city','hill-market']);assert.equal(overview.find(x=>x.cityId==='starter-village').goods.find(x=>x.goodTypeId==='rice').quantity,3);assert.equal(overview.find(x=>x.cityId==='hill-market').goods.find(x=>x.goodTypeId==='tea').quantity,2);
+  const remote=await post('/api/commands/container/move',envelope('remote-storage-blocked',{direction:'STORAGE_TO_CARGO',cityId:'starter-village',goodTypeId:'rice',quantity:1}));assert.equal(remote.errorCode,'ERR_PHYSICAL_PRESENCE_REQUIRED');
+});

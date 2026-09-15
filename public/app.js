@@ -1,4 +1,4 @@
-const S={sessionId:'',snap:null,cities:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'market',modal:null};
+const S={sessionId:'',snap:null,cities:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],storages:{},tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'market',modal:null};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
 const post=(p,b)=>req(p,{method:'POST',body:JSON.stringify(b)});
 const env=(payload,idempotencyKey=crypto.randomUUID())=>({commandId:crypto.randomUUID(),idempotencyKey,sessionId:S.sessionId,characterId:'char-demo',clientSentAt:new Date().toISOString(),payload});
@@ -12,8 +12,8 @@ function ensureDeployment(){const team=S.deploymentUnitIds||[],used=new Set();fo
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),1500)}
 async function refresh(){
   S.snap=await req('/api/character/char-demo/snapshot');
-  const [market,storage,tx,battle,roster,equipment]=await Promise.all([req(`/api/cities/${S.snap.cityId}/market`),req(`/api/character/char-demo/storage/${S.snap.cityId}`),req('/api/character/char-demo/transactions'),req('/api/character/char-demo/battle'),req('/api/character/char-demo/roster'),req('/api/character/char-demo/equipment')]);
-  S.market=market;S.storage=storage;S.tx=tx;S.roster=roster;S.equipment=equipment;if(S.deploymentUnitIds===null)S.deploymentUnitIds=roster.map(x=>x.id);ensureDeployment();setBattle(battle);if(battle?.status==='ACTIVE'||battle?.reward?.settlementRequired)S.tab='battle';
+  const [market,storageList,tx,battle,roster,equipment]=await Promise.all([req(`/api/cities/${S.snap.cityId}/market`),req('/api/character/char-demo/storage'),req('/api/character/char-demo/transactions'),req('/api/character/char-demo/battle'),req('/api/character/char-demo/roster'),req('/api/character/char-demo/equipment')]);
+  S.market=market;S.storages=Object.fromEntries(storageList.map(x=>[x.cityId,x.goods]));S.storage=S.storages[S.snap.cityId]||[];S.tx=tx;S.roster=roster;S.equipment=equipment;if(S.deploymentUnitIds===null)S.deploymentUnitIds=roster.map(x=>x.id);ensureDeployment();setBattle(battle);if(battle?.status==='ACTIVE'||battle?.reward?.settlementRequired)S.tab='battle';
   render();
 }
 function setBattle(next){
@@ -28,7 +28,7 @@ function render(){
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
   const combatLocked=S.tab==='battle'&&(S.battle?.status==='ACTIVE'||S.battle?.reward?.settlementRequired);
   const tabs=combatLocked?'':`<div class="tabs">${nav('market','市場')}${nav('cargo','貨艙')}${nav('storage','倉庫')}${nav('travel','旅行')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
-  document.querySelector('#app').innerHTML=`<div class="shell ${combatLocked?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.29.1</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell ${combatLocked?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.30.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -45,9 +45,8 @@ function view(){
     return `<section class="card"><b>貨艙與角色背包</b><div class="metric"><div><span class="small">貨艙已用</span><b>${S.snap.cargo.usedUnits}</b></div><div><span class="small">貨艙容量</span><b>${S.snap.cargo.capacityUnits}</b></div></div><div class="cargo-goods">${goods}</div><div class="backpack-section"><div class="equipment-head"><b>裝備背包</b><small>每名角色獨立持有及裝備</small></div>${backpacks}</div></section>`;
   }
   if(S.tab==='storage'){
-    const goods=S.storage.map(x=>`<div class="row"><div>${x.goodTypeId} × ${x.quantity}</div><span></span><button class="btn" data-withdraw="${x.goodTypeId}">拎1</button></div>`).join('')||"<p class='small'>冇存放貨物。</p>";
-    const gear=S.equipment.filter(item=>item.storageCityId===S.snap.cityId).map(item=>`<div class="storage-equipment"><div><b>${item.slot==='WEAPON'?'🗡️':'🔸'} ${item.name}</b><small>${item.attackBonus?`攻擊 +${item.attackBonus}`:`HP +${item.hpBonus}`}</small></div><div class="asset-actions">${S.roster.map(unit=>`<button data-withdraw-equipment="${item.id}" data-withdraw-unit="${unit.id}">→ ${unit.name}背包</button>`).join('')}</div></div>`).join('')||'<p class="small">冇存放裝備。</p>';
-    return `<section class="card"><b>${cityName(S.snap.cityId)} 倉庫</b><div class="storage-group"><b>貨物</b>${goods}</div><div class="storage-group"><b>裝備</b>${gear}</div></section>`;
+    const cities=S.cities.map(city=>{const local=S.snap.state==='IN_CITY'&&city.id===S.snap.cityId,goods=(S.storages[city.id]||[]).map(x=>`<div class="row"><div>${x.goodTypeId} × ${x.quantity}</div><span></span><button class="btn ${local?'':'alt'}" ${local?`data-withdraw="${x.goodTypeId}"`:'disabled'}>${local?'拎1':'需到達'}</button></div>`).join('')||"<p class='small'>冇存放貨物。</p>",gear=S.equipment.filter(item=>item.storageCityId===city.id).map(item=>`<div class="storage-equipment"><div><b>${item.slot==='WEAPON'?'🗡️':'🔸'} ${item.name}</b><small>${item.attackBonus?`攻擊 +${item.attackBonus}`:`HP +${item.hpBonus}`}</small></div><div class="asset-actions">${local?S.roster.map(unit=>`<button data-withdraw-equipment="${item.id}" data-withdraw-unit="${unit.id}">→ ${unit.name}背包</button>`).join(''):'<button disabled>需親身到達</button>'}</div></div>`).join('')||'<p class="small">冇存放裝備。</p>';return `<article class="city-storage ${local?'current':'remote'}"><div class="city-storage-head"><div><b>${cityName(city.id)} 倉庫</b><small>${local?'📍 目前所在城市 · 可以提取':'🔒 遠端查看 · 不可提取或交易'}</small></div><span>${local?'當前':'只讀'}</span></div><div class="storage-group"><b>貨物</b>${goods}</div><div class="storage-group"><b>裝備</b>${gear}</div></article>`}).join('');
+    return `<section class="card"><b>全城市倉庫</b><p class="small">可以查看各地資產；必須親身到達該城市先可提取或交易。</p><div class="city-storage-list">${cities}</div></section>`;
   }
   if(S.tab==='travel'){
     const t=S.snap.activeTravel;

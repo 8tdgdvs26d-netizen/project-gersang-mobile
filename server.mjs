@@ -99,6 +99,7 @@ function marketRow(city,good){return db.prepare(`SELECT * FROM market WHERE city
 function market(city){return db.prepare(`SELECT * FROM market WHERE city_id=? ORDER BY good_id`).all(city).map(m=>({cityId:m.city_id,goodTypeId:m.good_id,stock:m.stock,referencePrice:m.ref_price,baseSpread:m.spread,version:m.version,buyPrice:m.ref_price+m.spread,sellPrice:Math.max(1,m.ref_price-m.spread)}))}
 function cargoQty(g){return db.prepare(`SELECT quantity FROM cargo WHERE character_id='char-demo' AND good_id=?`).get(g)?.quantity??0}
 function storage(city){return db.prepare(`SELECT good_id,quantity FROM storage WHERE character_id='char-demo' AND city_id=? AND quantity>0 ORDER BY good_id`).all(city).map(x=>({goodTypeId:x.good_id,quantity:x.quantity}))}
+function allStorage(){return cities.map(city=>({cityId:city.id,goods:storage(city.id)}))}
 function transactions(){return db.prepare(`SELECT * FROM economy_tx WHERE character_id='char-demo' ORDER BY created_at DESC LIMIT 50`).all().map(t=>({id:t.id,kind:t.kind,goldDelta:t.gold_delta,cityId:t.city_id,goodTypeId:t.good_id,quantity:t.quantity,createdAt:new Date(t.created_at).toISOString()}))}
 const battleRows=id=>db.prepare(`SELECT * FROM battle_units WHERE battle_id=? ORDER BY side DESC,id`).all(id);
 const battleDistance=(a,b)=>Math.max(Math.abs(a.row_no-b.row_no),Math.abs(a.col_no-b.col_no));
@@ -282,13 +283,14 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.29.1',phase:'P2 Travel and Skill Order Fixes'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.30.0',phase:'P2 Multi-city Warehouse Overview'});
   if(req.method==='GET'&&u.pathname==='/api/battle/encounters')return reply(res,200,encounterSummaries());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/roster')return reply(res,200,rosterSnapshot());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/equipment')return reply(res,200,equipmentSnapshot());
   if(req.method==='GET'&&u.pathname==='/api/cities')return reply(res,200,cities);
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/snapshot')return reply(res,200,snapshot());
   if(req.method==='GET'&&u.pathname.startsWith('/api/cities/')&&u.pathname.endsWith('/market'))return reply(res,200,market(u.pathname.split('/')[3]));
+  if(req.method==='GET'&&u.pathname==='/api/character/char-demo/storage')return reply(res,200,allStorage());
   if(req.method==='GET'&&u.pathname.startsWith('/api/character/char-demo/storage/'))return reply(res,200,storage(u.pathname.split('/').at(-1)));
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/transactions')return reply(res,200,transactions());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/battle')return reply(res,200,battleSnapshot());
