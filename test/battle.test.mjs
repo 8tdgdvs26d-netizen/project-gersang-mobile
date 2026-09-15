@@ -167,6 +167,12 @@ test('thunder rune requires a valid drawn rune and applies one server-authoritat
   const battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero');assert.ok(hero.skills.find(x=>x.id==='thunder-rune').readyInMs>0);
 });
 
+test('ultimate rune pauses the whole battle, hits every enemy, and resumes safely',async()=>{
+  const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=10,hp=max_hp,alive=1,target_id=NULL,dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE side='PLAYER'`).run(now);fixture.prepare(`UPDATE battle_units SET row_no=2,col_no=12,hp=65,max_hp=65,alive=1,target_id='hero',dest_row=NULL,dest_col=NULL,last_attack_at=? WHERE side='ENEMY'`).run(now+60000);fixture.prepare(`DELETE FROM battle_skill_cooldowns WHERE unit_id='hero' AND skill_id='heaven-rune'`).run();fixture.close();
+  const pauseBody=envelope('ultimate-pause',{unitId:'hero',action:'BEGIN'}),paused=await post('/api/commands/battle/global-pause',pauseBody),pauseRetry=await post('/api/commands/battle/global-pause',pauseBody);assert.deepEqual(pauseRetry,paused);assert.equal(paused.status,'ACCEPTED');const elapsed=new DatabaseSync(join(dir,'test.sqlite'));elapsed.prepare(`UPDATE battles SET updated_at=?`).run(Date.now()-900);elapsed.prepare(`UPDATE battle_units SET last_attack_at=0 WHERE side='ENEMY'`).run();elapsed.close();let battle=await request('/api/character/char-demo/battle'),hero=battle.units.find(x=>x.id==='hero');assert.ok(battle.globalPause?.remainingMs>0);assert.equal(hero.hp,hero.maxHp);
+  const cast=await post('/api/commands/battle/skill',envelope('ultimate-cast',{unitId:'hero',skillId:'heaven-rune',targetId:'hero',rune:'O'}));assert.equal(cast.status,'ACCEPTED');assert.equal(cast.data.hits.length,3);assert.equal(cast.data.damage,105);battle=await request('/api/character/char-demo/battle');assert.equal(battle.globalPause,null);assert.ok(battle.units.filter(x=>x.side==='ENEMY').every(x=>x.hp===30));assert.ok(battle.units.find(x=>x.id==='hero').skills.find(x=>x.id==='heaven-rune').readyInMs>0);
+});
+
 test('archer has an independent ranged skill and cooldown',async()=>{
   const fixture=new DatabaseSync(join(dir,'test.sqlite')),now=Date.now();
   fixture.prepare(`UPDATE battles SET status='ACTIVE',updated_at=?`).run(now);
