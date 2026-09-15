@@ -16,10 +16,11 @@ export function canEnterCityHub(snapshot,targetCityId){
   return snapshot.cityId===targetCityId;
 }
 
-export function cityHubEntries(){
+export function cityHubEntries(facilities){
+  const list=Array.isArray(facilities)?facilities:[];
   return [
-    {id:'market',label:'市場',available:true},
-    {id:'storage',label:'貨倉',available:true},
+    {id:'market',label:'市場',available:list.includes('MARKET')},
+    {id:'storage',label:'貨倉',available:list.includes('STORAGE')},
     {id:'bank',label:'銀行',available:false},
     {id:'mercenary',label:'傭兵店',available:false},
     {id:'equipment',label:'裝備店',available:false},
@@ -100,6 +101,23 @@ function travelStatusHtml(state){
   return '';
 }
 
+function roadKey(fromCityId,toCityId){return [fromCityId,toCityId].sort().join('|')}
+
+function roadsSvg(cities,roads){
+  const citiesById=indexById(cities);
+  const seen=new Set();
+  const lines=[];
+  for(const road of roads||[]){
+    const from=citiesById[road.fromCityId],to=citiesById[road.toCityId];
+    if(!from?.coordinates||!to?.coordinates)continue;
+    const key=roadKey(road.fromCityId,road.toCityId);
+    if(seen.has(key))continue;
+    seen.add(key);
+    lines.push(`<line class="map-road" x1="${from.coordinates.x}" y1="${from.coordinates.y}" x2="${to.coordinates.x}" y2="${to.coordinates.y}"></line>`);
+  }
+  return lines.join('');
+}
+
 export function renderWorldMapHtml(state){
   const citiesById=indexById(state.cities);
   const roadsById=indexById(state.roads||[]);
@@ -107,14 +125,15 @@ export function renderWorldMapHtml(state){
     ?computeTravelPosition(state.snap.activeTravel.segments,citiesById,roadsById,state.snap.activeTravel.startedAt,Date.now())
     :citiesById[state.snap.cityId]?.coordinates;
   const zones=REGION_META.map(r=>`<g class="map-region ${r.open?'':'region-locked'}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"></rect><text class="map-region-label" x="${r.x+r.w/2}" y="${r.y+30}">${r.name}</text></g>`).join('');
+  const roads=roadsSvg(state.cities,state.roads);
   const nodes=state.cities.map(c=>`<g class="map-city" data-city="${c.id}"><circle cx="${c.coordinates.x}" cy="${c.coordinates.y}" r="26"></circle><text x="${c.coordinates.x}" y="${c.coordinates.y+44}">${c.name}</text></g>`).join('');
   const hero=heroPosition?`<circle class="hero-marker" cx="${heroPosition.x}" cy="${heroPosition.y}" r="14"></circle>`:'';
-  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet">${zones}${nodes}${hero}</svg></div>${travelStatusHtml(state)}</section>`;
+  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet">${zones}${roads}${nodes}${hero}</svg></div>${travelStatusHtml(state)}</section>`;
 }
 
 export function renderCityHubHtml(state){
   const city=state.cities.find(c=>c.id===state.snap.cityId);
-  const tiles=cityHubEntries().map(e=>{
+  const tiles=cityHubEntries(city?.facilities).map(e=>{
     if(e.action==='leave')return `<button class="hub-tile hub-leave" data-hub-leave="1">🚪 ${e.label}</button>`;
     if(!e.available)return `<button class="hub-tile hub-disabled" disabled>${e.label}<small>尚未開放</small></button>`;
     return `<button class="hub-tile" data-hub-enter="${e.id}">${e.label}</button>`;

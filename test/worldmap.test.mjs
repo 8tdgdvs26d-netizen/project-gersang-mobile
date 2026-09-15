@@ -12,7 +12,8 @@ import {
   handleCityTap,
   computeTravelPosition,
   indexById,
-  regionMeta
+  regionMeta,
+  renderWorldMapHtml
 } from '../public/worldmap.js';
 
 let child,base,dir,sessionId;
@@ -116,12 +117,54 @@ test('computeTravelPosition reproduces the same position for a later "now" witho
   assert.deepEqual(reloadedAtT1500,{x:100,y:50});
 });
 
-test('cityHubEntries returns exactly 2 available, 4 unavailable, and 1 leave entry',()=>{
-  const entries=cityHubEntries();
+test('cityHubEntries returns exactly 2 available, 4 unavailable, and 1 leave entry',async()=>{
+  const cities=await request('/api/cities');
+  const city=cities.find(c=>c.id==='starter-village');
+  const entries=cityHubEntries(city?.facilities);
   assert.equal(entries.length,7);
   assert.equal(entries.filter(e=>e.available&&e.action!=='leave').length,2);
   assert.equal(entries.filter(e=>!e.available).length,4);
   assert.equal(entries.filter(e=>e.action==='leave').length,1);
+});
+
+test("cityHubEntries derives available services from the selected city's facilities metadata",()=>{
+  const marketOnly=['MARKET'];
+  const marketOnlyEntries=cityHubEntries(marketOnly);
+  assert.equal(marketOnlyEntries.find(e=>e.id==='market').available,true);
+  assert.equal(marketOnlyEntries.find(e=>e.id==='storage').available,false);
+  assert.deepEqual(marketOnly,['MARKET']);
+
+  const emptyEntries=cityHubEntries([]);
+  assert.equal(emptyEntries.find(e=>e.id==='market').available,false);
+  assert.equal(emptyEntries.find(e=>e.id==='storage').available,false);
+
+  const missingEntries=cityHubEntries(undefined);
+  assert.equal(missingEntries.find(e=>e.id==='market').available,false);
+  assert.equal(missingEntries.find(e=>e.id==='storage').available,false);
+
+  for(const entries of [marketOnlyEntries,emptyEntries,missingEntries]){
+    assert.equal(entries.find(e=>e.action==='leave').available,true);
+  }
+});
+
+test('renderWorldMapHtml renders each bidirectional road once and places roads below city nodes',()=>{
+  const cities=[
+    {id:'a',name:'A',coordinates:{x:0,y:0}},
+    {id:'b',name:'B',coordinates:{x:100,y:0}}
+  ];
+  const roads=[
+    {id:'ab',fromCityId:'a',toCityId:'b',durationMs:1000},
+    {id:'ba',fromCityId:'b',toCityId:'a',durationMs:1000},
+    {id:'missing',fromCityId:'a',toCityId:'ghost-city',durationMs:1000}
+  ];
+  const snap={state:'IN_CITY',cityId:'a'};
+  const html=renderWorldMapHtml({snap,cities,roads});
+  const roadMatches=html.match(/class="map-road"/g)||[];
+  assert.equal(roadMatches.length,1);
+  const firstRoadIndex=html.indexOf('class="map-road"');
+  const firstCityNodeIndex=html.indexOf('class="map-city"');
+  assert.ok(firstRoadIndex>=0&&firstCityNodeIndex>=0);
+  assert.ok(firstRoadIndex<firstCityNodeIndex);
 });
 
 test('selecting a map city calls the existing travel/start command',()=>{
