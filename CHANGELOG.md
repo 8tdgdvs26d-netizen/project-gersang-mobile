@@ -9,7 +9,7 @@
 - 存檔影響：無（此為Claude接手前唯一可還原嘅V30程式基準）
 - Rollback基準：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`
 
-## V31 — Development Safety Foundation
+## V31 — 2026-09-15 — Development Safety Foundation
 
 - 分類：開發安全基建（Development Safety Infrastructure）
 - 起點：`main` @ `879c1022c647efc8c6aeaf6d04b2961d8d841525`

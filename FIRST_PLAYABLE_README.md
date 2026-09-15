@@ -110,8 +110,8 @@ The package version advanced to `0.30.0` through further P1/P2 work beyond
   RECONFIRM_REQUIRED command lets a corrected payload reuse the same key.
 
 This summary only restates behavior already covered by existing code and
-the current 43 (soon 44, see `CHANGELOG.md`) automated tests below — it does
-not add, promise, or imply any new gameplay feature.
+the current 44 automated tests below — it does not add, promise, or imply
+any new gameplay feature.
 
 ## v0.31.0 — Development Safety Foundation
 
