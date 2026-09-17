@@ -7,7 +7,7 @@
 1. **本檔（CLAUDE.md）** — 每次任務必須遵守。
 2. **《萬行誌：白手 — Canonical v0.5（唯一現行標準）》**（Google Drive）— 目前唯一現行設計標準。涉及遊戲設計、核心循環、世界、城市、戰鬥、經濟、成長或任何系統行為嘅任務，必須讀取此文件相關章節。已定案內容不可因舊資料不同而自行重開。
 3. **`Gersang_V30_Claude_Handoff_2026-09-15.md`**（Google Drive）— 新接手、context遺失，或需要確認程式基準（HEAD SHA、checkpoint分支、版本號）時可讀取，作工程基準參考。
-4. **`Gersang_Mobile_Handoff_Pack_v0.4.md`** 及 **`Gersang_Mobile_Core_Architecture_v0.4_800_Questions.xlsx`**（Google Drive）— 已被Canonical v0.5取代，**只作歷史證據及審核來源，不再是日常canonical**。不可用呢啲舊文件推翻Canonical v0.5嘅內容；只喺需要追溯舊決定原因、或Canonical v0.5未有涵蓋嘅細節時作參考。
+4. **`Gersang_Mobile_Handoff_Pack_v0.4.md`** 及 **`Gersang_Mobile_Core_Architecture_v0.4_800_Questions.xlsx`**（Google Drive）— 已被Canonical v0.5取代，**只可作歷史證據、背景追溯或審核來源，不再是日常canonical**。不可用呢啲舊文件推翻Canonical v0.5嘅內容；**如果Canonical v0.5未有涵蓋某項細節，不得由呢啲舊文件自行補位**——該細節必須喺報告／計劃入面明確標示為「待確認」，如要升格成現行要求，必須先取得Charlie明確批准。
 5. **現行GitHub程式及測試** — 用來確認目前已實作行為。不可用現有程式自行推翻canonical設計。
 
 如果任務所需嘅必要文件或相關內容無法存取，而且缺少資料會影響正確判斷，**必須停止並要求用戶提供**；不可憑記憶或猜測繼續。但不相關嘅800 Questions內容無需每次載入。
