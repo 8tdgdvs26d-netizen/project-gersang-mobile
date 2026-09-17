@@ -118,12 +118,15 @@ function roadsSvg(cities,roads){
   return lines.join('');
 }
 
+export function resolveWorldPosition(snap,citiesById,roadsById,now){
+  if(snap.state==='TRAVELING'&&snap.activeTravel?.segments)return computeTravelPosition(snap.activeTravel.segments,citiesById,roadsById,snap.activeTravel.startedAt,now);
+  return snap.worldPosition??citiesById[snap.cityId]?.coordinates;
+}
+
 export function renderWorldMapHtml(state){
   const citiesById=indexById(state.cities);
   const roadsById=indexById(state.roads||[]);
-  const heroPosition=state.snap.state==='TRAVELING'&&state.snap.activeTravel?.segments
-    ?computeTravelPosition(state.snap.activeTravel.segments,citiesById,roadsById,state.snap.activeTravel.startedAt,Date.now())
-    :citiesById[state.snap.cityId]?.coordinates;
+  const heroPosition=resolveWorldPosition(state.snap,citiesById,roadsById,Date.now());
   const zones=REGION_META.map(r=>`<g class="map-region ${r.open?'':'region-locked'}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"></rect><text class="map-region-label" x="${r.x+r.w/2}" y="${r.y+30}">${r.name}</text></g>`).join('');
   const roads=roadsSvg(state.cities,state.roads);
   const nodes=state.cities.map(c=>`<g class="map-city" data-city="${c.id}"><circle cx="${c.coordinates.x}" cy="${c.coordinates.y}" r="26"></circle><text x="${c.coordinates.x}" y="${c.coordinates.y+44}">${c.name}</text></g>`).join('');

@@ -13,7 +13,8 @@ import {
   computeTravelPosition,
   indexById,
   regionMeta,
-  renderWorldMapHtml
+  renderWorldMapHtml,
+  resolveWorldPosition
 } from '../public/worldmap.js';
 
 let child,base,dir,sessionId;
@@ -199,4 +200,24 @@ test("leaving City Hub only changes local screen state, makes no network request
   }finally{
     globalThis.fetch=originalFetch;
   }
+});
+
+test('resolveWorldPosition delegates to computeTravelPosition while TRAVELING with segments',()=>{
+  const citiesById={a:{id:'a',coordinates:{x:0,y:0}},b:{id:'b',coordinates:{x:100,y:0}}};
+  const roadsById={};
+  const segments=[{edgeId:'ab',roadId:'ab',fromCityId:'a',toCityId:'b',durationMs:1000,startOffsetMs:0,endOffsetMs:1000}];
+  const snap={state:'TRAVELING',cityId:'a',worldPosition:{x:9999,y:9999},activeTravel:{segments,startedAt:new Date(0).toISOString()}};
+  assert.deepEqual(resolveWorldPosition(snap,citiesById,roadsById,500),{x:50,y:0});
+});
+
+test("resolveWorldPosition returns the snapshot's persisted worldPosition when not traveling",()=>{
+  const citiesById={a:{id:'a',coordinates:{x:0,y:0}}};
+  const snap={state:'IN_CITY',cityId:'a',worldPosition:{x:42,y:7}};
+  assert.deepEqual(resolveWorldPosition(snap,citiesById,{},Date.now()),{x:42,y:7});
+});
+
+test('resolveWorldPosition falls back to the city\'s coordinates when worldPosition is missing',()=>{
+  const citiesById={a:{id:'a',coordinates:{x:220,y:150}}};
+  const snap={state:'IN_CITY',cityId:'a'};
+  assert.deepEqual(resolveWorldPosition(snap,citiesById,{},Date.now()),{x:220,y:150});
 });
