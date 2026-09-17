@@ -70,3 +70,31 @@
 - 存檔影響：Additive schema變更，舊存檔可直接讀取，冇資料流失或需要手動migration。
 - 已知限制：現有城市（starter-village／harbour-city／hill-market）同Canonical v0.5 §8定義嘅四座城市（啟步城／躍動城／商業城／開拓城）身份唔一致；呢個差距今次冇處理，需要日後獨立批准先處理。
 - Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`；V32基準 `77b77a24fe97488ba8ec3d6f5df731c2cca33c17`。
+
+## P1-02 — 2026-09-17 — 自由世界移動控制 Prototype
+
+- 分類：《萬行誌：白手 — Canonical v0.5》Phase 1 第二個開發任務。
+- 起點：`main` @ `6d49c747bbefa8598c7580d233366154bb0844ea`（即P1-01 merge之後）。
+- 目標：喺P1-01已建立嘅persisted `worldPosition`地基上，加入第一個真正可以自由改變世界座標嘅移動Prototype，證明玩家可以脫離城市節點思維喺世界空間移動。今次係Prototype，Joystick／tap-to-move／drag最終方案未鎖死。
+- State machine（經Charlie批准）：
+  - 新增`IN_WORLD`狀態。第一次移動成功時`IN_CITY`→`IN_WORLD`；`IN_WORLD`可以繼續合法移動；`TRAVELING`期間一律拒絕移動。
+  - 今次唔做`IN_WORLD`→`IN_CITY`嘅正式城市入口邏輯，留待Phase 2「四城實體進出」處理。
+  - 市場、倉庫、City Hub、戰鬥、旅行等現有`state==='IN_CITY'`嘅gate**一個字都冇改**——`IN_WORLD`落嚟自然唔再滿足呢啲gate，行為完全靠現有邏輯自然生效，唔係新增檢查。
+  - 已知限制：玩家一離城後，Prototype暫時冇辦法用返市場／倉庫等城市功能（`ERR_INVALID_CONTEXT`／`ERR_PHYSICAL_PRESENCE_REQUIRED`），呢個係刻意延後嘅中間狀態，非bug。
+- Server-authoritative movement command（經Charlie批准）：
+  - 新增`POST /api/commands/world/move`，payload為Absolute Target Position `{targetX,targetY}`。
+  - Server由自己持久化嘅`world_x/world_y`出發計算實際位移，clamp單次位移（`MAX_WORLD_STEP`=60，標示為「Movement Prototype Parameter」而非Balance Parameter）、再clamp入世界邊界`0..1000`（同`public/worldmap.js`個SVG viewBox一致，單一數據來源），先寫入資料庫並回傳server最終接受嘅真實座標；client唔可以直接決定最終位置。
+  - 加入Prototype級最短command間隔（`MOVEMENT_MIN_INTERVAL_MS`=120ms，記憶體變數，冇新Database table）：太密嘅command會被接受但唔會產生額外位移，防止client狂send request變相加速。
+- 修改：
+  - `server.mjs`：新增`moveWorld(env)`command function同`/api/commands/world/move`路由；只用返P1-01已存在嘅`world_x`/`world_y`欄位，冇新增Database schema。
+  - `public/app.js`：喺World Map嘅SVG加`pointerdown`/`pointermove`/`pointerup`事件（約150ms throttle），將螢幕座標轉做世界座標後call新command；response返嚟後直接patch `.hero-marker`位置（同現有`updateTravelProgress()`手法一致），手勢完結先做完整`render()`同步UI。城市節點嘅原有tap-to-travel行為透過判斷`pointerdown`目標係咪`.map-city`嚟保留，唔受影響。
+  - `public/styles.css`：`.world-map`加`cursor:grab`視覺提示。
+  - `test/world-movement.test.mjs`（新檔）：9個server端regression test，覆蓋合法移動、state轉換、anti-teleport clamp、世界邊界clamp、時間節流、TRAVELING拒絕、離城後城市功能被拒、reload/reconnect一致性、無效payload拒絕。
+- **不涉及**：任何新Database schema／存檔格式；鏡頭跟隨、碰撞、道路導航、城市實體入口／離城觸發、第4座城市、世界怪物／Encounter、汽車交通改造、經濟／戰鬥／裝備／傭兵／成長、Render設定、引擎轉換、正式joystick UI、大型anti-cheat／rate-limit平台、server-side movement tick。
+- 測試結果：66（現有，內容不變）+ 9（新增）= 75 tests passed, 0 failed。
+- 存檔影響：無新schema；沿用P1-01嘅additive `world_x`/`world_y`。
+- 已知風險：
+  - 冇per-秒rate limit，只有per-command最短間隔，理論上狂send短command仍可以受網絡來回時間限制下加快移動——已披露，未解決，屬殘餘風險。
+  - `pointermove`同`.map-scroll`原有嘅原生scroll手勢有冇衝突，未經真機測試驗證。
+  - 離城後（`IN_WORLD`）暫時冇辦法用市場／倉庫／重新入城，屬已知、刻意延後嘅限制。
+- Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`；P1-01基準 `6d49c747bbefa8598c7580d233366154bb0844ea`。
