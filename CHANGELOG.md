@@ -98,3 +98,11 @@
   - `pointermove`同`.map-scroll`原有嘅原生scroll手勢有冇衝突，未經真機測試驗證。
   - 離城後（`IN_WORLD`）暫時冇辦法用市場／倉庫／重新入城，屬已知、刻意延後嘅限制。
 - Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`；P1-01基準 `6d49c747bbefa8598c7580d233366154bb0844ea`。
+
+### P1-02 Review round 2（Client端修正，經Charlie批准）
+
+- **手機pointer手勢同原生scroll衝突**：`.world-map`嘅`touch-action`只喺實際movement手勢進行期間（`pointerdown`確認非撳中城市節點之後，直到`pointerup`/`pointercancel`）先set做`none`並call`event.preventDefault()`，手勢完結即刻reset返空字串。`.map-scroll`原有嘅`touch-action:pan-x pan-y`同`overflow:auto`完全冇改，冇郁camera、map scrolling、zoom，亦冇將今次Prototype手勢鎖死做正式規格。
+- **Movement request race**：新增`public/asyncqueue.js`（新檔，`createCoalescingSender`，純函數、冇DOM／fetch依賴），確保同一時間只有一個`world/move` request在途；drag期間新出現嘅pointer位置會存做「最新pending target」，前一個request完成後先send返最新嗰個，中途過時嘅target會被丟棄，唔會再有「舊target回應遲到令位置跳返轉頭」嘅可能。`public/app.js`嘅`moveWorld()`改為透過呢個wrapper發送，`server.mjs`嘅movement protocol、state machine、Database schema**完全冇改**。
+- 新增4個pure function test（`test/asyncqueue.test.mjs`，新檔）：單一call即時send、in-flight期間多個call被coalesce做一個用最新target嘅follow-up call、sender永遠唔會被同時call兩次（防race核心證明）、唔重疊嘅sequential call個別照送唔會被丟棄。
+- 已披露、未能自動測試嘅部分：`touch-action`／`preventDefault`喺真實觸控手勢入面嘅實際效果（同`.map-scroll`原生scroll嘅交互）屬DOM/瀏覽器行為，呢個codebase一直冇用jsdom等工具測試呢類手勢層面代碼（同現有`setupBattlePan()`等一致），所以呢部分只可以喺真機／真瀏覽器測試驗證，未自動化。
+- 測試結果：75（round 1，內容不變）+ 4（新增）= 79 tests passed, 0 failed。
