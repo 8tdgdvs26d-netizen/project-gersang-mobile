@@ -227,3 +227,33 @@
 - 存檔影響：無。
 - 已知風險：手指喺road視覺線上滑動時嘅觸感／視覺回饋純屬UX感受問題，未經真機驗證，明確留返P1-07實機驗收處理，今次唔提前處理。
 - Rollback基準：P1-05正式rollback base = `main` @ `1bc45a609f97c348b57dfebab0ae14e8b1a52a8a`（即P1-04 merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-05 rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
+
+## P1-06 — 2026-09-18 — Position Save / Reload Robustness（Test-only）
+
+- 分類：《萬行誌：白手 — Canonical v0.5》Phase 1 第六個開發任務（GitHub Issue #14）。
+- 起點：`main` @ `7e9addd98bb316babd40c557fb2d44ad04832b51`（即P1-05 merge之後）。
+- 目標：核實並補強「世界位置儲存／重新載入（Save/Reload）」嘅可靠性——證明accepted non-zero move持久保存、`IN_WORLD`喺reload/reconnect之後唔會無故變返`IN_CITY`、zero-displacement（throttled/collision/same-position）唔製造假state transition或假寫入、legacy NULL fallback保持read-only、Travel arrival後`city_id`/`state`/`world_x/world_y`一致、以及一項工程層面嘅硬指標——**真正嘅server process重啟**（kill再用同一個SQLite DB file重新開）之後，已accepted嘅position/state仍然存在。今次屬工程可靠性驗證，唔係實機Playtest（留返P1-07）。
+- **Coding前research結論（經Charlie批准方向：test-only + documentation，零production code change）**：詳細閱讀`server.mjs`（`seed()`、`snapshot()`、`moveWorld()`、`resolveArrival()`、`arrivalWorldColumns()`、`openSession()`/`validSession()`、`idem()`）、`public/app.js`（`boot()`、`refresh()`、`sendWorldMove`）、`public/worldmap.js`（`resolveWorldPosition()`）之後確認：
+  - Accepted non-zero move喺`idem()`嘅`BEGIN IMMEDIATE`/`COMMIT`交易入面同步寫入`characters.world_x/world_y/state`，response返之前DB已經commit，冇「ACCEPTED但DB未寫」嘅窗口。
+  - `snapshot()`單一data source（直接讀`characters`表），`IN_WORLD`同`world_x/world_y`喺同一個UPDATE statement一齊寫，享有相同durability。
+  - `snapshot()`開頭有一個**獨立、P1-01/P1-02已批准**嘅auto-arrival-resolve write（travel到埗自動resolve）——呢個唔係「legacy NULL fallback」嗰個機制，兩者要分開睇；legacy NULL fallback（`worldPosition=c.world_x!=null...`嗰句）本身已經由現有`test/world-entity.test.mjs`直接DB驗證係read-only。
+  - collision/throttle/same-position三種情況，code層面`if(moved)`guard令UPDATE完全唔執行，但現有test淨係經HTTP snapshot驗證數值冇變，未有直接DB層面實證「literally冇write」。
+  - `resolveArrival()`同`snapshot()`嘅auto-resolve都用同一個`arrivalWorldColumns()`喺單一UPDATE入面一齊寫`city_id`/`state`/`world_x`/`world_y`，冇分階段寫嘅不一致窗口。
+  - Client端已grep確認`public/`目錄完全冇用`localStorage`/`sessionStorage`/`indexedDB`；`boot()`→`refresh()`每次reload都完整攞一個新`snapshot()`直接assign去`S.snap`，冇merge、冇「保留舊城市marker」邏輯，`sendWorldMove`嘅DOM patch用嘅係server response返嚟嘅數值，唔係client自己估。**即係話P1-06想驗證嘅不變量喺現有架構已經全部成立**，缺口純粹係測試覆蓋（尤其係「真正server process重啟」呢一項，之前完全冇覆蓋）。
+- 修改：
+  - 新增`test/world-persistence.test.mjs`（新檔，6個test）：
+    1. `IN_WORLD`位置喺自成一體（唔靠其他test執行順序）嘅fixture之下，捱得過兩次獨立fresh snapshot re-fetch。
+    2. Throttle：第一個move accepted並確立`lastWorldMoveAt`，緊接住第二個move真正被throttled，並用獨立`DatabaseSync`直接讀`characters`表，證明第二個command **literally冇令world_x/world_y/state有任何額外改動**。
+    3. Collision：move入inflated obstacle，`ACCEPTED`+`collided:true`，直接DB讀確認冇任何額外改動。
+    4. Same-position：target同current完全一樣，`ACCEPTED`+`collided:false`，直接DB讀確認冇任何額外改動。
+    5. Travel arrival之後，額外做多一次獨立fresh snapshot request（模擬reload-after-arrival），確認`cityId`/`state`/`worldPosition`三者仍然一致對應destination城市座標。
+    6. **真正OS-level process restart**：獨立temp dir/DB，spawn child A、legal move accepted、**kill child A並用`proc.once('exit',...)`確實等到真正exit事件**、用完全相同`DB_PATH`重新spawn child B、開一個全新session（確認同restart前唔同）、fetch fresh snapshot，證明`worldPosition`同`state='IN_WORLD'`喺真正process重啟之後依然存在。呢個test純粹用返現有child-process-per-DB-file harness pattern嘅重複spawn/kill能力，**零production code改動**。
+  - `CHANGELOG.md`（本段）。
+  - **`server.mjs`、`public/app.js`、`public/worldmap.js`、`public/worldgeometry.js`、DB schema/migration、session/account architecture、Travel/Reroute實作——一個字都冇改**，`git diff`可以直接核實。
+- **實作過程中發現同修正嘅test harness bug（唔涉及production code）**：撰寫真正process restart test初版時，`killAndWaitForRealExit`helper錯誤咁用`child.exitCode!==null`嚟判斷「已經exit」——但Node.js對於**被signal（例如`SIGTERM`，即`child.kill()`嘅default行為）終止**嘅process，`exitCode`會永遠保持`null`（要睇`signalCode`先知道），令個assertion同埋`finally`區塊嘅defensive cleanup call誤以為process未死，喺一個「exit event已經過咗」嘅child process上面重新註冊`.once('exit',...)`監聽器，永遠等唔到嗰個已經錯過咗嘅event，令個test卡死。修正方式：喺`spawnServer()`spawn個process嗰刻就即刻attach一個`.once('exit',...)`監聽器set一個plain flag（`child.hasExited`），`killAndWaitForRealExit`同assertion都改用呢個flag，唔再睇`exitCode`。**呢個純粹係test helper本身嘅bug（本session撰寫、未commit過嘅新代碼），唔涉及`server.mjs`或任何production code**，喺完成commit之前已經修正並確認6個test全部通過。
+- **不涉及**：正式城市physical entry/exit、第4座城市、world monsters、roads新功能、auto-save UI/save slot/manual save/cloud save、account system redesign、多角色存檔、跨裝置同步、offline mode、background sync、大型reconnect architecture、multiplayer persistence、DB schema redesign/migration framework、Redis/external DB/cloud DB migration、經濟/戰鬥/裝備/傭兵/成長、Travel/Reroute gameplay規格、正式joystick/gesture UX、Render config、引擎轉換。
+- 測試結果：121（現有，內容完全不變）+ 6（新增）= 127 tests passed, 0 failed。
+- 存檔影響：無。
+- 已發現嘅真正persistence bug：**冇**。所有已批准嘅不變量（accepted move持久化、`IN_WORLD`持久化、zero-displacement冇write、legacy NULL fallback read-only、Travel arrival一致性、真正process restart之後position/state仍存在、client冇覆寫風險）經code reading同新regression test全部證實成立。
+- 已知限制／留返P1-07：Client reload flow（`boot()`/`refresh()`冇localStorage、每次完整覆蓋`S.snap`）淨係得code-reading結論記錄喺呢度，冇辦法自動化test（呢個codebase一直冇用jsdom測DOM/client state層面嘅嘢）；真實瀏覽器reload（撳返轉頁面掣、Safari背景/前景切換、iOS記憶體壓力下嘅tab reload）嘅實際行為、觸控手勢中途reload嘅UX感受，明確留返P1-07 iPhone實機驗收。
+- Rollback基準：P1-06正式rollback base = `main` @ `7e9addd98bb316babd40c557fb2d44ad04832b51`（即P1-05 merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-06 rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
