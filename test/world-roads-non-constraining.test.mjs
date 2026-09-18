@@ -102,11 +102,14 @@ test('P1-04 obstacle collision continues to work unmodified: moving into an infl
   assert.deepEqual(blocked.data.worldPosition,start);
 });
 
-test('world/bounds clamp and general movement remain correct near a road corridor',async()=>{
+test('MAX_WORLD_STEP movement clamp still applies normally right next to a road, unaffected by the road (a large target far past WORLD_BOUNDS only produces one normal 60-unit step, nowhere near the actual boundary — genuine WORLD_BOUNDS edge-clamp coverage lives in test/world-movement.test.mjs and test/world-collision.test.mjs)',async()=>{
   setPosition(230,150,'IN_WORLD');
   await wait(150);
-  const moved=await post('/api/commands/world/move',envelope('roads-bounds-still-work',{targetX:-9999,targetY:150}));
+  const moved=await post('/api/commands/world/move',envelope('roads-step-clamp-near-road',{targetX:-9999,targetY:150}));
   assert.equal(moved.status,'ACCEPTED');
   assert.equal(moved.data.collided,false);
+  // dx=-10229 far exceeds MAX_WORLD_STEP=60, so the accepted candidate is clamped to exactly one
+  // 60-unit step (230-60=170), same as it would be anywhere else off-road — this is the ordinary
+  // MAX_WORLD_STEP clamp, not the WORLD_BOUNDS edge clamp (170 is nowhere near the 0..1000 edge).
   assert.deepEqual(moved.data.worldPosition,{x:170,y:150});
 });
