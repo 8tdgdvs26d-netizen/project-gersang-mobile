@@ -257,3 +257,36 @@
 - 已發現嘅真正persistence bug：**冇**。所有已批准嘅不變量（accepted move持久化、`IN_WORLD`持久化、zero-displacement冇write、legacy NULL fallback read-only、Travel arrival一致性、真正process restart之後position/state仍存在、client冇覆寫風險）經code reading同新regression test全部證實成立。
 - 已知限制／留返P1-07：Client reload flow（`boot()`/`refresh()`冇localStorage、每次完整覆蓋`S.snap`）淨係得code-reading結論記錄喺呢度，冇辦法自動化test（呢個codebase一直冇用jsdom測DOM/client state層面嘅嘢）；真實瀏覽器reload（撳返轉頁面掣、Safari背景/前景切換、iOS記憶體壓力下嘅tab reload）嘅實際行為、觸控手勢中途reload嘅UX感受，明確留返P1-07 iPhone實機驗收。
 - Rollback基準：P1-06正式rollback base = `main` @ `7e9addd98bb316babd40c557fb2d44ad04832b51`（即P1-05 merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-06 rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
+
+## P1-07A — 2026-09-18 — Mobile Control & Camera Fix
+
+- 分類：《萬行誌：白手 — Canonical v0.5》Phase 1 真機驗收後嘅blocking UX remediation（GitHub Issue #16）。P1-07第一輪iPhone真機驗收判定FAIL/Blocking，今次修正Charlie回報嘅4個blocking問題：觸控移動唔自然、進入自由移動後畫面放大冇得縮返全圖、移動卡頓、速度過快。**唔係新增世界玩法**。
+- 起點：`main` @ `38d9433df51857521bb023392a27d76b332be057`（即P1-06 merge之後）。
+- **卡頓根因**（research確認，見PR）：`sendWorldMove`原本一收到response即刻`setAttribute`硬跳（完全冇smoothing）；`MAX_WORLD_STEP=60`相對於400×400鏡頭範圍太大，每次跳動都好明顯；client（150ms）同server（120ms）兩層throttle唔同步，偶爾出現「郁唔到」嘅零位移response；camera viewBox同position一齊硬跳，冇任何transition。「入咗自由移動就縮唔返全圖」係結構性缺口——`resolveMapViewBox()`淨係睇`state`，`IN_WORLD`即刻硬切400×400，**完全冇UI俾玩家自己切返full map**。
+- **方案（經Charlie批准嘅UX決定）**：Virtual Joystick（固定左下角，`radius=52`／`deadzone=10`／360°方向／強度控速）**正式取代**IN_WORLD舊SVG direct-drag，唔會兩套movement input同時active；Joystick淨係計算「方向+強度」，用返一模一樣嘅`/api/commands/world/move`endpoint（`{targetX,targetY}`，一個字冇改）；`requestAnimationFrame`根據**delta-time**（唔係fixed per-frame factor）令character（80ms）同camera（120ms）smoothing，display永遠淨係向最新`serverPosition`easing，唔會predict/extrapolate，所以唔會有「穿牆再被拉返」嘅情況（collision-blocked response嘅`serverPosition`維持原地不變，display就自然平滑咁停喺嗰度）；速度降低純粹用client-only嘅`JOYSTICK_STEP_DISTANCE=18`（細過`MAX_WORLD_STEP`），**`server.mjs`今次一個字都冇改**；新增`S.mapView`（`'follow'`|`'full'`）純client-only camera模式，右上角按鈕切換，Full Map係inspection-only（進入時disable joystick movement，唔可以控制角色，切返Follow先恢復），`mapView`永遠唔會send去server。
+- 修改：
+  - 新增`public/movement.js`（新檔，DOM-free pure function）：`computeJoystickInput`（方向+強度，deadzone/magnitude計算）、`clampJoystickKnob`（knob視覺clamp）、`computeJoystickTarget`（由`serverPosition`計算小步target，永遠唔會由client預測位置計算）、`easeTowards`（delta-time based exponential smoothing，frame-rate independent，composable）、`isMovementAllowed`／`shouldSendJoystickMove`（Full Map disable movement intent嘅純邏輯gate）。
+  - `public/worldmap.js`：新增`resolveEffectiveViewBox(mapView,state,position,viewportSize,bounds)`（additive，**`resolveMapViewBox()`本身一個字冇改**，`mapView==='full'`強制full-world box）；`renderWorldMapHtml()`改用呢個function，並加返joystick DOM（`#joystick-base`/`#joystick-knob`，TRAVELING或Full Map時attach`joystick-disabled`class）同Follow/Full Map切換按鈕（`#map-view-toggle`）。
+  - `public/app.js`：移除`setupWorldMovePointer`/`svgPointFromEvent`/舊`moveWorld()`（drag-to-move完全retire）；`sendWorldMove`改做**data-only**（淨係更新`S.snap`，唔再直接碰DOM）；新增`setupJoystick()`（pointer capture、deadzone、`pointerup`/`pointercancel`/`onlostpointercapture`即刻歸零歸零停止）、`tickMovementFrame()`（單一`requestAnimationFrame`loop，每幀用`easeTowards`smoothing character position同camera box，IN_WORLD先smoothing、其餘state直接snap，先call`shouldSendJoystickMove`先決定使唔使send）、`toggleMapView()`；`S`新增`mapView:'follow'`。
+  - `public/styles.css`：`.map-scroll`加`position:relative`；新增`.joystick`/`.joystick-disabled`/`.joystick-knob`/`.map-view-toggle`（純CSS，冇改任何現有規則）。
+  - `CHANGELOG.md`（本段）。
+  - **`server.mjs`、`public/worldgeometry.js`、DB schema/persistence、API contract、movement state machine——一個字都冇改**，`git diff --stat`可核實。
+- **真機smoke test**（用headless Chromium + iPhone viewport size模擬，pointer事件驅動joystick）：確認joystick拖動確實driving真實`/world/move`command（hero marker由starter-village座標移動）、放手後位置穩定（500ms後幾乎冇再郁，冇「放手繼續自己行」）、Full Map toggle正確顯示成個世界並將joystick視覺dim（`joystick-disabled`）、Full Map入面試拖joystick角色完全冇郁（movement確實被block）、切返Follow正常。（呢個屬engineering-level smoke test，唔代表真機Acceptance Gate已經通過——見下）。
+- **不涉及**：Physical city entry/exit（Phase 2）、第4座城市、world monsters/Encounter、roads speed bonus/penalty、stamina/terrain movement cost、pathfinding/A*/auto-walk/waypoint、minimap路線規劃、pinch-to-zoom、rotate camera、新account/save/DB schema、network architecture redesign、multiplayer sync、battle/economy/mercenary/equipment/growth、engine switch、Render config change、`server.mjs`嘅`MAX_WORLD_STEP`（維持60，冇改）。
+- 新增31個test：
+  - `test/movement.test.mjs`（新檔）+22：`computeJoystickInput`（deadzone inclusive boundary、zero-vector唔會除0、magnitude 0→1線性ramp、超出radius clamp做1、direction unit vector）、`clampJoystickKnob`（radius之內不變、超出clamp、zero vector）、`computeJoystickTarget`（inactive回傳null、full/half magnitude步距、永遠由serverPosition計算唔係獨立predict）、`easeTowards`（dt=0冇變化、大dt收斂去target、smoothingMs<=0即刻snap、**delta-time獨立性**：兩個細step等於一個大step，composability數學驗證）、`isMovementAllowed`/`shouldSendJoystickMove`（Full Map disable movement intent嘅純邏輯）。
+  - `test/worldmap.test.mjs`+9：`resolveEffectiveViewBox`（full強制full-world、follow维持現有camera-follow行為唔變、IN_CITY兩者一致）、`renderWorldMapHtml`嘅mapView預設值backward-compatible、full強制viewBox、toggle按鈕文案、joystick disabled class喺Full Map／TRAVELING時正確出現。
+- 測試結果：127（現有，內容完全不變）+ 31（新增）= **158 tests passed, 0 failed**。
+- 存檔影響：無。
+- 已知限制／真機Acceptance Gate（**Merge後仍未代表P1-07正式pass**，需要Charlie重新用iPhone驗收）：
+  - `JOYSTICK_RADIUS`/`JOYSTICK_DEADZONE`/`JOYSTICK_STEP_DISTANCE`/`CHARACTER_SMOOTHING_MS`/`CAMERA_SMOOTHING_MS`全部係Prototype Parameter，真機test後好可能需要再調。
+  - 搖桿方向自然度、放手即停嘅真實觸感、速度是否仍然過快、移動視覺是否仍然一格格跳、camera跟隨會唔會暈、Full Map/Follow切換嘅實際手感、obstacle/boundary真機行為、reload後位置——全部要Charlie親身用iPhone驗證，engineering層自動測試通過**唔代表**P1-07正式pass。
+- Rollback基準：P1-07A正式rollback base = `main` @ `38d9433df51857521bb023392a27d76b332be057`（即P1-06 merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-07A rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
+
+### P1-07A Review round 1（修正client/server throttle timing衝突，經Charlie發現同批准）
+
+- **問題**：`public/movement.js`嘅`JOYSTICK_SEND_INTERVAL_MS`原本設做100ms，但`server.mjs`嘅`MOVEMENT_MIN_INTERVAL_MS`係120ms——client理想情況下send得比server throttle窗口更頻密。持續按住joystick嘅情況下，會形成`accepted movement`→`throttled zero-move`→`accepted movement`→`throttled...`交替出現，令真正authoritative position大約每兩次send（約200ms+）先更新一次——直接同P1-07A本身想解決嘅「雙重throttle導致卡頓」呢個目標衝突。
+- **修正**：`JOYSTICK_SEND_INTERVAL_MS`由100ms改做**140ms**（server 120ms + 20ms buffer），確保正常joystick cadence唔會撞正server throttle窗口。純一個數值修正，`server.mjs`/`MOVEMENT_MIN_INTERVAL_MS`/API contract一個字冇改。
+- 新增1個regression test（`test/movement.test.mjs`）：明確assert`JOYSTICK_SEND_INTERVAL_MS`大過server嘅`MOVEMENT_MIN_INTERVAL_MS`（120ms，因為冇export/import唔到，test入面手動keep in sync並註明），同鎖定目前批准嘅140ms數值。
+- 測試結果：158（round 1，內容不變）+ 1（新增）= 159 tests passed, 0 failed。
+- Rollback基準：同上。

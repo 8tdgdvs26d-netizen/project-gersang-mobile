@@ -17,6 +17,7 @@ import {
   resolveWorldPosition,
   computeCameraViewBox,
   resolveMapViewBox,
+  resolveEffectiveViewBox,
   WORLD_BOUNDS,
   OBSTACLES,
   CAMERA_VIEWPORT_SIZE
@@ -305,6 +306,29 @@ test('resolveMapViewBox falls back to the full-world viewBox for IN_WORLD when n
   assert.deepEqual(box,{x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max});
 });
 
+const FULL_WORLD_BOX={x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max};
+
+test("resolveEffectiveViewBox: 'full' map view always shows the whole world, even while IN_WORLD with a valid position (Full Map is inspection-only and overrides camera-follow)",()=>{
+  const box=resolveEffectiveViewBox('full','IN_WORLD',{x:500,y:500},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,FULL_WORLD_BOX);
+});
+
+test("resolveEffectiveViewBox: 'follow' map view defers to resolveMapViewBox's existing camera-follow behavior while IN_WORLD",()=>{
+  const box=resolveEffectiveViewBox('follow','IN_WORLD',{x:500,y:500},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,computeCameraViewBox({x:500,y:500},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS));
+  assert.notDeepEqual(box,FULL_WORLD_BOX);
+});
+
+test("resolveEffectiveViewBox: 'follow' map view still shows the full world while IN_CITY (matches resolveMapViewBox's existing non-IN_WORLD behavior, unchanged)",()=>{
+  const box=resolveEffectiveViewBox('follow','IN_CITY',{x:220,y:150},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,FULL_WORLD_BOX);
+});
+
+test("resolveEffectiveViewBox: 'full' map view while IN_CITY is consistent with 'follow' (both already show the full world)",()=>{
+  const box=resolveEffectiveViewBox('full','IN_CITY',{x:220,y:150},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,FULL_WORLD_BOX);
+});
+
 test('renderWorldMapHtml uses a camera-follow 400x400 viewBox centered on the hero position while IN_WORLD',()=>{
   const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
   const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
@@ -336,4 +360,46 @@ test('renderWorldMapHtml keeps the full-world 0 0 1000 1000 viewBox while TRAVEL
   const html=renderWorldMapHtml({snap,cities,roads:[]});
   assert.ok(html.includes('viewBox="0 0 1000 1000"'),`expected the full-world viewBox, got: ${html.match(/viewBox="[^"]*"/)}`);
   for(const city of cities)assert.ok(html.includes(`data-city="${city.id}"`));
+});
+
+test('renderWorldMapHtml defaults to Follow View camera behavior when mapView is omitted (backward compatible with pre-P1-07A callers)',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[]});
+  assert.ok(html.includes('viewBox="300 300 400 400"'),`expected camera-follow viewBox by default, got: ${html.match(/viewBox="[^"]*"/)}`);
+});
+
+test("renderWorldMapHtml: mapView:'full' forces the full-world viewBox even while IN_WORLD",()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'full'});
+  assert.ok(html.includes('viewBox="0 0 1000 1000"'),`expected the full-world viewBox, got: ${html.match(/viewBox="[^"]*"/)}`);
+});
+
+test('renderWorldMapHtml renders the Follow/Full Map toggle button with the label matching the opposite (target) mode',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const followHtml=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(followHtml.includes('id="map-view-toggle"'));
+  assert.ok(followHtml.includes('全圖'),'while in Follow View, the button should offer to switch to Full Map');
+  const fullHtml=renderWorldMapHtml({snap,cities,roads:[],mapView:'full'});
+  assert.ok(fullHtml.includes('跟隨'),'while in Full Map, the button should offer to switch back to Follow View');
+});
+
+test('renderWorldMapHtml renders the joystick base, disabled while inspecting Full Map',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const followHtml=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(followHtml.includes('id="joystick-base"'));
+  assert.ok(!followHtml.includes('joystick-disabled'),'joystick must be enabled in Follow View while IN_WORLD');
+  const fullHtml=renderWorldMapHtml({snap,cities,roads:[],mapView:'full'});
+  assert.ok(fullHtml.includes('joystick-disabled'),'joystick must be disabled while inspecting Full Map');
+});
+
+test('renderWorldMapHtml renders the joystick disabled while TRAVELING regardless of mapView (movement is rejected server-side anyway)',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}},{id:'b',name:'B',coordinates:{x:500,y:500}}];
+  const segments=[{edgeId:'ab',roadId:'ab',fromCityId:'a',toCityId:'b',durationMs:1000,startOffsetMs:0,endOffsetMs:1000}];
+  const snap={state:'TRAVELING',cityId:'a',worldPosition:{x:220,y:150},activeTravel:{fromCityId:'a',toCityId:'b',segments,startedAt:new Date(0).toISOString(),estimatedArrivalAt:new Date(1000).toISOString()}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(html.includes('joystick-disabled'));
 });
