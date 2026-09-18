@@ -14,7 +14,10 @@ import {
   indexById,
   regionMeta,
   renderWorldMapHtml,
-  resolveWorldPosition
+  resolveWorldPosition,
+  computeCameraViewBox,
+  WORLD_BOUNDS,
+  CAMERA_VIEWPORT_SIZE
 } from '../public/worldmap.js';
 
 let child,base,dir,sessionId;
@@ -220,4 +223,68 @@ test('resolveWorldPosition falls back to the city\'s coordinates when worldPosit
   const citiesById={a:{id:'a',coordinates:{x:220,y:150}}};
   const snap={state:'IN_CITY',cityId:'a'};
   assert.deepEqual(resolveWorldPosition(snap,citiesById,{},Date.now()),{x:220,y:150});
+});
+
+test('computeCameraViewBox centers exactly on the player position when well within bounds',()=>{
+  const box=computeCameraViewBox({x:500,y:500},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,{x:300,y:300,width:400,height:400});
+});
+
+test("computeCameraViewBox clamps at the world's minimum edge so the viewBox never shows area below 0",()=>{
+  const box=computeCameraViewBox({x:0,y:10},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.ok(box.x>=WORLD_BOUNDS.min,`expected x>=${WORLD_BOUNDS.min}, got ${box.x}`);
+  assert.ok(box.y>=WORLD_BOUNDS.min,`expected y>=${WORLD_BOUNDS.min}, got ${box.y}`);
+  assert.equal(box.x,0);
+  assert.equal(box.y,0);
+});
+
+test("computeCameraViewBox clamps at the world's maximum edge so the viewBox never exceeds world bounds on the high side",()=>{
+  const box=computeCameraViewBox({x:1000,y:990},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.ok(box.x+box.width<=WORLD_BOUNDS.max,`expected x+width<=${WORLD_BOUNDS.max}, got ${box.x+box.width}`);
+  assert.ok(box.y+box.height<=WORLD_BOUNDS.max,`expected y+height<=${WORLD_BOUNDS.max}, got ${box.y+box.height}`);
+  assert.equal(box.x,600);
+  assert.equal(box.y,600);
+});
+
+test('computeCameraViewBox always returns a fixed viewport size regardless of position',()=>{
+  for(const position of [{x:0,y:0},{x:500,y:500},{x:1000,y:1000},{x:220,y:150}]){
+    const box=computeCameraViewBox(position,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+    assert.equal(box.width,CAMERA_VIEWPORT_SIZE);
+    assert.equal(box.height,CAMERA_VIEWPORT_SIZE);
+    assert.ok(box.x>=WORLD_BOUNDS.min&&box.x+box.width<=WORLD_BOUNDS.max);
+    assert.ok(box.y>=WORLD_BOUNDS.min&&box.y+box.height<=WORLD_BOUNDS.max);
+  }
+});
+
+test('renderWorldMapHtml uses a camera-follow 400x400 viewBox centered on the hero position while IN_WORLD',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[]});
+  assert.ok(html.includes('viewBox="300 300 400 400"'),`expected a camera-follow viewBox, got: ${html.match(/viewBox="[^"]*"/)}`);
+  assert.ok(!html.includes('viewBox="0 0 1000 1000"'));
+});
+
+test('renderWorldMapHtml keeps the full-world 0 0 1000 1000 viewBox while IN_CITY, so other cities stay visible and reachable for travel',()=>{
+  const cities=[
+    {id:'starter-village',name:'A',coordinates:{x:220,y:150}},
+    {id:'hill-market',name:'B',coordinates:{x:780,y:150}},
+    {id:'harbour-city',name:'C',coordinates:{x:500,y:820}}
+  ];
+  const snap={state:'IN_CITY',cityId:'starter-village',worldPosition:{x:220,y:150}};
+  const html=renderWorldMapHtml({snap,cities,roads:[]});
+  assert.ok(html.includes('viewBox="0 0 1000 1000"'),`expected the full-world viewBox, got: ${html.match(/viewBox="[^"]*"/)}`);
+  for(const city of cities)assert.ok(html.includes(`data-city="${city.id}"`));
+});
+
+test('renderWorldMapHtml keeps the full-world 0 0 1000 1000 viewBox while TRAVELING, so mid-journey reroute targets stay visible and reachable',()=>{
+  const cities=[
+    {id:'starter-village',name:'A',coordinates:{x:220,y:150}},
+    {id:'hill-market',name:'B',coordinates:{x:780,y:150}},
+    {id:'harbour-city',name:'C',coordinates:{x:500,y:820}}
+  ];
+  const segments=[{edgeId:'ab',roadId:'ab',fromCityId:'starter-village',toCityId:'hill-market',durationMs:1000,startOffsetMs:0,endOffsetMs:1000}];
+  const snap={state:'TRAVELING',cityId:'starter-village',worldPosition:{x:220,y:150},activeTravel:{fromCityId:'starter-village',toCityId:'hill-market',segments,startedAt:new Date(0).toISOString(),estimatedArrivalAt:new Date(1000).toISOString()}};
+  const html=renderWorldMapHtml({snap,cities,roads:[]});
+  assert.ok(html.includes('viewBox="0 0 1000 1000"'),`expected the full-world viewBox, got: ${html.match(/viewBox="[^"]*"/)}`);
+  for(const city of cities)assert.ok(html.includes(`data-city="${city.id}"`));
 });

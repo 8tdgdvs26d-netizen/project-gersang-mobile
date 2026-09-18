@@ -123,15 +123,32 @@ export function resolveWorldPosition(snap,citiesById,roadsById,now){
   return snap.worldPosition??citiesById[snap.cityId]?.coordinates;
 }
 
+// Prototype bounds only — must stay in sync with server.mjs's WORLD_BOUNDS (0..1000).
+// This is not a shared single source of truth: server and client each keep their own copy.
+export const WORLD_BOUNDS={min:0,max:1000};
+// Camera Prototype Parameter, not a final spec — subject to Playtest tuning.
+export const CAMERA_VIEWPORT_SIZE=400;
+
+export function computeCameraViewBox(position,viewportSize,bounds){
+  const half=viewportSize/2;
+  const x=Math.max(bounds.min,Math.min(bounds.max-viewportSize,position.x-half));
+  const y=Math.max(bounds.min,Math.min(bounds.max-viewportSize,position.y-half));
+  return {x,y,width:viewportSize,height:viewportSize};
+}
+
+export function viewBoxAttr(box){return `${box.x} ${box.y} ${box.width} ${box.height}`}
+
 export function renderWorldMapHtml(state){
   const citiesById=indexById(state.cities);
   const roadsById=indexById(state.roads||[]);
   const heroPosition=resolveWorldPosition(state.snap,citiesById,roadsById,Date.now());
+  const fullWorldViewBox={x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max};
+  const camera=state.snap.state==='IN_WORLD'&&heroPosition?computeCameraViewBox(heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS):fullWorldViewBox;
   const zones=REGION_META.map(r=>`<g class="map-region ${r.open?'':'region-locked'}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"></rect><text class="map-region-label" x="${r.x+r.w/2}" y="${r.y+30}">${r.name}</text></g>`).join('');
   const roads=roadsSvg(state.cities,state.roads);
   const nodes=state.cities.map(c=>`<g class="map-city" data-city="${c.id}"><circle cx="${c.coordinates.x}" cy="${c.coordinates.y}" r="26"></circle><text x="${c.coordinates.x}" y="${c.coordinates.y+44}">${c.name}</text></g>`).join('');
   const hero=heroPosition?`<circle class="hero-marker" cx="${heroPosition.x}" cy="${heroPosition.y}" r="14"></circle>`:'';
-  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid meet">${zones}${roads}${nodes}${hero}</svg></div>${travelStatusHtml(state)}</section>`;
+  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${nodes}${hero}</svg></div>${travelStatusHtml(state)}</section>`;
 }
 
 export function renderCityHubHtml(state){
