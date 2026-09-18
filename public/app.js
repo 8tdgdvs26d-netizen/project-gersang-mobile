@@ -2,6 +2,10 @@ import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCity
 import {createCoalescingSender} from './asyncqueue.js';
 import {PLAYER_COLLISION_RADIUS,inflateRect} from './worldgeometry.js';
 import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD} from './movement.js';
+// P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
+// the existing movement path above; nothing in this import or the code that uses it changes any
+// movement/joystick/prediction/reconciliation/camera behavior.
+import {nextFpsEma,nextTelemetryFrameDelta,predictionLeadDistance,nextMoveTiming,formatMs,formatFlag,formatLeadReadout,TELEMETRY_OVERLAY_PATCH_INTERVAL_MS} from './telemetry.js';
 // P1-07B: same INFLATED_OBSTACLES construction as server.mjs's own (OBSTACLES.map(inflateRect)) —
 // used only as a presentation-only prediction clamp (see clampPredictedStep), never as the real
 // collision authority, which remains server.mjs's own segmentBlocked() over the same primitives.
@@ -189,6 +193,37 @@ function updateTravelProgress(){
   const hero=document.querySelector('.hero-marker'),segments=S.snap?.activeTravel?.segments;
   if(hero&&segments){const pos=computeTravelPosition(segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y)}}
 }
+// P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21) state. Read-only observation of
+// the existing movement path: nothing here is ever fed back into movement/prediction/
+// reconciliation/camera — see telemetry.js for the pure math/formatting.
+let telemetryFpsEma=null,telemetryLastFrameTimestamp=null,telemetryLastOverlayPatchAt=0,telemetryMoveInFlight=false,telemetryLastCompletedAt=null,telemetryLastRttMs=null,telemetryLastResponseGapMs=null,telemetryLastStatus=null,telemetryLastErrorCode=null,telemetryLastThrottled=null,telemetryLastCollided=null;
+// Single call site for all three /world/move completion paths (ACCEPTED, REJECTED, a thrown
+// network/command exception) so RTT/response-gap timing is computed identically every time — see
+// P1-07C Merge Gate direction. throttled/collided are explicitly nulled on REJECTED/ERROR so the
+// overlay never shows a stale value left over from a previous ACCEPTED response.
+function recordMoveTelemetry({status,errorCode,throttled,collided,startedAt}){
+  const timing=nextMoveTiming(startedAt,performance.now(),telemetryLastCompletedAt);
+  telemetryLastRttMs=timing.rttMs;telemetryLastResponseGapMs=timing.responseGapMs;telemetryLastCompletedAt=timing.completedAt;
+  telemetryLastStatus=status;telemetryLastErrorCode=errorCode;telemetryLastThrottled=throttled;telemetryLastCollided=collided;
+}
+// P1-07C: FPS/lead are computed every frame (see tickMovementFrame); only this DOM write is
+// throttled to TELEMETRY_OVERLAY_PATCH_INTERVAL_MS, so the debug overlay itself doesn't add
+// measurable DOM load to the FPS it's trying to measure — per P1-07C Merge Gate direction §3.
+function patchTelemetryOverlay(now,leadPx){
+  if(now-telemetryLastOverlayPatchAt<TELEMETRY_OVERLAY_PATCH_INTERVAL_MS)return;
+  telemetryLastOverlayPatchAt=now;
+  const set=(id,text)=>{const el=document.querySelector(id);if(el)el.textContent=text};
+  set('#telemetry-fps',telemetryFpsEma==null?'…':String(Math.round(telemetryFpsEma)));
+  set('#telemetry-rtt',formatMs(telemetryLastRttMs));
+  set('#telemetry-gap',formatMs(telemetryLastResponseGapMs));
+  set('#telemetry-lead',formatLeadReadout(leadPx,MAX_PREDICTION_LEAD));
+  set('#telemetry-inflight',formatFlag(telemetryMoveInFlight));
+  set('#telemetry-throttled',formatFlag(telemetryLastThrottled));
+  set('#telemetry-collided',formatFlag(telemetryLastCollided));
+  set('#telemetry-suspended',formatFlag(predictionSuspended));
+  set('#telemetry-status',telemetryLastStatus||'…');
+  set('#telemetry-errorcode',telemetryLastErrorCode||'–');
+}
 // P1-07A: sendWorldMove is data-only — it updates the authoritative S.snap and nothing else.
 // All on-screen presentation (hero marker position, camera viewBox) is owned exclusively by
 // tickMovementFrame()'s requestAnimationFrame loop below. This keeps "what we ask the server for"
@@ -213,6 +248,10 @@ function updateTravelProgress(){
 // prediction must stop advancing (not just cap its lead) until reconciliation — driven by the
 // same collided:true — has pulled it back in line, exactly like the REJECTED/exception case.
 const sendWorldMove=createCoalescingSender(async({x,y})=>{
+  // P1-07C: startedAt is taken at the true start of the network command (this callback only ever
+  // runs once createCoalescingSender actually dequeues it — see Plan §2), never at enqueue time.
+  const startedAt=performance.now();
+  telemetryMoveInFlight=true;
   let r;
   try{
     r=await command('/api/commands/world/move',{targetX:x,targetY:y});
@@ -220,17 +259,23 @@ const sendWorldMove=createCoalescingSender(async({x,y})=>{
     console.error('sendWorldMove: command() threw (network or server exception)',err);
     toast(`移動指令失敗：${err?.message||'網絡或伺服器錯誤'}`);
     predictionSuspended=true;
+    recordMoveTelemetry({status:'ERROR',errorCode:err?.message||null,throttled:null,collided:null,startedAt});
+    telemetryMoveInFlight=false;
     return;
   }
   if(r.status==='REJECTED'){
     console.warn('sendWorldMove: REJECTED',r.errorCode);
     toast(describeWorldMoveError(r.errorCode));
     predictionSuspended=true;
+    recordMoveTelemetry({status:'REJECTED',errorCode:r.errorCode,throttled:null,collided:null,startedAt});
+    telemetryMoveInFlight=false;
     return;
   }
   S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state;
   predictionSuspended=shouldSuspendAfterAccepted(r.data);
   if(r.data.collided)toast('撞到障礙物');
+  recordMoveTelemetry({status:'ACCEPTED',errorCode:null,throttled:r.data.throttled,collided:r.data.collided,startedAt});
+  telemetryMoveInFlight=false;
 });
 
 // Virtual joystick (P1-07A) — fixed bottom-left, replaces the old SVG direct-drag-to-move input.
@@ -313,6 +358,19 @@ function tickMovementFrame(now){
     const target=computeJoystickTarget(serverPos,joystickInput,JOYSTICK_STEP_DISTANCE);
     if(target)sendWorldMove(target);
   }
+  // P1-07C — diagnostic-only tail: reads predictedPosition/serverPos that the movement logic
+  // above already settled this frame, never writes back to them. FPS/lead are computed every
+  // frame; only the overlay DOM write is throttled (see patchTelemetryOverlay).
+  //
+  // P1-07C Merge Gate review — FPS must use its own raw, uncapped frame delta, never movement's
+  // `dt` above (which is clamped to 100ms for smoothing/prediction purposes — a real 250ms
+  // rendering stall would otherwise read back as only ~100ms/~10fps instead of the true ~4fps,
+  // defeating telemetry's whole purpose of telling rendering stalls apart from network gaps).
+  // Movement's own dt/lastFrameTime logic above is completely untouched.
+  const rawTelemetryDt=nextTelemetryFrameDelta(telemetryLastFrameTimestamp,now);
+  telemetryLastFrameTimestamp=now;
+  if(rawTelemetryDt!=null)telemetryFpsEma=nextFpsEma(telemetryFpsEma,rawTelemetryDt);
+  patchTelemetryOverlay(now,predictionLeadDistance(predictedPosition,serverPos));
 }
 async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600);requestAnimationFrame(tickMovementFrame)}
 boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);
