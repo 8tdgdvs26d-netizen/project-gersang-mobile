@@ -365,3 +365,29 @@
 - 新增4個regression test（`test/movement.test.mjs`）：`collided:true`嘅ACCEPTED response令prediction suspend、正常`collided:false`嘅ACCEPTED response令prediction resume（唔會停留喺suspended）、單純throttled（零位移但非collided）唔算collision唔會suspend、缺失response data唔會拋錯預設唔suspend。
 - 測試結果：184（round前，內容不變）+ 4（新增）= 188 tests passed, 0 failed。
 - Rollback基準：同上。
+
+## P1-07C — 2026-09-18 — Mobile Movement Telemetry（diagnostic-only）
+
+- 分類：《萬行誌：白手 — Canonical v0.5》Phase 1真機診斷工具（GitHub Issue #21）。P1-07B已merge並喺Render live，但Charlie最新iPhone真機測試主觀上覺得角色移動仲係「卡卡地」，甚至覺得第一個版本（P1-07A）反而更順。新假設：FPS可能正常，但真實網絡RTT/response gap可能令prediction不斷撞`MAX_PREDICTION_LEAD=36px`，形成「行一下→撞cap停→server追上→再行」嘅肉眼stutter。**呢個未證實**，所以P1-07C**唔修movement，純粹量度**——建立一個只供真機驗收用嘅debug overlay，等Charlie可以用iPhone screen recording同步攞客觀數據。
+- 起點：`main` @ `bdf539b3b96e99ba835affcbc205b37c078610ef`（即P1-07B merge之後）。
+- **設計原則**：telemetry純粹read-only觀察現有movement path，唔會逆向影響任何movement/joystick/prediction/reconciliation/camera行為。所有telemetry math/formatting放喺**全新`public/telemetry.js`**，`public/movement.js`、`public/asyncqueue.js`、`server.mjs`、`public/worldgeometry.js`——**一個字都冇改，`git diff`零行**（比「話冇改」更強嘅證明：直接`git diff public/movement.js public/asyncqueue.js server.mjs public/worldgeometry.js`輸出空白）。`public/app.js`嘅改動經覆核確認**只有新增行，冇修改任何一行existing code**（`git diff`入面淨係`+`，冇`-`）。
+- 改動：
+  - **新增`public/telemetry.js`**：`nextFpsEma()`（reuse`movement.js`現有`easeTowards`做delta-time EMA，唔新增第二套smoothing算法）、`predictionLeadDistance()`（Euclidean distance）、`nextMoveTiming()`（RTT+response gap嘅**單一共用function**，ACCEPTED/REJECTED/ERROR三條path全部call同一個，確保timing邏輯一致）、`formatMs()`/`formatFlag()`/`formatLeadReadout()`（display formatting）。新常數`TELEMETRY_FPS_SMOOTHING_MS=500`、`TELEMETRY_OVERLAY_PATCH_INTERVAL_MS=100`——同movement嘅Prototype Parameter完全分開，唔會混淆。
+  - `public/app.js`：
+    - `sendWorldMove`嘅callback最開頭（`try`之前）攞`startedAt=performance.now()`——呢個先至係真正network command開始（`createCoalescingSender`如果`inFlight`時只會`pending=target;return`，唔會invoke callback，所以呢個位置天然排除咗queue wait time，**唔需要改`asyncqueue.js`**）。
+    - 三個completion path（ERROR catch／REJECTED／ACCEPTED）都call同一個新helper`recordMoveTelemetry()`，內部用返`nextMoveTiming()`。ERROR/REJECTED時**明確set`throttled:null`／`collided:null`**，避免overlay殘留返上一個ACCEPTED response嘅舊值。
+    - 輕量shadow flag`telemetryMoveInFlight`（callback開始=true，三個出口都=false），唔碰`asyncqueue.js`個internal`inFlight`。
+    - `tickMovementFrame()`尾巴（喺existing send區塊之後，純新增行）：`telemetryFpsEma`每frame用`nextFpsEma`更新；`patchTelemetryOverlay()`每frame call，但內部自己throttle最多每`TELEMETRY_OVERLAY_PATCH_INTERVAL_MS=100ms`先真正寫DOM一次（FPS/lead本身仍然每frame即時計，淨係DOM write throttle，避免debug UI自己拖低要量度嗰個FPS）。
+  - `public/worldmap.js`：`renderWorldMapHtml()`加返telemetry overlay嘅靜態HTML shell（同joystick/toggle並列，一次性、additive；每個數據點一個固定`id`，`app.js`嘅`tickMovementFrame`逐個patch textContent，唔做full render，同`#state-label`P1-07B已有嘅pattern一致）。
+  - `public/styles.css`：新增`.telemetry-overlay`一條規則（`position:absolute;bottom:14px;right:10px;pointer-events:none;`）——右下角，離joystick（左下）同Follow/Full Map toggle（右上）都夠遠，`pointer-events:none`確保唔會食touch。
+  - `CHANGELOG.md`（本段）。
+- **顯示數據**（右下角overlay）：FPS、Move RTT、Response gap、Prediction lead（`31.4 / 36px`格式）、In flight、Throttled、Collided、Prediction suspended、最新response status（ACCEPTED/REJECTED/ERROR）、最新errorCode。
+- **真機smoke test**：headless Chromium + iPhone viewport確認overlay正確顯示（computed `pointer-events:none`）、持續按住joystick時telemetry數值正常更新（FPS 60、RTT個位數ms、response gap~151ms貼近140ms送出間隔、lead維持喺個位數px、status ACCEPTED）、放手後角色停低行為完全冇受telemetry影響、overlay正中央嗰點`elementFromPoint`確認實際俾joystick／地圖接收唔到overlay本身（`pointer-events:none`真正生效，唔止CSS聲明）。
+- **不涉及**：任何movement UX修正、`JOYSTICK_STEP_DISTANCE`、`JOYSTICK_SEND_INTERVAL_MS`、`MAX_PREDICTION_LEAD`、reconciliation thresholds/smoothing、camera behavior、`server.mjs`、API contract、schema/state machine、collision、`asyncqueue.js`嘅queue/coalescing semantics、retry/batching/websocket/transport optimization。
+- 測試：
+  - 新增`test/telemetry.test.mjs`（21個DOM-free pure test）：`TELEMETRY_FPS_SMOOTHING_MS`/`TELEMETRY_OVERLAY_PATCH_INTERVAL_MS`鎖定值、`nextFpsEma`（null previous即刻snap去第一個讀數、`dt=0`唔會除0、穩定dt下會converge、單一壞frame淨係nudge唔會snap）、`predictionLeadDistance`（3-4-5直角三角形fixture、對稱性）、`nextMoveTiming`（RTT計算、第一次response gap係null、第二次開始正確計差、三條path用完全同一個function保證一致）、`formatMs`/`formatFlag`/`formatLeadReadout`（null placeholder、rounding、Issue #21原本example嘅格式）。
+  - `test/worldmap.test.mjs`加2個新test：overlay shell含晒10個documented data-point id、overlay純additive（joystick/toggle markup完全唔受影響，overlay喺佢哋之後先加）。
+- 測試結果：188（現有，內容完全不變）+ 21（新增）= **209 tests passed, 0 failed**。
+- 存檔影響：無。
+- **重要**：P1-07C完成**唔代表P1-07 pass**，純粹診斷證據收集。呢個phase嘅目的係等Charlie跟Issue #21嘅三段式protocol（穩定Wi-Fi／較弱Wi-Fi／4G-5G，各10秒×3次）錄screen recording，等下一輪根據實際FPS/RTT/response gap/prediction lead數據，先判斷真正瓶頸係咩，先至提交針對性修正Plan。
+- Rollback基準：P1-07C正式rollback base = `main` @ `bdf539b3b96e99ba835affcbc205b37c078610ef`（即P1-07B merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-07C rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。

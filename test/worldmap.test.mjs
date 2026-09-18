@@ -403,3 +403,28 @@ test('renderWorldMapHtml renders the joystick disabled while TRAVELING regardles
   const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
   assert.ok(html.includes('joystick-disabled'));
 });
+
+// --- P1-07C: Mobile Movement Telemetry overlay shell (diagnostic-only, Issue #21) ---
+// The overlay is a static shell here; app.js's tickMovementFrame patches its child span ids every
+// frame (throttled), never rebuilding it via render(). These tests only check the shell exists
+// with the expected hooks — not that it's pointer-events:none (that's a styles.css rule, verified
+// by direct inspection, not a DOM-free unit test in this codebase's established convention).
+
+test('renderWorldMapHtml renders the P1-07C telemetry overlay shell with all documented data-point ids, each starting as a placeholder',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(html.includes('id="telemetry-overlay"'));
+  for(const id of ['telemetry-fps','telemetry-rtt','telemetry-gap','telemetry-lead','telemetry-inflight','telemetry-throttled','telemetry-collided','telemetry-suspended','telemetry-status','telemetry-errorcode']){
+    assert.ok(html.includes(`id="${id}"`),`expected the overlay shell to include #${id}`);
+  }
+});
+
+test('renderWorldMapHtml: the telemetry overlay is purely additive — joystick and Follow/Full Map toggle markup are unaffected by its presence',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(html.includes('id="joystick-base"'));
+  assert.ok(html.includes('id="map-view-toggle"'));
+  assert.ok(html.indexOf('id="telemetry-overlay"')>html.indexOf('id="joystick-base"'),'telemetry overlay should be appended after the joystick, never inserted between existing controls');
+});

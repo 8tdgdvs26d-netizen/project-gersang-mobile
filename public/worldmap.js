@@ -174,7 +174,13 @@ export function renderWorldMapHtml(state){
   // server-side anyway) or while inspecting Full Map (movement intent must not drive the character).
   const joystickDisabled=state.snap.state==='TRAVELING'||mapView==='full';
   const joystick=`<div class="joystick${joystickDisabled?' joystick-disabled':''}" id="joystick-base"><div class="joystick-knob" id="joystick-knob"></div></div>`;
-  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${obstacles}${nodes}${hero}</svg>${mapViewToggle}${joystick}</div>${travelStatusHtml(state)}</section>`;
+  // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Static shell only: every
+  // value is "…" until app.js's tickMovementFrame patches these fixed ids in place, the same
+  // per-frame-patch pattern already used for #state-label/.hero-marker — never rebuilt via
+  // render(). Bottom-right, pointer-events:none (see styles.css), clear of the joystick
+  // (bottom-left) and the Follow/Full Map toggle (top-right).
+  const telemetryOverlay=`<div class="telemetry-overlay" id="telemetry-overlay" aria-hidden="true"><div>FPS <span id="telemetry-fps">…</span></div><div>RTT <span id="telemetry-rtt">…</span></div><div>Gap <span id="telemetry-gap">…</span></div><div>Lead <span id="telemetry-lead">…</span></div><div>Flight <span id="telemetry-inflight">…</span></div><div>Throttled <span id="telemetry-throttled">…</span></div><div>Collided <span id="telemetry-collided">…</span></div><div>Suspend <span id="telemetry-suspended">…</span></div><div>Status <span id="telemetry-status">…</span></div><div>Err <span id="telemetry-errorcode">…</span></div></div>`;
+  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${obstacles}${nodes}${hero}</svg>${mapViewToggle}${joystick}${telemetryOverlay}</div>${travelStatusHtml(state)}</section>`;
 }
 
 export function renderCityHubHtml(state){
