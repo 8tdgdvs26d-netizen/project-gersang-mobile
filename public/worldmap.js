@@ -142,7 +142,8 @@ export function renderWorldMapHtml(state){
   const citiesById=indexById(state.cities);
   const roadsById=indexById(state.roads||[]);
   const heroPosition=resolveWorldPosition(state.snap,citiesById,roadsById,Date.now());
-  const camera=heroPosition?computeCameraViewBox(heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS):{x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max};
+  const fullWorldViewBox={x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max};
+  const camera=state.snap.state==='IN_WORLD'&&heroPosition?computeCameraViewBox(heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS):fullWorldViewBox;
   const zones=REGION_META.map(r=>`<g class="map-region ${r.open?'':'region-locked'}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"></rect><text class="map-region-label" x="${r.x+r.w/2}" y="${r.y+30}">${r.name}</text></g>`).join('');
   const roads=roadsSvg(state.cities,state.roads);
   const nodes=state.cities.map(c=>`<g class="map-city" data-city="${c.id}"><circle cx="${c.coordinates.x}" cy="${c.coordinates.y}" r="26"></circle><text x="${c.coordinates.x}" y="${c.coordinates.y+44}">${c.name}</text></g>`).join('');

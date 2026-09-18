@@ -142,3 +142,15 @@
   - 依家3座demo城市分散喺1000×1000世界唔同角落，400×400鏡頭視窗大部分時間只會見到0或1座城市——刻意接受嘅Prototype取捨（今次明確Not-In-Scope唔做minimap），留返Playtest評估。
   - iPhone portrait下鏡頭同SVG container嘅responsive行為未經真機驗證。
 - Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`；P1-02基準 `988addcd498158f4a75d988c49717231d6255fae`。
+
+### P1-03 Review round 2（修正功能回歸：Camera Follow只限IN_WORLD，經Charlie批准）
+
+- **問題**：Code review發現一個未被tests覆蓋嘅功能回歸——`renderWorldMapHtml()`原本喺任何state都用400×400 camera-follow viewBox，但3座demo城市（starter-village 220,150／hill-market 780,150／harbour-city 500,820）分散喺1000×1000世界唔同角落，喺`IN_CITY`同`TRAVELING`state，除咗玩家目前身處嗰座城市，其他城市會完全跌出400×400鏡頭範圍之外，變成睇唔到亦撳唔到——但現有`travel/start`（IN_CITY撳另一座城市出發）同reroute（TRAVELING期間中途撳其他城市改道）呢兩個P1-01/P1-02已有嘅功能，正正需要玩家可以睇到同撳到其他城市。加上P1-02嘅`touch-action:none`令原生map pan唔再係可用嘅替代導航手段，令呢兩個現有功能實際上變成不可達——屬功能回歸。
+- **修正**：Camera Follow只喺`state.snap.state==='IN_WORLD'`先啟用400×400 viewBox；`IN_CITY`同`TRAVELING`一律保持完整`0 0 1000 1000`世界viewBox，確保現有city-to-city travel／reroute嘅目的地城市喺呢兩個state下仍然完全可見同可撳。`world/move`第一次成功（`IN_CITY`→`IN_WORLD`）嘅accepted response之後，先切入400×400 camera-follow viewBox。`TRAVELING`期間嘅hero marker插值（`updateTravelProgress()`）繼續每250ms更新marker位置，但唔再patch viewBox——viewBox喺呢個state保持full-world唔變。Reload/reconnect：`IN_WORLD`用persisted `worldPosition`重建camera；`IN_CITY`／`TRAVELING`重建返full-world viewBox。
+- 冇新增map pan、camera toggle、minimap、zoom、city selector、navigation UI，亦冇改`server.mjs`。
+- 修改：
+  - `public/worldmap.js`：`renderWorldMapHtml()`加`state.snap.state==='IN_WORLD'`判斷，唔係就用full-world viewBox。
+  - `public/app.js`：`updateTravelProgress()`移除咗喺TRAVELING插值期間patch viewBox嗰一段（只保留hero marker cx/cy patch）；`sendWorldMove`嘅accepted response callback唔使改——佢本身淨係喺state變成`IN_WORLD`嗰刻先觸發，邏輯上已經啱。
+  - `test/worldmap.test.mjs`：原有嘅camera-follow render測試改用`IN_WORLD` snap；新增2個test明確證明`IN_CITY`同`TRAVELING`都保持`0 0 1000 1000`並且所有城市喺HTML入面`data-city`都齊全可撳。
+- 測試結果：84（round 1，其中1個test因為呢個修正而更新描述及snap.state，內容邏輯正確反映新行為）+ 2（新增）= 86 tests passed, 0 failed；現有city-tap／travel／reroute相關test完全冇削弱。
+- Rollback基準：同上。

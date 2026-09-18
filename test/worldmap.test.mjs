@@ -256,10 +256,35 @@ test('computeCameraViewBox always returns a fixed viewport size regardless of po
   }
 });
 
-test('renderWorldMapHtml uses a camera-follow viewBox centered on the hero position instead of the fixed full-map viewBox',()=>{
+test('renderWorldMapHtml uses a camera-follow 400x400 viewBox centered on the hero position while IN_WORLD',()=>{
   const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
-  const snap={state:'IN_CITY',cityId:'a',worldPosition:{x:500,y:500}};
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
   const html=renderWorldMapHtml({snap,cities,roads:[]});
   assert.ok(html.includes('viewBox="300 300 400 400"'),`expected a camera-follow viewBox, got: ${html.match(/viewBox="[^"]*"/)}`);
   assert.ok(!html.includes('viewBox="0 0 1000 1000"'));
+});
+
+test('renderWorldMapHtml keeps the full-world 0 0 1000 1000 viewBox while IN_CITY, so other cities stay visible and reachable for travel',()=>{
+  const cities=[
+    {id:'starter-village',name:'A',coordinates:{x:220,y:150}},
+    {id:'hill-market',name:'B',coordinates:{x:780,y:150}},
+    {id:'harbour-city',name:'C',coordinates:{x:500,y:820}}
+  ];
+  const snap={state:'IN_CITY',cityId:'starter-village',worldPosition:{x:220,y:150}};
+  const html=renderWorldMapHtml({snap,cities,roads:[]});
+  assert.ok(html.includes('viewBox="0 0 1000 1000"'),`expected the full-world viewBox, got: ${html.match(/viewBox="[^"]*"/)}`);
+  for(const city of cities)assert.ok(html.includes(`data-city="${city.id}"`));
+});
+
+test('renderWorldMapHtml keeps the full-world 0 0 1000 1000 viewBox while TRAVELING, so mid-journey reroute targets stay visible and reachable',()=>{
+  const cities=[
+    {id:'starter-village',name:'A',coordinates:{x:220,y:150}},
+    {id:'hill-market',name:'B',coordinates:{x:780,y:150}},
+    {id:'harbour-city',name:'C',coordinates:{x:500,y:820}}
+  ];
+  const segments=[{edgeId:'ab',roadId:'ab',fromCityId:'starter-village',toCityId:'hill-market',durationMs:1000,startOffsetMs:0,endOffsetMs:1000}];
+  const snap={state:'TRAVELING',cityId:'starter-village',worldPosition:{x:220,y:150},activeTravel:{fromCityId:'starter-village',toCityId:'hill-market',segments,startedAt:new Date(0).toISOString(),estimatedArrivalAt:new Date(1000).toISOString()}};
+  const html=renderWorldMapHtml({snap,cities,roads:[]});
+  assert.ok(html.includes('viewBox="0 0 1000 1000"'),`expected the full-world viewBox, got: ${html.match(/viewBox="[^"]*"/)}`);
+  for(const city of cities)assert.ok(html.includes(`data-city="${city.id}"`));
 });

@@ -175,7 +175,7 @@ function updateTravelProgress(){
   const fill=document.querySelector('#travel-fill');
   if(fill){const start=Number(fill.dataset.start),end=Number(fill.dataset.end),span=end-start,p=span>0?Math.max(0,Math.min(1,(Date.now()-start)/span)):1;fill.style.width=`${p*100}%`;const label=document.querySelector('#travel-progress-pct');if(label)label.textContent=`${Math.round(p*100)}%`;if(p>=1&&!travelArrivalRefreshing){travelArrivalRefreshing=true;refresh().finally(()=>{travelArrivalRefreshing=false})}}
   const hero=document.querySelector('.hero-marker'),segments=S.snap?.activeTravel?.segments;
-  if(hero&&segments){const pos=computeTravelPosition(segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y);const svg=document.querySelector('.world-map');if(svg)svg.setAttribute('viewBox',viewBoxAttr(computeCameraViewBox(pos,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS)))}}
+  if(hero&&segments){const pos=computeTravelPosition(segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y)}}
 }
 let worldMoveDragging=false,worldMoveLastSentAt=0;
 function svgPointFromEvent(svg,event){
