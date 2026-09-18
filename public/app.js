@@ -195,9 +195,9 @@ function moveWorld(targetX,targetY){sendWorldMove({x:targetX,y:targetY})}
 function setupWorldMovePointer(){
   const svg=document.querySelector('.world-map');if(!svg||S.snap?.state==='TRAVELING')return;
   const send=event=>{const now=Date.now();if(now-worldMoveLastSentAt<150)return;worldMoveLastSentAt=now;const point=svgPointFromEvent(svg,event);if(point)moveWorld(point.x,point.y)};
-  svg.onpointerdown=event=>{if(event.target.closest('.map-city'))return;worldMoveDragging=true;svg.setPointerCapture(event.pointerId);svg.style.touchAction='none';event.preventDefault();send(event)};
+  svg.onpointerdown=event=>{if(event.target.closest('.map-city'))return;worldMoveDragging=true;svg.setPointerCapture(event.pointerId);event.preventDefault();send(event)};
   svg.onpointermove=event=>{if(!worldMoveDragging)return;event.preventDefault();send(event)};
-  const stop=()=>{if(worldMoveDragging){worldMoveDragging=false;svg.style.touchAction='';render()}};
+  const stop=()=>{if(worldMoveDragging){worldMoveDragging=false;render()}};
   svg.onpointerup=stop;svg.onpointercancel=stop;
 }
 async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600)}

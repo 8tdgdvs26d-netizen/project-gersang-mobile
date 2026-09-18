@@ -101,8 +101,17 @@
 
 ### P1-02 Review round 2（Client端修正，經Charlie批准）
 
-- **手機pointer手勢同原生scroll衝突**：`.world-map`嘅`touch-action`只喺實際movement手勢進行期間（`pointerdown`確認非撳中城市節點之後，直到`pointerup`/`pointercancel`）先set做`none`並call`event.preventDefault()`，手勢完結即刻reset返空字串。`.map-scroll`原有嘅`touch-action:pan-x pan-y`同`overflow:auto`完全冇改，冇郁camera、map scrolling、zoom，亦冇將今次Prototype手勢鎖死做正式規格。
+- **手機pointer手勢同原生scroll衝突（round 2初版，已喺round 3修正時機問題，見下）**：`.world-map`嘅`touch-action`喺`pointerdown`確認非撳中城市節點之後先set做`none`並call`event.preventDefault()`，手勢完結reset返空字串。`.map-scroll`原有嘅`touch-action:pan-x pan-y`同`overflow:auto`完全冇改，冇郁camera、map scrolling、zoom，亦冇將今次Prototype手勢鎖死做正式規格。
 - **Movement request race**：新增`public/asyncqueue.js`（新檔，`createCoalescingSender`，純函數、冇DOM／fetch依賴），確保同一時間只有一個`world/move` request在途；drag期間新出現嘅pointer位置會存做「最新pending target」，前一個request完成後先send返最新嗰個，中途過時嘅target會被丟棄，唔會再有「舊target回應遲到令位置跳返轉頭」嘅可能。`public/app.js`嘅`moveWorld()`改為透過呢個wrapper發送，`server.mjs`嘅movement protocol、state machine、Database schema**完全冇改**。
 - 新增4個pure function test（`test/asyncqueue.test.mjs`，新檔）：單一call即時send、in-flight期間多個call被coalesce做一個用最新target嘅follow-up call、sender永遠唔會被同時call兩次（防race核心證明）、唔重疊嘅sequential call個別照送唔會被丟棄。
 - 已披露、未能自動測試嘅部分：`touch-action`／`preventDefault`喺真實觸控手勢入面嘅實際效果（同`.map-scroll`原生scroll嘅交互）屬DOM/瀏覽器行為，呢個codebase一直冇用jsdom等工具測試呢類手勢層面代碼（同現有`setupBattlePan()`等一致），所以呢部分只可以喺真機／真瀏覽器測試驗證，未自動化。
 - 測試結果：75（round 1，內容不變）+ 4（新增）= 79 tests passed, 0 failed。
+
+### P1-02 Review round 3（修正touch-action時機，經Charlie批准）
+
+- **問題**：round 2將`touch-action:none`喺`pointerdown`事件處理器入面先set，時機太遲——瀏覽器通常喺手勢一開始就已經根據當其時嘅`touch-action`決定會唔會接管做native pan/scroll，所以就算JS喺`pointerdown`入面立即set，個手勢仍然可能已經俾瀏覽器搶咗去做native scroll，或者觸發`pointercancel`。
+- **修正**：`touch-action:none`改為直接寫喺`public/styles.css`嘅`.world-map`選擇器入面，變成手勢開始前已經存在嘅靜態樣式，唔再依賴JS喺`pointerdown`之後先設定。`public/app.js`移除咗`pointerdown`入面動態set`svg.style.touchAction='none'`同`pointerup`/`pointercancel`入面reset返空字串嗰兩行——唔再需要，因為CSS由頁面load開始已經套用。`event.preventDefault()`喺`pointerdown`／`pointermove`保留做多一層保險，冇移除。
+- 接受嘅Prototype限制（經批准）：喺World Map SVG上拖動，由遊戲movement手勢優先接管；原生map pan今次唔係核心，正式camera／map navigation留待後續Phase 1任務處理。
+- 冇新增camera、zoom、新gesture mode、joystick、overlay system或map navigation redesign。
+- 修改：`public/styles.css`（`.world-map`加`touch-action:none`）、`public/app.js`（移除動態touch-action set/reset嗰兩行，其餘手勢邏輯、request coalescing完全不變）。
+- 測試結果：79（round 2，內容不變）= 79 tests passed, 0 failed（呢次純CSS/JS timing修正，冇新增test，亦冇改任何現有test）。
