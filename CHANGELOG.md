@@ -115,3 +115,30 @@
 - 冇新增camera、zoom、新gesture mode、joystick、overlay system或map navigation redesign。
 - 修改：`public/styles.css`（`.world-map`加`touch-action:none`）、`public/app.js`（移除動態touch-action set/reset嗰兩行，其餘手勢邏輯、request coalescing完全不變）。
 - 測試結果：79（round 2，內容不變）= 79 tests passed, 0 failed（呢次純CSS/JS timing修正，冇新增test，亦冇改任何現有test）。
+
+## P1-03 — 2026-09-18 — Camera Follow 鏡頭跟隨 Prototype
+
+- 分類：《萬行誌：白手 — Canonical v0.5》Phase 1 第三個開發任務。
+- 起點：`main` @ `988addcd498158f4a75d988c49717231d6255fae`（即P1-02 merge之後）。
+- 目標：喺P1-02自由世界移動之上，加入最小、可靠嘅Camera Follow Prototype，令玩家移動時畫面合理跟住角色，唔再依賴整張固定世界地圖視角。鏡頭純屬client presentation層，唔改任何server-authoritative位置、`IN_WORLD` state machine或movement protocol。
+- 技術方案（經Charlie批准）：Dynamic SVG `viewBox`（唔用`<g transform>`）——World Map嘅`<svg>`根元素`viewBox`屬性由固定字串`"0 0 1000 1000"`改為每次由玩家目前位置即場計算。世界內容（城市、道路、hero marker）繼續用返世界座標畫，一個字都冇改；淨係「畫面顯示緊邊部分」會變。呢個做法令現有`svgPointFromEvent()`（P1-02移動輸入嘅螢幕座標→世界座標轉換）自動繼續正確運作，唔使額外改動。
+- Camera Prototype Parameters（非正式規格，只供Prototype試玩）：
+  - World bounds暫定`0..1000`——**Server（`server.mjs`嘅`WORLD_BOUNDS`）同Client（`public/worldmap.js`嘅`WORLD_BOUNDS`）各自保存相同數值，需要人手保持同步，並非真正single source of truth**（兩者係獨立JS運行環境，冇辦法直接share一個常數；今次冇建立新shared config架構）。
+  - Camera viewport暫定`400×400`世界單位（`CAMERA_VIEWPORT_SIZE`），正方形，同`.world-map`固定正方形render box配合。
+  - Clamp保證鏡頭視窗永遠喺世界邊界之內（`camX>=0`、`camY>=0`、`camX+width<=1000`、`camY+height<=1000`），唔會顯示世界外空白。
+- Camera update節奏：唔新增任何新polling loop或animation engine，直接搭現有3個已經會更新hero marker位置嘅位置——`renderWorldMapHtml()`本身（tab切換／refresh／手勢完結）、`updateTravelProgress()`嘅250ms旅行插值、`sendWorldMove`嘅accepted movement response callback。三處都reuse同一個exported helper（`computeCameraViewBox`+`viewBoxAttr`），冇喺唔同地方各自複製clamp公式。
+- Reload/reconnect：鏡頭純粹由`state.snap.worldPosition`即場計算，唔係獨立persist嘅狀態，reload後第一次render自動重建正確鏡頭，唔需要額外邏輯。
+- Mobile viewport最小修正（經Charlie批准）：`.world-map`由固定`width:760px;height:760px`（大過螢幕、要靠`.map-scroll`原生scroll先睇晒）改為`width:100%;height:auto;aspect-ratio:1/1`，令個SVG自動填滿實際可見container闊度並保持正方形，等鏡頭中心同玩家喺螢幕上實際見到嘅中心一致。`.shell`／`.card`／`.map-scroll`／HUD／nav／導航完全冇改，冇重做layout。
+- 修改：
+  - `public/worldmap.js`：新增exported `WORLD_BOUNDS`、`CAMERA_VIEWPORT_SIZE`常數、`computeCameraViewBox(position,viewportSize,bounds)`、`viewBoxAttr(box)`兩個pure function；`renderWorldMapHtml()`嘅`<svg viewBox="...">`改用呢啲function即場計算（reuse已有嘅`heroPosition`變數）。
+  - `public/app.js`：`updateTravelProgress()`同`sendWorldMove`嘅accepted response callback，喺依家已有嘅`.hero-marker` cx/cy patch旁邊，加多一行用`computeCameraViewBox`+`viewBoxAttr`更新SVG嘅`viewBox`。
+  - `public/styles.css`：`.world-map`改用responsive `width:100%;height:auto;aspect-ratio:1/1`。
+- **不涉及**：`server.mjs`、Database schema／存檔格式、movement protocol、`IN_WORLD` state machine、碰撞、道路導航、城市實體入口、第4座城市、世界怪物、汽車交通、經濟／戰鬥／裝備／傭兵／成長、zoom／pinch、minimap、正式joystick、正式map navigation、Render設定、引擎轉換。
+- 新增5個test（`test/worldmap.test.mjs`）：`computeCameraViewBox`跟隨玩家中心、低邊clamp、高邊clamp、viewport size固定唔變、`renderWorldMapHtml`實際使用dynamic viewBox（唔再係固定"0 0 1000 1000"）。
+- 測試結果：79（現有，內容不變）+ 5（新增）= 84 tests passed, 0 failed。
+- 存檔影響：無。
+- 已知、已披露嘅風險：
+  - Drag期間鏡頭同時郁動嘅回饋圈（「邊拖邊郁鏡頭」）喺真手機上實際手感未經測試，需要真機驗證。
+  - 依家3座demo城市分散喺1000×1000世界唔同角落，400×400鏡頭視窗大部分時間只會見到0或1座城市——刻意接受嘅Prototype取捨（今次明確Not-In-Scope唔做minimap），留返Playtest評估。
+  - iPhone portrait下鏡頭同SVG container嘅responsive行為未經真機驗證。
+- Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`；P1-02基準 `988addcd498158f4a75d988c49717231d6255fae`。

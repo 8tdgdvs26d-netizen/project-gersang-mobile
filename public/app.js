@@ -1,4 +1,4 @@
-import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById} from './worldmap.js';
+import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,computeCameraViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
 const S={sessionId:'',snap:null,cities:[],roads:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],storages:{},tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'map',modal:null};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
@@ -175,7 +175,7 @@ function updateTravelProgress(){
   const fill=document.querySelector('#travel-fill');
   if(fill){const start=Number(fill.dataset.start),end=Number(fill.dataset.end),span=end-start,p=span>0?Math.max(0,Math.min(1,(Date.now()-start)/span)):1;fill.style.width=`${p*100}%`;const label=document.querySelector('#travel-progress-pct');if(label)label.textContent=`${Math.round(p*100)}%`;if(p>=1&&!travelArrivalRefreshing){travelArrivalRefreshing=true;refresh().finally(()=>{travelArrivalRefreshing=false})}}
   const hero=document.querySelector('.hero-marker'),segments=S.snap?.activeTravel?.segments;
-  if(hero&&segments){const pos=computeTravelPosition(segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y)}}
+  if(hero&&segments){const pos=computeTravelPosition(segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y);const svg=document.querySelector('.world-map');if(svg)svg.setAttribute('viewBox',viewBoxAttr(computeCameraViewBox(pos,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS)))}}
 }
 let worldMoveDragging=false,worldMoveLastSentAt=0;
 function svgPointFromEvent(svg,event){
@@ -190,6 +190,8 @@ const sendWorldMove=createCoalescingSender(async({x,y})=>{
   S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state;
   const hero=document.querySelector('.hero-marker');
   if(hero){hero.setAttribute('cx',r.data.worldPosition.x);hero.setAttribute('cy',r.data.worldPosition.y)}
+  const svg=document.querySelector('.world-map');
+  if(svg)svg.setAttribute('viewBox',viewBoxAttr(computeCameraViewBox(r.data.worldPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS)));
 });
 function moveWorld(targetX,targetY){sendWorldMove({x:targetX,y:targetY})}
 function setupWorldMovePointer(){
