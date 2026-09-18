@@ -1,4 +1,5 @@
 import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById} from './worldmap.js';
+import {createCoalescingSender} from './asyncqueue.js';
 const S={sessionId:'',snap:null,cities:[],roads:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],storages:{},tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'map',modal:null};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
 const post=(p,b)=>req(p,{method:'POST',body:JSON.stringify(b)});
@@ -30,7 +31,7 @@ function render(){
   const combatLocked=S.tab==='battle'&&(S.battle?.status==='ACTIVE'||S.battle?.reward?.settlementRequired);
   const tabs=combatLocked?'':`<div class="tabs">${nav('map','地圖')}${nav('cargo','貨艙')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
   document.querySelector('#app').innerHTML=`<div class="shell ${combatLocked?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.32.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
-  document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
+  document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();setupWorldMovePointer();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
   if(['hub','market','storage'].includes(S.tab)&&!canEnterCityHub(S.snap,S.snap.cityId))S.tab='map';
@@ -175,6 +176,29 @@ function updateTravelProgress(){
   if(fill){const start=Number(fill.dataset.start),end=Number(fill.dataset.end),span=end-start,p=span>0?Math.max(0,Math.min(1,(Date.now()-start)/span)):1;fill.style.width=`${p*100}%`;const label=document.querySelector('#travel-progress-pct');if(label)label.textContent=`${Math.round(p*100)}%`;if(p>=1&&!travelArrivalRefreshing){travelArrivalRefreshing=true;refresh().finally(()=>{travelArrivalRefreshing=false})}}
   const hero=document.querySelector('.hero-marker'),segments=S.snap?.activeTravel?.segments;
   if(hero&&segments){const pos=computeTravelPosition(segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y)}}
+}
+let worldMoveDragging=false,worldMoveLastSentAt=0;
+function svgPointFromEvent(svg,event){
+  const pt=svg.createSVGPoint();pt.x=event.clientX;pt.y=event.clientY;
+  const ctm=svg.getScreenCTM();if(!ctm)return null;
+  const local=pt.matrixTransform(ctm.inverse());
+  return{x:local.x,y:local.y};
+}
+const sendWorldMove=createCoalescingSender(async({x,y})=>{
+  const r=await command('/api/commands/world/move',{targetX:x,targetY:y});
+  if(r.status==='REJECTED')return;
+  S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state;
+  const hero=document.querySelector('.hero-marker');
+  if(hero){hero.setAttribute('cx',r.data.worldPosition.x);hero.setAttribute('cy',r.data.worldPosition.y)}
+});
+function moveWorld(targetX,targetY){sendWorldMove({x:targetX,y:targetY})}
+function setupWorldMovePointer(){
+  const svg=document.querySelector('.world-map');if(!svg||S.snap?.state==='TRAVELING')return;
+  const send=event=>{const now=Date.now();if(now-worldMoveLastSentAt<150)return;worldMoveLastSentAt=now;const point=svgPointFromEvent(svg,event);if(point)moveWorld(point.x,point.y)};
+  svg.onpointerdown=event=>{if(event.target.closest('.map-city'))return;worldMoveDragging=true;svg.setPointerCapture(event.pointerId);event.preventDefault();send(event)};
+  svg.onpointermove=event=>{if(!worldMoveDragging)return;event.preventDefault();send(event)};
+  const stop=()=>{if(worldMoveDragging){worldMoveDragging=false;render()}};
+  svg.onpointerup=stop;svg.onpointercancel=stop;
 }
 async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600)}
 boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);

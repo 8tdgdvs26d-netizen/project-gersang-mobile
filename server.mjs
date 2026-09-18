@@ -291,6 +291,30 @@ function reroute(env){const e=check(env);if(e)return e;return idem(env.idempoten
 function resolveArrival(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const t=db.prepare(`SELECT * FROM travel WHERE character_id='char-demo'`).get();if(!t)return{status:'REJECTED',errorCode:'ERR_NO_TRAVEL'};if(Date.now()<t.eta)return{status:'REJECTED',errorCode:'ERR_NOT_ARRIVED'};db.prepare(`UPDATE travel SET status='ARRIVED' WHERE character_id='char-demo'`).run();const w=arrivalWorldColumns(t.to_city);db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY'${w.sql} WHERE id='char-demo'`).run(t.to_city,...w.params);return{status:'ACCEPTED',data:{cityId:t.to_city}}})}
 function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot(),p=env.payload;if(s.state!=='IN_CITY'||s.cityId!==p.cityId)return{status:'REJECTED',errorCode:'ERR_PHYSICAL_PRESENCE_REQUIRED'};if(p.quantity<=0)return{status:'REJECTED',errorCode:'ERR_INVALID_QUANTITY'};const cur=db.prepare(`SELECT quantity FROM storage WHERE character_id='char-demo' AND city_id=? AND good_id=?`).get(s.cityId,p.goodTypeId)?.quantity??0;if(p.direction==='CARGO_TO_STORAGE'){changeCargo(p.goodTypeId,-p.quantity);db.prepare(`INSERT INTO storage VALUES('char-demo',?,?,?) ON CONFLICT(character_id,city_id,good_id) DO UPDATE SET quantity=quantity+excluded.quantity`).run(s.cityId,p.goodTypeId,p.quantity)}else if(p.direction==='STORAGE_TO_CARGO'){if(cur<p.quantity)throw new Error('ERR_INSUFFICIENT_STORAGE');db.prepare(`UPDATE storage SET quantity=quantity-? WHERE character_id='char-demo' AND city_id=? AND good_id=?`).run(p.quantity,s.cityId,p.goodTypeId);changeCargo(p.goodTypeId,p.quantity)}else return{status:'REJECTED',errorCode:'ERR_INVALID_DIRECTION'};return{status:'ACCEPTED',data:{quantity:p.quantity}}})}
 
+// Movement Prototype Parameters (P1-02) — not final balance/UX specs, subject to Playtest.
+const WORLD_BOUNDS={min:0,max:1000};
+const MAX_WORLD_STEP=60;
+const MOVEMENT_MIN_INTERVAL_MS=120;
+let lastWorldMoveAt=0;
+function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{
+  const s=snapshot();
+  if(s.state!=='IN_CITY'&&s.state!=='IN_WORLD')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};
+  if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};
+  const {targetX,targetY}=env.payload;
+  if(!Number.isFinite(targetX)||!Number.isFinite(targetY))return{status:'REJECTED',errorCode:'ERR_INVALID_WORLD_TARGET'};
+  const current=s.worldPosition;
+  const now=Date.now(),throttled=now-lastWorldMoveAt<MOVEMENT_MIN_INTERVAL_MS;
+  let nextX=current.x,nextY=current.y;
+  if(!throttled){
+    const dx=targetX-current.x,dy=targetY-current.y,distance=Math.hypot(dx,dy),ratio=distance>0?Math.min(distance,MAX_WORLD_STEP)/distance:0;
+    nextX=Math.max(WORLD_BOUNDS.min,Math.min(WORLD_BOUNDS.max,current.x+dx*ratio));
+    nextY=Math.max(WORLD_BOUNDS.min,Math.min(WORLD_BOUNDS.max,current.y+dy*ratio));
+    lastWorldMoveAt=now;
+  }
+  db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(nextX,nextY);
+  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:'IN_WORLD',throttled}};
+})}
+
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
   if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.32.0',phase:'P3 World Map & City Hub Vertical Slice'});
@@ -308,7 +332,7 @@ async function api(req,res){
   if(req.method==='POST'&&u.pathname==='/api/session/open')return reply(res,200,{sessionId:openSession()});
   if(req.method==='POST'&&u.pathname==='/api/commands/market/quote'){const b=await readBody(req);try{return reply(res,200,quote(b.goodTypeId,b.side,b.requestedQuantity))}catch(e){return reply(res,400,{errorCode:e.message})}}
   if(req.method==='POST'&&u.pathname==='/api/commands/market/equipment-quote'){const b=await readBody(req);try{return reply(res,200,equipmentQuote(b.itemId))}catch(e){return reply(res,400,{errorCode:e.message})}}
-  if(req.method==='POST'){const env=await readBody(req);let out;if(u.pathname==='/api/commands/market/buy')out=buy(env);else if(u.pathname==='/api/commands/market/sell')out=sell(env);else if(u.pathname==='/api/commands/market/equipment-sell')out=sellEquipment(env);else if(u.pathname==='/api/commands/travel/start')out=startTravel(env);else if(u.pathname==='/api/commands/travel/reroute')out=reroute(env);else if(u.pathname==='/api/commands/travel/resolve-arrival')out=resolveArrival(env);else if(u.pathname==='/api/commands/container/move')out=moveStorage(env);else if(u.pathname==='/api/commands/equipment/equip')out=equipItem(env);else if(u.pathname==='/api/commands/equipment/unequip')out=unequipItem(env);else if(u.pathname==='/api/commands/equipment/transfer')out=transferEquipment(env);else if(u.pathname==='/api/commands/equipment/store')out=storeEquipment(env);else if(u.pathname==='/api/commands/equipment/withdraw')out=withdrawEquipment(env);else if(u.pathname==='/api/commands/battle/settle-loot')out=settleBattleLoot(env);else if(u.pathname==='/api/commands/battle/start')out=startBattle(env);else if(u.pathname==='/api/commands/battle/move')out=battleMove(env);else if(u.pathname==='/api/commands/battle/target')out=battleTarget(env);else if(u.pathname==='/api/commands/battle/hold')out=battleHold(env);else if(u.pathname==='/api/commands/battle/global-pause')out=battleGlobalPause(env);else if(u.pathname==='/api/commands/battle/skill')out=battleSkill(env);else if(u.pathname==='/api/commands/battle/retreat')out=retreatBattle(env);else return false;return reply(res,200,out)}
+  if(req.method==='POST'){const env=await readBody(req);let out;if(u.pathname==='/api/commands/market/buy')out=buy(env);else if(u.pathname==='/api/commands/market/sell')out=sell(env);else if(u.pathname==='/api/commands/market/equipment-sell')out=sellEquipment(env);else if(u.pathname==='/api/commands/travel/start')out=startTravel(env);else if(u.pathname==='/api/commands/travel/reroute')out=reroute(env);else if(u.pathname==='/api/commands/travel/resolve-arrival')out=resolveArrival(env);else if(u.pathname==='/api/commands/container/move')out=moveStorage(env);else if(u.pathname==='/api/commands/equipment/equip')out=equipItem(env);else if(u.pathname==='/api/commands/equipment/unequip')out=unequipItem(env);else if(u.pathname==='/api/commands/equipment/transfer')out=transferEquipment(env);else if(u.pathname==='/api/commands/equipment/store')out=storeEquipment(env);else if(u.pathname==='/api/commands/equipment/withdraw')out=withdrawEquipment(env);else if(u.pathname==='/api/commands/battle/settle-loot')out=settleBattleLoot(env);else if(u.pathname==='/api/commands/battle/start')out=startBattle(env);else if(u.pathname==='/api/commands/battle/move')out=battleMove(env);else if(u.pathname==='/api/commands/battle/target')out=battleTarget(env);else if(u.pathname==='/api/commands/battle/hold')out=battleHold(env);else if(u.pathname==='/api/commands/battle/global-pause')out=battleGlobalPause(env);else if(u.pathname==='/api/commands/battle/skill')out=battleSkill(env);else if(u.pathname==='/api/commands/battle/retreat')out=retreatBattle(env);else if(u.pathname==='/api/commands/world/move')out=moveWorld(env);else return false;return reply(res,200,out)}
   return false;
 }
 function serveStatic(req,res){let p=req.url==='/'?'/index.html':req.url;p=normalize(p).replace(/^(\.\.[/\\])+/, '');const file=join(PUBLIC_DIR,p);try{const data=readFileSync(file),ext=extname(file);const ct=ext==='.html'?'text/html; charset=utf-8':ext==='.js'?'text/javascript; charset=utf-8':ext==='.css'?'text/css; charset=utf-8':'application/octet-stream';res.writeHead(200,{'content-type':ct});res.end(data)}catch{res.writeHead(404);res.end('Not found')}}
