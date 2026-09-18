@@ -10,7 +10,12 @@
 export const JOYSTICK_RADIUS=52;
 export const JOYSTICK_DEADZONE=10;
 export const JOYSTICK_STEP_DISTANCE=18;
-export const JOYSTICK_SEND_INTERVAL_MS=100;
+// 140ms, not 120ms: must stay above server.mjs's MOVEMENT_MIN_INTERVAL_MS=120 with a margin
+// (20ms buffer), otherwise a client cadence at or below the server's own throttle window
+// produces accepted-move / throttled-zero-move / accepted-move oscillation — authoritative
+// position would then only advance roughly every 2 client sends (~every 200ms+), directly
+// re-introducing the double-throttle stutter P1-07A exists to fix.
+export const JOYSTICK_SEND_INTERVAL_MS=140;
 export const CHARACTER_SMOOTHING_MS=80;
 export const CAMERA_SMOOTHING_MS=120;
 

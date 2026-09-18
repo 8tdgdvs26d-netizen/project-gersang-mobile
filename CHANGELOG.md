@@ -282,3 +282,11 @@
   - `JOYSTICK_RADIUS`/`JOYSTICK_DEADZONE`/`JOYSTICK_STEP_DISTANCE`/`CHARACTER_SMOOTHING_MS`/`CAMERA_SMOOTHING_MS`全部係Prototype Parameter，真機test後好可能需要再調。
   - 搖桿方向自然度、放手即停嘅真實觸感、速度是否仍然過快、移動視覺是否仍然一格格跳、camera跟隨會唔會暈、Full Map/Follow切換嘅實際手感、obstacle/boundary真機行為、reload後位置——全部要Charlie親身用iPhone驗證，engineering層自動測試通過**唔代表**P1-07正式pass。
 - Rollback基準：P1-07A正式rollback base = `main` @ `38d9433df51857521bb023392a27d76b332be057`（即P1-06 merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-07A rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
+
+### P1-07A Review round 1（修正client/server throttle timing衝突，經Charlie發現同批准）
+
+- **問題**：`public/movement.js`嘅`JOYSTICK_SEND_INTERVAL_MS`原本設做100ms，但`server.mjs`嘅`MOVEMENT_MIN_INTERVAL_MS`係120ms——client理想情況下send得比server throttle窗口更頻密。持續按住joystick嘅情況下，會形成`accepted movement`→`throttled zero-move`→`accepted movement`→`throttled...`交替出現，令真正authoritative position大約每兩次send（約200ms+）先更新一次——直接同P1-07A本身想解決嘅「雙重throttle導致卡頓」呢個目標衝突。
+- **修正**：`JOYSTICK_SEND_INTERVAL_MS`由100ms改做**140ms**（server 120ms + 20ms buffer），確保正常joystick cadence唔會撞正server throttle窗口。純一個數值修正，`server.mjs`/`MOVEMENT_MIN_INTERVAL_MS`/API contract一個字冇改。
+- 新增1個regression test（`test/movement.test.mjs`）：明確assert`JOYSTICK_SEND_INTERVAL_MS`大過server嘅`MOVEMENT_MIN_INTERVAL_MS`（120ms，因為冇export/import唔到，test入面手動keep in sync並註明），同鎖定目前批准嘅140ms數值。
+- 測試結果：158（round 1，內容不變）+ 1（新增）= 159 tests passed, 0 failed。
+- Rollback基準：同上。

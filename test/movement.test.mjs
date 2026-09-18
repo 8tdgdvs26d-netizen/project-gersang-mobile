@@ -8,8 +8,17 @@ import {
   isMovementAllowed,
   shouldSendJoystickMove,
   JOYSTICK_RADIUS,
-  JOYSTICK_DEADZONE
+  JOYSTICK_DEADZONE,
+  JOYSTICK_SEND_INTERVAL_MS
 } from '../public/movement.js';
+
+// --- Client/server throttle timing: must never oscillate against each other ---
+
+test("JOYSTICK_SEND_INTERVAL_MS stays safely above server.mjs's MOVEMENT_MIN_INTERVAL_MS (120ms) with a margin, so a joystick held at a steady cadence never lands inside the server's own throttle window — a client interval at or below the server's would alternate accepted-move / throttled-zero-move / accepted-move, only advancing the authoritative position roughly every second send and re-introducing the double-throttle stutter this feature exists to fix. (server.mjs's constant isn't exported/importable here, so this value is kept in sync manually — see server.mjs's moveWorld() section.)",()=>{
+  const SERVER_MOVEMENT_MIN_INTERVAL_MS=120;
+  assert.ok(JOYSTICK_SEND_INTERVAL_MS>SERVER_MOVEMENT_MIN_INTERVAL_MS,`expected JOYSTICK_SEND_INTERVAL_MS (${JOYSTICK_SEND_INTERVAL_MS}) to exceed the server's MOVEMENT_MIN_INTERVAL_MS (${SERVER_MOVEMENT_MIN_INTERVAL_MS})`);
+  assert.equal(JOYSTICK_SEND_INTERVAL_MS,140,'locks the currently-approved 140ms value (120ms server minimum + 20ms buffer)');
+});
 
 // --- computeJoystickInput: deadzone / magnitude / direction ---
 
