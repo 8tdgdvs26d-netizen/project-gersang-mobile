@@ -170,7 +170,7 @@
 - Movement順序（同Charlie批准嘅一致）：驗證state/payload → 計算target方向 → `MAX_WORLD_STEP`clamp → `WORLD_BOUNDS`clamp（bounds-safe candidate）→ 由`current`去candidate做swept obstacle collision → 撞到就位置不變、揸唔到就寫入candidate。冇physics engine、冇pathfinding。
 - Collision response：`status`仍然`ACCEPTED`、response新增`data.collided`（boolean）、撞到時`worldPosition`維持`current`不變，唔做clamp-to-edge、唔做sliding。
 - 零位移唔可以觸發state transition（修正咗P1-02遺留嘅一個bug，經Charlie發現）：原本`moveWorld()`嘅DB UPDATE無論任何情況都寫`state='IN_WORLD'`，連throttled（零位移）個case都會錯誤咁將`IN_CITY`轉做`IN_WORLD`。今次修正為：只有實際產生非零位移嘅移動（`nextX/nextY`同`current`唔同）先會寫入資料庫同轉`IN_WORLD`；throttled同collision-blocked兩種零位移情況，依家都會保持原本嘅state同position完全不變。
-- Legacy存檔相容性（經Charlie要求）：唔假設「之後嘅write有驗證所以DB一定合法」——P1-04新增障礙物之前已經存在嘅`worldPosition`存檔，理論上可能已經跌咗入新障礙物（inflate之後）嘅範圍。處理方式：如果`current`本身已經喺某個inflated障礙物範圍內，碰撞判定會跳過*嗰一個*障礙物嘅intersection check（容許玩家郁出嚟），但其他障礙物仍然照常檢查（由外面進入／穿越任何障礙物繼續會被擋）。冇自動migration、冇reset存檔、冇改DB schema。
+- Legacy存檔相容性（經Charlie要求，語義喺Review round 2修正）：唔假設「之後嘅write有驗證所以DB一定合法」——P1-04新增障礙物之前已經存在嘅`worldPosition`存檔，理論上可能已經跌咗入新障礙物（inflate之後）嘅範圍。處理方式（escape-only）：如果`current`本身已經喺某個inflated障礙物範圍內，嗰個障礙物只有喺candidate**仍然喺同一個障礙物內**先會擋（唔容許喺牆內自由行走或者逐步穿越成幅牆）；candidate實際離開咗嗰個障礙物先算合法escape。其他障礙物仍然照常swept check（由外面進入／穿越任何障礙物繼續會被擋）。冇自動migration、冇reset存檔、冇改DB schema。
 - 修改：
   - `server.mjs`：`import`新shared module；移除本地`WORLD_BOUNDS`定義；`moveWorld()`重寫，加入swept obstacle collision、zero-displacement狀態修正、legacy escape-only邏輯、response新增`collided`欄位。
   - `public/worldmap.js`：`import`shared module嘅`WORLD_BOUNDS`／`OBSTACLES`（re-export俾`app.js`繼續用），移除自己嘅重複定義；`renderWorldMapHtml()`加返障礙物SVG `<rect class="map-obstacle">`，純render唔做碰撞判定。
@@ -201,4 +201,13 @@
 - 新增4個test（`test/worldmap.test.mjs`）：`resolveMapViewBox`喺`IN_WORLD`／`IN_CITY`（模擬collision或throttled零位移response仍然帶position）／`TRAVELING`／`IN_WORLD`但冇position四種情況嘅pure function測試。
 - 測試結果：108（round 1，其中1個test改名並加強assertion，內容邏輯正確反映實際行為）+ 4（新增）= 112 tests passed, 0 failed。
 - Branch名偏離（`claude/clever-gauss-ayt5ff`取代原定`claude/p1-04-bounds-collision-obstacles`）今次Charlie已接受，冇重開PR。
+- Rollback基準：同上。
+
+### P1-04 Review round 2（修正legacy escape-only語義，經Charlie發現同批准）
+
+- **問題**：Charlie發現`server.mjs`嘅`segmentBlocked()`原本實作，喺`current`已經喺某個inflated障礙物內嗰陣，會**完全skip**嗰個障礙物嘅intersection check——結果變成legacy玩家一旦出生／落喺牆內，可以喺牆內自由行走，甚至逐步移動穿過成幅牆，先由另一邊離開。呢個同已批准嘅語義「容許由障礙物內向外逃離」唔一致：正確語義應該係「淨係真正離開咗嗰個障礙物先算合法」，唔係「喺牆內乜都得」。
+- **修正**：`segmentBlocked(x1,y1,x2,y2)`依家對每個障礙物獨立判斷——如果`current`喺呢個障礙物內，改為檢查candidate（`x2,y2`）係咪**仍然**喺同一個障礙物內：仍然喺入面就阻擋（保持`current`不變），真正離開咗先當合法escape。如果`current`本身喺障礙物外，維持原有嘅normal swept `segmentIntersectsRect`檢查唔變。其他障礙物一律獨立照常檢查，冇改動。
+- 冇做：migration、teleport out、pathfinding、sliding、nearest-exit calculation、physics redesign——純粹一行判斷邏輯修正。
+- 新增1個test（`test/world-collision.test.mjs`）：legacy已經喺障礙物內，candidate都仍然喺同一障礙物內嘅move會被擋（`collided:true`、position/state不變）——用嚟直接證明「喺牆內唔可以自由行走」，同原有「郁出嚟先算escape」、「escape之後由外面再入返去會被擋」兩個test互補，三個test合埋完整覆蓋escape-only語義。
+- 測試結果：112（round 1，內容不變）+ 1（新增）= 113 tests passed, 0 failed。
 - Rollback基準：同上。

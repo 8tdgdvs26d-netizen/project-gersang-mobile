@@ -122,6 +122,21 @@ test('legacy compatibility: a persisted position already inside an inflated obst
   assert.equal(pointInRect(escaped.data.worldPosition.x,escaped.data.worldPosition.y,inflatedB),false,'escaped position must now be outside the obstacle');
 });
 
+test('legacy compatibility: while still inside the obstacle, a move whose candidate stays inside the same obstacle is blocked — escape-only means the candidate must actually land outside, not just "started inside so anything goes"',async()=>{
+  const ridgeB=OBSTACLES.find(o=>o.id==='ridge-b'),inflatedB=inflateRect(ridgeB,PLAYER_COLLISION_RADIUS);
+  const center={x:(inflatedB.minX+inflatedB.maxX)/2,y:(inflatedB.minY+inflatedB.maxY)/2};
+  const stillInside={x:center.x+15,y:center.y};
+  assert.equal(pointInRect(center.x,center.y,inflatedB),true,'test setup: legacy position must start inside the obstacle');
+  assert.equal(pointInRect(stillInside.x,stillInside.y,inflatedB),true,'test setup: candidate must still land inside the same obstacle');
+  setPosition(center.x,center.y,'IN_CITY');
+  await wait(150);
+  const blocked=await post('/api/commands/world/move',envelope('collision-legacy-still-inside',{targetX:stillInside.x,targetY:stillInside.y}));
+  assert.equal(blocked.status,'ACCEPTED');
+  assert.equal(blocked.data.collided,true);
+  assert.equal(blocked.data.state,'IN_CITY');
+  assert.deepEqual(blocked.data.worldPosition,center);
+});
+
 test('legacy compatibility: once escaped, re-entering the same obstacle from outside is blocked again',async()=>{
   const ridgeB=OBSTACLES.find(o=>o.id==='ridge-b'),inflatedB=inflateRect(ridgeB,PLAYER_COLLISION_RADIUS);
   const center={x:(inflatedB.minX+inflatedB.maxX)/2,y:(inflatedB.minY+inflatedB.maxY)/2};

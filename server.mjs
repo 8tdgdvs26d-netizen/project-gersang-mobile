@@ -300,10 +300,12 @@ let lastWorldMoveAt=0;
 // always run against these, never against the raw OBSTACLES rectangles.
 const INFLATED_OBSTACLES=OBSTACLES.map(r=>inflateRect(r,PLAYER_COLLISION_RADIUS));
 // Legacy-position compatibility: a persisted worldPosition predating P1-04's obstacles could
-// already sit inside an (inflated) obstacle. Minimum preferred behavior: allow leaving that
-// specific obstacle, but keep blocking entry/crossing for every other obstacle as normal.
+// already sit inside an (inflated) obstacle. Escape-only: if current is already inside a given
+// obstacle, that specific obstacle only blocks the move when the candidate is STILL inside it
+// (no free wandering/crossing while inside) — a candidate that actually lands outside is a
+// genuine escape and is allowed. Every other obstacle keeps the normal swept check.
 function segmentBlocked(x1,y1,x2,y2){
-  return INFLATED_OBSTACLES.some(rect=>!pointInRect(x1,y1,rect)&&segmentIntersectsRect(x1,y1,x2,y2,rect));
+  return INFLATED_OBSTACLES.some(rect=>pointInRect(x1,y1,rect)?pointInRect(x2,y2,rect):segmentIntersectsRect(x1,y1,x2,y2,rect));
 }
 function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{
   const s=snapshot();
