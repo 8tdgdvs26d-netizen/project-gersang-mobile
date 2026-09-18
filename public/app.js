@@ -1,6 +1,7 @@
-import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveMapViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS} from './worldmap.js';
+import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
-const S={sessionId:'',snap:null,cities:[],roads:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],storages:{},tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'map',modal:null};
+import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,CHARACTER_SMOOTHING_MS,CAMERA_SMOOTHING_MS} from './movement.js';
+const S={sessionId:'',snap:null,cities:[],roads:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],storages:{},tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'map',modal:null,mapView:'follow'};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
 const post=(p,b)=>req(p,{method:'POST',body:JSON.stringify(b)});
 const env=(payload,idempotencyKey=crypto.randomUUID())=>({commandId:crypto.randomUUID(),idempotencyKey,sessionId:S.sessionId,characterId:'char-demo',clientSentAt:new Date().toISOString(),payload});
@@ -31,11 +32,11 @@ function render(){
   const combatLocked=S.tab==='battle'&&(S.battle?.status==='ACTIVE'||S.battle?.reward?.settlementRequired);
   const tabs=combatLocked?'':`<div class="tabs">${nav('map','地圖')}${nav('cargo','貨艙')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
   document.querySelector('#app').innerHTML=`<div class="shell ${combatLocked?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.32.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
-  document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();setupWorldMovePointer();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
+  document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();setupJoystick();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
   if(['hub','market','storage'].includes(S.tab)&&!canEnterCityHub(S.snap,S.snap.cityId))S.tab='map';
-  if(S.tab==='map')return renderWorldMapHtml({snap:S.snap,cities:S.cities,roads:S.roads});
+  if(S.tab==='map')return renderWorldMapHtml({snap:S.snap,cities:S.cities,roads:S.roads,mapView:S.mapView});
   if(S.tab==='hub')return renderCityHubHtml({snap:S.snap,cities:S.cities});
   if(S.tab==='market'){
     const back=`<button class="btn alt" data-back-hub="1">← 返回City Hub</button>`;
@@ -98,8 +99,9 @@ function battleView(){
 }
 function qty(g){return Math.max(1,Number(document.querySelector(`[data-q="${g}"]`)?.value||1))}
 function wire(){
-  document.querySelectorAll('[data-market-mode]').forEach(b=>b.onclick=()=>{S.marketMode=b.dataset.marketMode;render()});document.querySelectorAll('[data-buy]').forEach(b=>b.onclick=()=>openQuote(b.dataset.buy,'BUY',qty(b.dataset.buy)));document.querySelectorAll('[data-sell]').forEach(b=>b.onclick=()=>openQuote(b.dataset.sell,'SELL',qty(b.dataset.sell)));document.querySelectorAll('[data-equipment-sell]').forEach(b=>b.onclick=()=>openEquipmentQuote(b.dataset.equipmentSell));document.querySelectorAll('[data-store]').forEach(b=>b.onclick=()=>move('CARGO_TO_STORAGE',b.dataset.store));document.querySelectorAll('[data-withdraw]').forEach(b=>b.onclick=()=>move('STORAGE_TO_CARGO',b.dataset.withdraw));document.querySelectorAll('[data-store-equipment]').forEach(b=>b.onclick=()=>storeEquipment(b.dataset.storeEquipment));document.querySelectorAll('[data-withdraw-equipment]').forEach(b=>b.onclick=()=>withdrawEquipment(b.dataset.withdrawEquipment,b.dataset.withdrawUnit));document.querySelectorAll('[data-transfer-item]').forEach(b=>b.onclick=()=>transferEquipment(b.dataset.transferItem,b.dataset.transferUnit));document.querySelectorAll('[data-city]').forEach(el=>el.onclick=()=>handleCityTap(el.dataset.city,{snap:S.snap,travel,reroute}));document.querySelector('#arrive')?.addEventListener('click',arrival);document.querySelector('[data-enter-hub]')?.addEventListener('click',()=>{S.tab='hub';render()});document.querySelectorAll('[data-hub-enter]').forEach(b=>b.onclick=()=>{S.tab=b.dataset.hubEnter;render()});document.querySelector('[data-hub-leave]')?.addEventListener('click',()=>{S.tab=leaveCityHub().tab;render()});document.querySelectorAll('[data-back-hub]').forEach(b=>b.onclick=()=>{S.tab='hub';render()});document.querySelectorAll('[data-settle-loot]').forEach(b=>b.onclick=()=>settleLoot(b.dataset.settleLoot,b.dataset.ownerUnit));document.querySelectorAll('[data-equip-item]').forEach(b=>b.onclick=()=>equip(b.dataset.equipItem,b.dataset.equipUnit));document.querySelectorAll('[data-unequip-item]').forEach(b=>b.onclick=()=>unequip(b.dataset.unequipItem,b.dataset.equipUnit));document.querySelectorAll('[data-deploy-unit]').forEach(b=>b.onclick=()=>toggleDeploymentUnit(b.dataset.deployUnit));document.querySelectorAll('[data-deployment-row]').forEach(b=>b.onclick=()=>deploymentTap(Number(b.dataset.deploymentRow),Number(b.dataset.deploymentCol),b.dataset.deploymentUnit));document.querySelectorAll('[data-deployment-preset]').forEach(b=>b.onclick=()=>setDeploymentPreset(b.dataset.deploymentPreset));document.querySelectorAll('[data-start-encounter]').forEach(b=>b.onclick=()=>startBattle(b.dataset.startEncounter));document.querySelector('#retreat')?.addEventListener('click',retreatBattle);document.querySelector('#select-all')?.addEventListener('click',selectAllUnits);document.querySelector('#hold-position')?.addEventListener('click',holdPosition);document.querySelector('#clear-selection')?.addEventListener('click',clearSelection);document.querySelectorAll('.battle-cell').forEach(c=>c.onclick=()=>battleTap(c));document.querySelectorAll('[data-target-unit]').forEach(b=>b.onclick=()=>targetEnemy(b.dataset.targetUnit));document.querySelectorAll('[data-skill-unit]').forEach(b=>b.onclick=()=>useSkill(b.dataset.skillUnit,b.dataset.skillId));document.querySelector('#battle-pan')?.addEventListener('input',panBattle);
+  document.querySelectorAll('[data-market-mode]').forEach(b=>b.onclick=()=>{S.marketMode=b.dataset.marketMode;render()});document.querySelectorAll('[data-buy]').forEach(b=>b.onclick=()=>openQuote(b.dataset.buy,'BUY',qty(b.dataset.buy)));document.querySelectorAll('[data-sell]').forEach(b=>b.onclick=()=>openQuote(b.dataset.sell,'SELL',qty(b.dataset.sell)));document.querySelectorAll('[data-equipment-sell]').forEach(b=>b.onclick=()=>openEquipmentQuote(b.dataset.equipmentSell));document.querySelectorAll('[data-store]').forEach(b=>b.onclick=()=>move('CARGO_TO_STORAGE',b.dataset.store));document.querySelectorAll('[data-withdraw]').forEach(b=>b.onclick=()=>move('STORAGE_TO_CARGO',b.dataset.withdraw));document.querySelectorAll('[data-store-equipment]').forEach(b=>b.onclick=()=>storeEquipment(b.dataset.storeEquipment));document.querySelectorAll('[data-withdraw-equipment]').forEach(b=>b.onclick=()=>withdrawEquipment(b.dataset.withdrawEquipment,b.dataset.withdrawUnit));document.querySelectorAll('[data-transfer-item]').forEach(b=>b.onclick=()=>transferEquipment(b.dataset.transferItem,b.dataset.transferUnit));document.querySelectorAll('[data-city]').forEach(el=>el.onclick=()=>handleCityTap(el.dataset.city,{snap:S.snap,travel,reroute}));document.querySelector('#arrive')?.addEventListener('click',arrival);document.querySelector('[data-enter-hub]')?.addEventListener('click',()=>{S.tab='hub';render()});document.querySelectorAll('[data-hub-enter]').forEach(b=>b.onclick=()=>{S.tab=b.dataset.hubEnter;render()});document.querySelector('[data-hub-leave]')?.addEventListener('click',()=>{S.tab=leaveCityHub().tab;render()});document.querySelectorAll('[data-back-hub]').forEach(b=>b.onclick=()=>{S.tab='hub';render()});document.querySelectorAll('[data-settle-loot]').forEach(b=>b.onclick=()=>settleLoot(b.dataset.settleLoot,b.dataset.ownerUnit));document.querySelectorAll('[data-equip-item]').forEach(b=>b.onclick=()=>equip(b.dataset.equipItem,b.dataset.equipUnit));document.querySelectorAll('[data-unequip-item]').forEach(b=>b.onclick=()=>unequip(b.dataset.unequipItem,b.dataset.equipUnit));document.querySelectorAll('[data-deploy-unit]').forEach(b=>b.onclick=()=>toggleDeploymentUnit(b.dataset.deployUnit));document.querySelectorAll('[data-deployment-row]').forEach(b=>b.onclick=()=>deploymentTap(Number(b.dataset.deploymentRow),Number(b.dataset.deploymentCol),b.dataset.deploymentUnit));document.querySelectorAll('[data-deployment-preset]').forEach(b=>b.onclick=()=>setDeploymentPreset(b.dataset.deploymentPreset));document.querySelectorAll('[data-start-encounter]').forEach(b=>b.onclick=()=>startBattle(b.dataset.startEncounter));document.querySelector('#retreat')?.addEventListener('click',retreatBattle);document.querySelector('#select-all')?.addEventListener('click',selectAllUnits);document.querySelector('#hold-position')?.addEventListener('click',holdPosition);document.querySelector('#clear-selection')?.addEventListener('click',clearSelection);document.querySelectorAll('.battle-cell').forEach(c=>c.onclick=()=>battleTap(c));document.querySelectorAll('[data-target-unit]').forEach(b=>b.onclick=()=>targetEnemy(b.dataset.targetUnit));document.querySelectorAll('[data-skill-unit]').forEach(b=>b.onclick=()=>useSkill(b.dataset.skillUnit,b.dataset.skillId));document.querySelector('#battle-pan')?.addEventListener('input',panBattle);document.querySelector('#map-view-toggle')?.addEventListener('click',toggleMapView);
 }
+function toggleMapView(){S.mapView=S.mapView==='follow'?'full':'follow';if(S.mapView==='full'){joystickActive=false;joystickInput={active:false,dirX:0,dirY:0,magnitude:0}}render()}
 async function settleLoot(decision,ownerUnitId){const battleId=S.battle?.id;if(!battleId)return;const r=await command('/api/commands/battle/settle-loot',{battleId,decision,...(ownerUnitId?{ownerUnitId}:{})});if(r.status==='REJECTED')return toast(r.errorCode);const owner=S.roster.find(x=>x.id===ownerUnitId)?.name;toast(decision==='KEEP'?`戰利品已放入${owner}背包`:'已放棄戰利品');await refresh()}
 async function equip(itemId,unitId){const r=await command('/api/commands/equipment/equip',{itemId,unitId});if(r.status==='REJECTED')return toast('裝備失敗');toast('裝備完成，能力已更新');await refresh()}
 async function unequip(itemId,unitId){const r=await command('/api/commands/equipment/unequip',{itemId,unitId});if(r.status==='REJECTED')return toast('卸下失敗');toast('裝備已放回角色背包');await refresh()}
@@ -177,31 +179,77 @@ function updateTravelProgress(){
   const hero=document.querySelector('.hero-marker'),segments=S.snap?.activeTravel?.segments;
   if(hero&&segments){const pos=computeTravelPosition(segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y)}}
 }
-let worldMoveDragging=false,worldMoveLastSentAt=0;
-function svgPointFromEvent(svg,event){
-  const pt=svg.createSVGPoint();pt.x=event.clientX;pt.y=event.clientY;
-  const ctm=svg.getScreenCTM();if(!ctm)return null;
-  const local=pt.matrixTransform(ctm.inverse());
-  return{x:local.x,y:local.y};
-}
+// P1-07A: sendWorldMove is data-only — it updates the authoritative S.snap and nothing else.
+// All on-screen presentation (hero marker position, camera viewBox) is owned exclusively by
+// tickMovementFrame()'s requestAnimationFrame loop below, which eases the display toward
+// whatever S.snap.worldPosition/state currently say. This keeps "what we ask the server for"
+// and "what we show on screen" cleanly separated, per P1-07A's server-authoritative requirement.
 const sendWorldMove=createCoalescingSender(async({x,y})=>{
   const r=await command('/api/commands/world/move',{targetX:x,targetY:y});
   if(r.status==='REJECTED')return;
   S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state;
-  const hero=document.querySelector('.hero-marker');
-  if(hero){hero.setAttribute('cx',r.data.worldPosition.x);hero.setAttribute('cy',r.data.worldPosition.y)}
-  const svg=document.querySelector('.world-map');
-  if(svg)svg.setAttribute('viewBox',viewBoxAttr(resolveMapViewBox(r.data.state,r.data.worldPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS)));
   if(r.data.collided)toast('撞到障礙物');
 });
-function moveWorld(targetX,targetY){sendWorldMove({x:targetX,y:targetY})}
-function setupWorldMovePointer(){
-  const svg=document.querySelector('.world-map');if(!svg||S.snap?.state==='TRAVELING')return;
-  const send=event=>{const now=Date.now();if(now-worldMoveLastSentAt<150)return;worldMoveLastSentAt=now;const point=svgPointFromEvent(svg,event);if(point)moveWorld(point.x,point.y)};
-  svg.onpointerdown=event=>{if(event.target.closest('.map-city'))return;worldMoveDragging=true;svg.setPointerCapture(event.pointerId);event.preventDefault();send(event)};
-  svg.onpointermove=event=>{if(!worldMoveDragging)return;event.preventDefault();send(event)};
-  const stop=()=>{if(worldMoveDragging){worldMoveDragging=false;render()}};
-  svg.onpointerup=stop;svg.onpointercancel=stop;
+
+// Virtual joystick (P1-07A) — fixed bottom-left, replaces the old SVG direct-drag-to-move input.
+// Only one movement input mechanism is ever active: the joystick is the sole driver of free
+// world movement now.
+let joystickActive=false,joystickPointerId=null,joystickInput={active:false,dirX:0,dirY:0,magnitude:0};
+function updateJoystickFromEvent(event,centerX,centerY,knob){
+  const dx=event.clientX-centerX,dy=event.clientY-centerY;
+  const knobOffset=clampJoystickKnob(dx,dy,JOYSTICK_RADIUS);
+  if(knob)knob.style.transform=`translate(${knobOffset.x}px,${knobOffset.y}px)`;
+  joystickInput=computeJoystickInput(dx,dy,JOYSTICK_RADIUS,JOYSTICK_DEADZONE);
 }
-async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600)}
+function setupJoystick(){
+  const base=document.querySelector('#joystick-base');
+  const knob=document.querySelector('#joystick-knob');
+  const reset=()=>{joystickActive=false;joystickPointerId=null;joystickInput={active:false,dirX:0,dirY:0,magnitude:0};if(knob)knob.style.transform='translate(0px,0px)'};
+  reset();
+  if(!base||base.classList.contains('joystick-disabled'))return;
+  base.onpointerdown=event=>{
+    event.preventDefault();
+    joystickActive=true;joystickPointerId=event.pointerId;
+    base.setPointerCapture(event.pointerId);
+    const rect=base.getBoundingClientRect(),centerX=rect.left+rect.width/2,centerY=rect.top+rect.height/2;
+    updateJoystickFromEvent(event,centerX,centerY,knob);
+    base.onpointermove=moveEvent=>{if(!joystickActive||moveEvent.pointerId!==joystickPointerId)return;moveEvent.preventDefault();updateJoystickFromEvent(moveEvent,centerX,centerY,knob)};
+    const stop=stopEvent=>{if(stopEvent&&stopEvent.pointerId!==undefined&&stopEvent.pointerId!==joystickPointerId)return;reset()};
+    base.onpointerup=stop;base.onpointercancel=stop;base.onlostpointercapture=stop;
+  };
+}
+
+// Presentation smoothing (P1-07A): eases the displayed hero position and camera box toward the
+// latest authoritative server values every animation frame, using delta-time based easing (frame
+// rate independent — see movement.js's easeTowards). Display never leads or predicts past the
+// server's last confirmed position, so it can never visually cross an obstacle the server has
+// already rejected: it just eases toward that same unchanged, safe point and stops there.
+let displayPosition=null,displayCamera=null,lastFrameTime=0,lastJoystickSendAt=0;
+function tickMovementFrame(now){
+  requestAnimationFrame(tickMovementFrame);
+  const dt=lastFrameTime?Math.min(now-lastFrameTime,100):16;
+  lastFrameTime=now;
+  if(!S.snap||S.snap.state==='TRAVELING')return;
+  const serverPos=S.snap.worldPosition;
+  if(!serverPos)return;
+  if(S.snap.state==='IN_WORLD'){
+    if(!displayPosition)displayPosition={...serverPos};
+    displayPosition={x:easeTowards(displayPosition.x,serverPos.x,dt,CHARACTER_SMOOTHING_MS),y:easeTowards(displayPosition.y,serverPos.y,dt,CHARACTER_SMOOTHING_MS)};
+  }else{
+    displayPosition={...serverPos};
+  }
+  const hero=document.querySelector('.hero-marker');
+  if(hero){hero.setAttribute('cx',displayPosition.x);hero.setAttribute('cy',displayPosition.y)}
+  const targetCamera=resolveEffectiveViewBox(S.mapView,S.snap.state,serverPos,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  if(!displayCamera)displayCamera={...targetCamera};
+  displayCamera={x:easeTowards(displayCamera.x,targetCamera.x,dt,CAMERA_SMOOTHING_MS),y:easeTowards(displayCamera.y,targetCamera.y,dt,CAMERA_SMOOTHING_MS),width:easeTowards(displayCamera.width,targetCamera.width,dt,CAMERA_SMOOTHING_MS),height:easeTowards(displayCamera.height,targetCamera.height,dt,CAMERA_SMOOTHING_MS)};
+  const svg=document.querySelector('.world-map');
+  if(svg)svg.setAttribute('viewBox',viewBoxAttr(displayCamera));
+  if(joystickActive&&shouldSendJoystickMove(S.mapView,joystickInput.active)&&now-lastJoystickSendAt>=JOYSTICK_SEND_INTERVAL_MS){
+    lastJoystickSendAt=now;
+    const target=computeJoystickTarget(serverPos,joystickInput,JOYSTICK_STEP_DISTANCE);
+    if(target)sendWorldMove(target);
+  }
+}
+async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600);requestAnimationFrame(tickMovementFrame)}
 boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);

@@ -149,17 +149,32 @@ export function resolveMapViewBox(state,position,viewportSize,bounds){
   return {x:bounds.min,y:bounds.min,width:bounds.max,height:bounds.max};
 }
 
+// P1-07A: two-tier camera. 'full' is inspection-only and always shows the whole world,
+// overriding whatever resolveMapViewBox() would otherwise pick for the current state — additive
+// on top of resolveMapViewBox(), which stays unchanged so its existing behavior/tests hold.
+export function resolveEffectiveViewBox(mapView,state,position,viewportSize,bounds){
+  if(mapView==='full')return {x:bounds.min,y:bounds.min,width:bounds.max,height:bounds.max};
+  return resolveMapViewBox(state,position,viewportSize,bounds);
+}
+
 export function renderWorldMapHtml(state){
   const citiesById=indexById(state.cities);
   const roadsById=indexById(state.roads||[]);
   const heroPosition=resolveWorldPosition(state.snap,citiesById,roadsById,Date.now());
-  const camera=resolveMapViewBox(state.snap.state,heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  const mapView=state.mapView||'follow';
+  const camera=resolveEffectiveViewBox(mapView,state.snap.state,heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
   const zones=REGION_META.map(r=>`<g class="map-region ${r.open?'':'region-locked'}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"></rect><text class="map-region-label" x="${r.x+r.w/2}" y="${r.y+30}">${r.name}</text></g>`).join('');
   const roads=roadsSvg(state.cities,state.roads);
   const obstacles=OBSTACLES.map(o=>`<rect class="map-obstacle" data-obstacle="${o.id}" x="${o.minX}" y="${o.minY}" width="${o.maxX-o.minX}" height="${o.maxY-o.minY}"></rect>`).join('');
   const nodes=state.cities.map(c=>`<g class="map-city" data-city="${c.id}"><circle cx="${c.coordinates.x}" cy="${c.coordinates.y}" r="26"></circle><text x="${c.coordinates.x}" y="${c.coordinates.y+44}">${c.name}</text></g>`).join('');
   const hero=heroPosition?`<circle class="hero-marker" cx="${heroPosition.x}" cy="${heroPosition.y}" r="14"></circle>`:'';
-  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${obstacles}${nodes}${hero}</svg></div>${travelStatusHtml(state)}</section>`;
+  // Follow View / Full Map toggle (P1-07A) — client-only presentation state, never sent to the server.
+  const mapViewToggle=`<button class="btn map-view-toggle" id="map-view-toggle" type="button">${mapView==='follow'?'🗺️ 全圖':'📍 跟隨'}</button>`;
+  // Fixed bottom-left virtual joystick (P1-07A) — disabled while TRAVELING (movement rejected
+  // server-side anyway) or while inspecting Full Map (movement intent must not drive the character).
+  const joystickDisabled=state.snap.state==='TRAVELING'||mapView==='full';
+  const joystick=`<div class="joystick${joystickDisabled?' joystick-disabled':''}" id="joystick-base"><div class="joystick-knob" id="joystick-knob"></div></div>`;
+  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${obstacles}${nodes}${hero}</svg>${mapViewToggle}${joystick}</div>${travelStatusHtml(state)}</section>`;
 }
 
 export function renderCityHubHtml(state){
