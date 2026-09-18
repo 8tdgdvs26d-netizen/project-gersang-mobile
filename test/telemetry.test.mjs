@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   nextFpsEma,
+  nextTelemetryFrameDelta,
   predictionLeadDistance,
   nextMoveTiming,
   formatMs,
@@ -43,6 +44,47 @@ test('nextFpsEma: a steady dt converges toward the matching instant FPS over rep
 test('nextFpsEma: a single bad frame (one huge dt / big FPS drop) only nudges the EMA, never snaps to it',()=>{
   const ema=nextFpsEma(60,200); // one very slow ~5fps frame
   assert.ok(ema<60&&ema>10,`expected a partial dip, got ${ema}`);
+});
+
+// --- nextTelemetryFrameDelta (P1-07C Merge Gate review) ---
+// Must be the RAW, uncapped elapsed time — movement's own dt is clamped to 100ms for smoothing/
+// prediction purposes, but telemetry needs the true stall length to tell a rendering stall apart
+// from a network gap. A real 250ms/500ms frame must never be reported back as ~100ms.
+
+test('nextTelemetryFrameDelta: the very first frame (no previous timestamp) returns null, not a fabricated dt',()=>{
+  assert.equal(nextTelemetryFrameDelta(null,1000),null);
+});
+
+test('nextTelemetryFrameDelta: a 250ms real frame interval is reported as exactly 250ms, never clamped to 100ms',()=>{
+  assert.equal(nextTelemetryFrameDelta(1000,1250),250);
+});
+
+test('nextTelemetryFrameDelta: a 500ms real frame interval is reported as exactly 500ms, never clamped to 100ms',()=>{
+  assert.equal(nextTelemetryFrameDelta(1000,1500),500);
+});
+
+test('nextTelemetryFrameDelta: a normal ~16ms frame is reported as-is (no clamping in the normal case either)',()=>{
+  assert.ok(Math.abs(nextTelemetryFrameDelta(1000,1016.7)-16.7)<1e-9);
+});
+
+test('nextFpsEma fed nextTelemetryFrameDelta\'s raw (uncapped) 250ms stall reflects the true ~4fps, not the ~10fps a 100ms-capped dt would produce',()=>{
+  const rawDt=nextTelemetryFrameDelta(1000,1250); // 250ms, uncapped
+  assert.equal(rawDt,250);
+  const ema=nextFpsEma(60,rawDt);
+  const instantFps=1000/rawDt; // ~4fps
+  assert.ok(Math.abs(instantFps-4)<0.01,`test setup: expected instant fps ~4, got ${instantFps}`);
+  // the EMA nudges toward ~4fps, not toward the ~10fps a 100ms-capped dt would have produced
+  const emaIfWronglyCappedAt100ms=nextFpsEma(60,100);
+  assert.ok(ema<emaIfWronglyCappedAt100ms,`expected the true 250ms stall to pull FPS down further than a wrongly-capped 100ms would, got ${ema} vs ${emaIfWronglyCappedAt100ms}`);
+});
+
+test('nextFpsEma fed nextTelemetryFrameDelta\'s raw 500ms stall reflects the true ~2fps direction',()=>{
+  const rawDt=nextTelemetryFrameDelta(1000,1500); // 500ms, uncapped
+  const instantFps=1000/rawDt;
+  assert.ok(Math.abs(instantFps-2)<0.01,`test setup: expected instant fps ~2, got ${instantFps}`);
+  const emaFrom500ms=nextFpsEma(60,rawDt);
+  const emaFrom250ms=nextFpsEma(60,250);
+  assert.ok(emaFrom500ms<emaFrom250ms,'a longer real stall must pull the FPS EMA down further than a shorter one');
 });
 
 // --- predictionLeadDistance ---

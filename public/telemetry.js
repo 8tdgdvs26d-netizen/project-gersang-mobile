@@ -15,8 +15,19 @@ export const TELEMETRY_OVERLAY_PATCH_INTERVAL_MS=100; // overlay DOM writes are 
 // DOM write is throttled, so the debug UI itself doesn't add measurable DOM load to the FPS it's
 // trying to measure.
 
+// P1-07C Merge Gate review — the raw, uncapped elapsed time (ms) since the previous animation
+// frame, measured independently of movement's own `dt` (which app.js's tickMovementFrame clamps
+// to 100ms for smoothing/prediction purposes — a real 250ms rendering stall would otherwise be
+// reported to telemetry as only ~100ms, understating a real stutter as ~10fps instead of ~4fps and
+// defeating the whole point of using telemetry to tell rendering stalls apart from network gaps).
+// Returns null on the very first frame (no previous timestamp yet) rather than a fabricated dt.
+export function nextTelemetryFrameDelta(previousTimestamp,now){
+  return previousTimestamp==null?null:now-previousTimestamp;
+}
+
 // Delta-time based FPS EMA, reusing movement.js's own easeTowards (frame-rate independent
-// exponential smoothing) rather than inventing a second smoothing algorithm. `dt` in ms.
+// exponential smoothing) rather than inventing a second smoothing algorithm. `dt` in ms — must be
+// the raw telemetry frame delta (see nextTelemetryFrameDelta), never movement's capped dt.
 export function nextFpsEma(previousEma,dt,smoothingMs=TELEMETRY_FPS_SMOOTHING_MS){
   const instantFps=dt>0?1000/dt:(previousEma??60);
   if(previousEma==null)return instantFps;

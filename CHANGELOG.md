@@ -391,3 +391,12 @@
 - 存檔影響：無。
 - **重要**：P1-07C完成**唔代表P1-07 pass**，純粹診斷證據收集。呢個phase嘅目的係等Charlie跟Issue #21嘅三段式protocol（穩定Wi-Fi／較弱Wi-Fi／4G-5G，各10秒×3次）錄screen recording，等下一輪根據實際FPS/RTT/response gap/prediction lead數據，先判斷真正瓶頸係咩，先至提交針對性修正Plan。
 - Rollback基準：P1-07C正式rollback base = `main` @ `bdf539b3b96e99ba835affcbc205b37c078610ef`（即P1-07B merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-07C rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
+
+### P1-07C Merge Gate review（修正FPS telemetry被movement dt cap污染，經Charlie發現同批准）
+
+- **問題**：原本FPS EMA直接reuse movement嘅`dt`（`tickMovementFrame`嗰句`const dt=lastFrameTime?Math.min(now-lastFrameTime,100):16`）——呢個`Math.min(...,100)`係movement smoothing/prediction先需要嘅cap，但套用到FPS量度上會令真實250ms嘅rendering stall被誤報做~100ms（~10fps）而唔係真正嘅~4fps，削弱咗P1-07C本身「用嚟區分rendering問題vs network問題」嘅診斷目的。
+- **修正**：`public/telemetry.js`新增pure helper`nextTelemetryFrameDelta(previousTimestamp,now)`——回傳原始、冇cap嘅frame間距（第一frame冇previous timestamp就回傳`null`）。`public/app.js`新增獨立state`telemetryLastFrameTimestamp`，FPS EMA改用呢個獨立、唔受movement dt cap影響嘅raw delta計算；movement本身嘅`dt`/`lastFrameTime`邏輯（第327行）**一個字冇改**。
+- 新增6個regression test（`test/telemetry.test.mjs`）：第一frame回傳`null`（唔會捏造dt）、250ms真實間距原樣回傳（唔變100ms）、500ms真實間距原樣回傳（唔變100ms）、正常~16ms frame唔受影響、餵入raw 250ms stall嘅FPS EMA明確比錯誤capped-at-100ms嘅結果更低（反映真正~4fps方向）、500ms stall嘅FPS EMA明確比250ms stall更低（反映~2fps方向）。
+- 其餘telemetry（RTT／response gap／in-flight／lead／throttled／collided／status／errorCode／100ms overlay DOM throttle）全部**冇改**。`movement.js`/`asyncqueue.js`/`server.mjs`/`worldgeometry.js`/movement參數/camera/prediction/reconciliation/network behavior——一個字都冇改。
+- 測試結果：209（round前，內容不變）+ 6（新增）= 215 tests passed, 0 failed。
+- Rollback基準：同上。

@@ -5,7 +5,7 @@ import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
 // the existing movement path above; nothing in this import or the code that uses it changes any
 // movement/joystick/prediction/reconciliation/camera behavior.
-import {nextFpsEma,predictionLeadDistance,nextMoveTiming,formatMs,formatFlag,formatLeadReadout,TELEMETRY_OVERLAY_PATCH_INTERVAL_MS} from './telemetry.js';
+import {nextFpsEma,nextTelemetryFrameDelta,predictionLeadDistance,nextMoveTiming,formatMs,formatFlag,formatLeadReadout,TELEMETRY_OVERLAY_PATCH_INTERVAL_MS} from './telemetry.js';
 // P1-07B: same INFLATED_OBSTACLES construction as server.mjs's own (OBSTACLES.map(inflateRect)) —
 // used only as a presentation-only prediction clamp (see clampPredictedStep), never as the real
 // collision authority, which remains server.mjs's own segmentBlocked() over the same primitives.
@@ -196,7 +196,7 @@ function updateTravelProgress(){
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21) state. Read-only observation of
 // the existing movement path: nothing here is ever fed back into movement/prediction/
 // reconciliation/camera — see telemetry.js for the pure math/formatting.
-let telemetryFpsEma=null,telemetryLastOverlayPatchAt=0,telemetryMoveInFlight=false,telemetryLastCompletedAt=null,telemetryLastRttMs=null,telemetryLastResponseGapMs=null,telemetryLastStatus=null,telemetryLastErrorCode=null,telemetryLastThrottled=null,telemetryLastCollided=null;
+let telemetryFpsEma=null,telemetryLastFrameTimestamp=null,telemetryLastOverlayPatchAt=0,telemetryMoveInFlight=false,telemetryLastCompletedAt=null,telemetryLastRttMs=null,telemetryLastResponseGapMs=null,telemetryLastStatus=null,telemetryLastErrorCode=null,telemetryLastThrottled=null,telemetryLastCollided=null;
 // Single call site for all three /world/move completion paths (ACCEPTED, REJECTED, a thrown
 // network/command exception) so RTT/response-gap timing is computed identically every time — see
 // P1-07C Merge Gate direction. throttled/collided are explicitly nulled on REJECTED/ERROR so the
@@ -361,7 +361,15 @@ function tickMovementFrame(now){
   // P1-07C — diagnostic-only tail: reads predictedPosition/serverPos that the movement logic
   // above already settled this frame, never writes back to them. FPS/lead are computed every
   // frame; only the overlay DOM write is throttled (see patchTelemetryOverlay).
-  telemetryFpsEma=nextFpsEma(telemetryFpsEma,dt);
+  //
+  // P1-07C Merge Gate review — FPS must use its own raw, uncapped frame delta, never movement's
+  // `dt` above (which is clamped to 100ms for smoothing/prediction purposes — a real 250ms
+  // rendering stall would otherwise read back as only ~100ms/~10fps instead of the true ~4fps,
+  // defeating telemetry's whole purpose of telling rendering stalls apart from network gaps).
+  // Movement's own dt/lastFrameTime logic above is completely untouched.
+  const rawTelemetryDt=nextTelemetryFrameDelta(telemetryLastFrameTimestamp,now);
+  telemetryLastFrameTimestamp=now;
+  if(rawTelemetryDt!=null)telemetryFpsEma=nextFpsEma(telemetryFpsEma,rawTelemetryDt);
   patchTelemetryOverlay(now,predictionLeadDistance(predictedPosition,serverPos));
 }
 async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600);requestAnimationFrame(tickMovementFrame)}
