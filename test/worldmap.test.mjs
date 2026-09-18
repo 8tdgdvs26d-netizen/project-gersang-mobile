@@ -16,6 +16,7 @@ import {
   renderWorldMapHtml,
   resolveWorldPosition,
   computeCameraViewBox,
+  resolveMapViewBox,
   WORLD_BOUNDS,
   OBSTACLES,
   CAMERA_VIEWPORT_SIZE
@@ -281,6 +282,27 @@ test('computeCameraViewBox always returns a fixed viewport size regardless of po
     assert.ok(box.x>=WORLD_BOUNDS.min&&box.x+box.width<=WORLD_BOUNDS.max);
     assert.ok(box.y>=WORLD_BOUNDS.min&&box.y+box.height<=WORLD_BOUNDS.max);
   }
+});
+
+test('resolveMapViewBox returns a camera-follow viewBox for IN_WORLD with a position',()=>{
+  const box=resolveMapViewBox('IN_WORLD',{x:500,y:500},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,computeCameraViewBox({x:500,y:500},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS));
+  assert.notDeepEqual(box,{x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max});
+});
+
+test('resolveMapViewBox returns the full-world viewBox for IN_CITY regardless of the worldPosition passed in (covers a collision-blocked or throttled zero-displacement move whose response still carries a position)',()=>{
+  const box=resolveMapViewBox('IN_CITY',{x:500,y:500},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,{x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max});
+});
+
+test('resolveMapViewBox returns the full-world viewBox for TRAVELING regardless of the position passed in',()=>{
+  const box=resolveMapViewBox('TRAVELING',{x:500,y:500},CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,{x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max});
+});
+
+test('resolveMapViewBox falls back to the full-world viewBox for IN_WORLD when no position is available',()=>{
+  const box=resolveMapViewBox('IN_WORLD',null,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
+  assert.deepEqual(box,{x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max});
 });
 
 test('renderWorldMapHtml uses a camera-follow 400x400 viewBox centered on the hero position while IN_WORLD',()=>{

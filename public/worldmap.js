@@ -140,12 +140,20 @@ export function computeCameraViewBox(position,viewportSize,bounds){
 
 export function viewBoxAttr(box){return `${box.x} ${box.y} ${box.width} ${box.height}`}
 
+// Single source of truth for "which viewBox does this state get" (P1-04 review round 1) —
+// shared by renderWorldMapHtml() and app.js's sendWorldMove callback, so an async movement
+// response can never force camera-follow onto a state (e.g. IN_CITY after a collision or a
+// throttled zero-displacement move) that must keep the full-world view.
+export function resolveMapViewBox(state,position,viewportSize,bounds){
+  if(state==='IN_WORLD'&&position)return computeCameraViewBox(position,viewportSize,bounds);
+  return {x:bounds.min,y:bounds.min,width:bounds.max,height:bounds.max};
+}
+
 export function renderWorldMapHtml(state){
   const citiesById=indexById(state.cities);
   const roadsById=indexById(state.roads||[]);
   const heroPosition=resolveWorldPosition(state.snap,citiesById,roadsById,Date.now());
-  const fullWorldViewBox={x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max};
-  const camera=state.snap.state==='IN_WORLD'&&heroPosition?computeCameraViewBox(heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS):fullWorldViewBox;
+  const camera=resolveMapViewBox(state.snap.state,heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
   const zones=REGION_META.map(r=>`<g class="map-region ${r.open?'':'region-locked'}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"></rect><text class="map-region-label" x="${r.x+r.w/2}" y="${r.y+30}">${r.name}</text></g>`).join('');
   const roads=roadsSvg(state.cities,state.roads);
   const obstacles=OBSTACLES.map(o=>`<rect class="map-obstacle" data-obstacle="${o.id}" x="${o.minX}" y="${o.minY}" width="${o.maxX-o.minX}" height="${o.maxY-o.minY}"></rect>`).join('');

@@ -68,12 +68,16 @@ test('a swept move whose start and end points are both outside a thin obstacle, 
   assert.deepEqual(moved.data.worldPosition,start);
 });
 
-test('a collision-blocked move does not consume the ability to move: a subsequent legal move away from the obstacle still succeeds',async()=>{
+test('a collision-blocked move consumes the normal movement interval like any other move (an immediate follow-up is throttled), but there is no permanent lock-out: a legal move after the normal interval still succeeds',async()=>{
   const start={x:inflatedA.minX-30,y:centerA.y};
   setPosition(start.x,start.y,'IN_WORLD');
   await wait(150);
   const blocked=await post('/api/commands/world/move',envelope('collision-then-legal-a',{targetX:centerA.x,targetY:centerA.y}));
   assert.equal(blocked.data.collided,true);
+  assert.equal(blocked.data.throttled,false);
+  const immediateFollowUp=await post('/api/commands/world/move',envelope('collision-then-legal-immediate',{targetX:start.x,targetY:start.y-60}));
+  assert.equal(immediateFollowUp.data.throttled,true,'a collision-blocked move must still consume the normal MOVEMENT_MIN_INTERVAL_MS window, same as any other move');
+  assert.deepEqual(immediateFollowUp.data.worldPosition,start);
   await wait(150);
   const legalTarget={x:start.x,y:start.y-60};
   const legal=await post('/api/commands/world/move',envelope('collision-then-legal-b',{targetX:legalTarget.x,targetY:legalTarget.y}));

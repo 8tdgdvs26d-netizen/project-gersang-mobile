@@ -1,4 +1,4 @@
-import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,computeCameraViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS} from './worldmap.js';
+import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveMapViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
 const S={sessionId:'',snap:null,cities:[],roads:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],storages:{},tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'map',modal:null};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
@@ -191,7 +191,7 @@ const sendWorldMove=createCoalescingSender(async({x,y})=>{
   const hero=document.querySelector('.hero-marker');
   if(hero){hero.setAttribute('cx',r.data.worldPosition.x);hero.setAttribute('cy',r.data.worldPosition.y)}
   const svg=document.querySelector('.world-map');
-  if(svg)svg.setAttribute('viewBox',viewBoxAttr(computeCameraViewBox(r.data.worldPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS)));
+  if(svg)svg.setAttribute('viewBox',viewBoxAttr(resolveMapViewBox(r.data.state,r.data.worldPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS)));
   if(r.data.collided)toast('撞到障礙物');
 });
 function moveWorld(targetX,targetY){sendWorldMove({x:targetX,y:targetY})}

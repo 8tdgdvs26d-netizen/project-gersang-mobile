@@ -179,7 +179,7 @@
 - **不涉及**：道路、城市實體入口、世界怪物、動態障礙物、NPC/單位碰撞、sliding、bouncing、clamp-to-edge、pathfinding/A*、physics engine、Database schema／存檔格式migration、Travel／Reroute邏輯、minimap、zoom、正式joystick、Render設定、引擎轉換。
 - 新增22個test：
   - `test/worldgeometry.test.mjs`（新檔）+10：`WORLD_BOUNDS`/`PLAYER_COLLISION_RADIUS`/`OBSTACLES`形狀同數值、`inflateRect`、`pointInRect`邊界inclusive語義、`segmentIntersectsRect`——完全miss、薄障礙物穿越（兩端都喺外面）、endpoint入障礙物、靠近但無touch、邊界grazing、退化零長度segment、平行且喺外面。
-  - `test/world-collision.test.mjs`（新檔）+9：城市／出生點全部outside inflated障礙物、endpoint-inside碰撞、thin-wall swept碰撞（兩端都喺外面）、碰撞之後仍可以繼續合法移動、真正合法位移先`IN_CITY`→`IN_WORLD`、throttled零位移唔轉`IN_WORLD`、legacy已經喺障礙物內可以安全郁出嚟、郁出嚟之後由外面再入返去仍然會被擋、world bounds clamp同碰撞check並存正常運作。
+  - `test/world-collision.test.mjs`（新檔）+9：城市／出生點全部outside inflated障礙物、endpoint-inside碰撞、thin-wall swept碰撞（兩端都喺外面）、碰撞會正常消耗移動間隔（同其他move一樣update `lastWorldMoveAt`）但唔會永久卡死——等正常interval過咗之後仍然可以繼續合法移動、真正合法位移先`IN_CITY`→`IN_WORLD`、throttled零位移唔轉`IN_WORLD`、legacy已經喺障礙物內可以安全郁出嚟、郁出嚟之後由外面再入返去仍然會被擋、world bounds clamp同碰撞check並存正常運作。
   - `test/worldmap.test.mjs`+3：`worldmap.js`嘅`OBSTACLES`同shared module係同一個array instance（冇複製）、`renderWorldMapHtml`用shared data render每一個障礙物、client render唔做碰撞判定（hero marker喺障礙物內都照樣畫）。
 - 測試結果：86（現有，內容不變）+ 22（新增）= 108 tests passed, 0 failed。
 - 存檔影響：無新schema；沿用P1-01嘅additive `world_x`/`world_y`。障礙物純粹係code常數，唔存喺database。
@@ -189,3 +189,16 @@
   - 障礙物視覺樣式（`.map-obstacle`）未經真機／真人Playtest外觀確認。
   - `collided`嘅toast文案未經Charlie正式批准字眼，只係Prototype暫定訊息。
 - Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`；P1-03基準 `8c703388c72fe12b3a36956c3a9d1b4a704c7cb9`。
+
+### P1-04 Review round 1（修正Client blocking bug，經Charlie發現同批准）
+
+- **問題**：Charlie喺Merge Gate審查發現，`public/app.js`嘅`sendWorldMove`accepted response callback，無論`r.data.state`係咩，都直接將SVG `viewBox`改做400×400 camera-follow。P1-04本身已經令collision同throttled兩種零位移case保持原state（`IN_CITY`唔會轉`IN_WORLD`），但呢個client callback完全冇理會`state`，令Server明明仲係`IN_CITY`，畫面就已經切咗做400×400 camera，重新引入咗P1-03 Review round 2先修正過嘅「其他城市跌出鏡頭範圍、travel/reroute撳唔到」問題。
+- **修正**：
+  - `public/worldmap.js`新增exported pure function `resolveMapViewBox(state,position,viewportSize,bounds)`——`state==='IN_WORLD'`且有position先用`computeCameraViewBox`，其他一律用full-world viewBox。`renderWorldMapHtml()`改用呢個function（行為完全不變，純粹抽出重用）。
+  - `public/app.js`嘅`sendWorldMove`callback改用同一個`resolveMapViewBox(r.data.state,r.data.worldPosition,...)`，唔再自己call`computeCameraViewBox`。因為呢個helper本身就會按`state`揀返啱嘅viewBox，就算async movement response喺`pointerup`嘅`render()`之後先返嚟都唔會再錯誤覆蓋——唔需要額外加sequencing/lock邏輯。
+  - Server collision邏輯今次冇改。
+- **文件／test描述修正**：原本test/CHANGELOG形容「碰撞之後move ability唔被consume」唔準確——實際上collision-blocked move同其他move一樣會update`lastWorldMoveAt`，即係會正常消耗`MOVEMENT_MIN_INTERVAL_MS`（120ms）移動間隔。`test/world-collision.test.mjs`嗰個test改名並加多一個assertion，直接證明「碰撞後立即再send確實會被throttled」，然後先證明「等正常interval之後仍然可以繼續合法移動，冇永久卡死」——依家test同描述準確反映實際行為。
+- 新增4個test（`test/worldmap.test.mjs`）：`resolveMapViewBox`喺`IN_WORLD`／`IN_CITY`（模擬collision或throttled零位移response仍然帶position）／`TRAVELING`／`IN_WORLD`但冇position四種情況嘅pure function測試。
+- 測試結果：108（round 1，其中1個test改名並加強assertion，內容邏輯正確反映實際行為）+ 4（新增）= 112 tests passed, 0 failed。
+- Branch名偏離（`claude/clever-gauss-ayt5ff`取代原定`claude/p1-04-bounds-collision-obstacles`）今次Charlie已接受，冇重開PR。
+- Rollback基準：同上。
