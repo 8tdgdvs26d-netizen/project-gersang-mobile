@@ -290,3 +290,29 @@
 - 新增1個regression test（`test/movement.test.mjs`）：明確assert`JOYSTICK_SEND_INTERVAL_MS`大過server嘅`MOVEMENT_MIN_INTERVAL_MS`（120ms，因為冇export/import唔到，test入面手動keep in sync並註明），同鎖定目前批准嘅140ms數值。
 - 測試結果：158（round 1，內容不變）+ 1（新增）= 159 tests passed, 0 failed。
 - Rollback基準：同上。
+
+## P1-07 Movement Failure Diagnostic Hotfix — 2026-09-18
+
+- 分類：P1-07A merge後，Charlie提供iPhone真機screen recording，回報「joystick knob正常跟手、Follow/Full Map正常、camera/UI整體順暢，但角色完全冇world movement」，判定為blocking bug。今次係**純diagnostic hotfix**，唔係修正。
+- 起點：`main` @ `fefb11876a233fe2948a9a59a327cb31d8ba311c`（即P1-07A merge之後）。
+- **Read-only diagnosis結論（見PR對話記錄，經Charlie批准診斷方向後先開始coding）**：
+  - **⚠️ Root cause至今仍未證實。** 冇辦法喺呢個sandbox環境攞到Charlie實機測試嗰刻嘅network trace，`server.mjs`本身又完全冇任何request log（`api()`成個function一行`console.log`都冇），所以事後冇辦法追溯查證真正發生咗咩事。
+  - 但code reading搵到一個**已確認、獨立於root cause**嘅defect：`public/app.js`嘅`sendWorldMove`喺`r.status==='REJECTED'`嗰陣只係`return`，冇任何toast／console輸出；`command()`兩次retry都失敗時嘅exception亦冇被catch住，會變成silent unhandled rejection。呢兩層合埋，代表**無論伺服器真正REJECTED原因係咩（`ERR_SESSION_REPLACED`/`ERR_INVALID_STATE`/`ERR_BATTLE_SETTLEMENT_REQUIRED`/`ERR_INVALID_WORLD_TARGET`等等），定係request根本send唔出／逾時，UI表現都會係『joystick同camera正常、角色完全唔郁、乜提示都冇』——同Charlie觀察到嘅現象完全吻合**。
+  - **明確冇假設`ERR_BATTLE_SETTLEMENT_REQUIRED`（pending loot）就係root cause**——只係列做其中一個未證實嘅candidate，唔係結論。
+- **今次改動（純diagnostic visibility，唔改任何movement/throttle/collision/state machine邏輯）**：
+  - `public/movement.js`：新增pure helper `describeWorldMoveError(errorCode)`——將`server.mjs`嘅`moveWorld()`已知REJECTED errorCode（`ERR_SESSION_REPLACED`/`ERR_INVALID_STATE`/`ERR_BATTLE_SETTLEMENT_REQUIRED`/`ERR_INVALID_WORLD_TARGET`/`ERR_IDEMPOTENCY_KEY_REQUIRED`/`ERR_COMMAND_CONFLICT`）映射做可讀訊息；未映射嘅errorCode**原樣保留**（唔會顯示做「未知錯誤」咁隱藏咗真正代碼）。純display-only，唔改任何行為判斷。
+  - `public/app.js`：`sendWorldMove`嘅`command()`call改用`try/catch`包住（呢個`try/catch`寫喺`sendWorldMove`自己個callback入面，唔係`asyncqueue.js`，`createCoalescingSender`本身一個字冇改）：
+    - `REJECTED`：`console.warn`記錄`r.errorCode`，並用`toast(describeWorldMoveError(r.errorCode))`顯示可讀訊息。
+    - `command()`拋exception（網絡／伺服器錯誤，兩次retry都失敗之後）：`console.error`記錄完整error，`toast`顯示fallback訊息（帶埋`err.message`如果有）。
+    - **唔再有silent failure／unhandled rejection**——兩條路徑而家一定會喺畫面度顯示返嘢。
+  - `CHANGELOG.md`（本段）。
+  - **`server.mjs`、API contract、DB schema、movement state machine、`pendingLootSettlement()`、`public/asyncqueue.js`、joystick參數（radius/deadzone/step distance）、smoothing參數、throttle（`JOYSTICK_SEND_INTERVAL_MS`/`MOVEMENT_MIN_INTERVAL_MS`）、collision邏輯——一個字都冇改**，`git diff --stat`可核實。
+- 新增3個test（`test/movement.test.mjs`）：
+  1. 每個已知errorCode都映射到獨立、可讀、非原始code嘅訊息（`ERR_SESSION_REPLACED`/`ERR_INVALID_STATE`/`ERR_BATTLE_SETTLEMENT_REQUIRED`/`ERR_INVALID_WORLD_TARGET`/`ERR_IDEMPOTENCY_KEY_REQUIRED`/`ERR_COMMAND_CONFLICT`，六個訊息互不相同）。
+  2. 未映射嘅errorCode（例如未來新增嘅代碼）原樣返回，唔會俾一個generic「未知錯誤」字串遮住真正代碼。
+  3. `errorCode`缺失（`undefined`/`null`）都會有non-empty fallback訊息，唔會顯示空白。
+- **不涉及**：修正真正movement bug本身（因為root cause未證實）、`server.mjs`任何邏輯、pending loot settlement流程、joystick/smoothing/throttle任何數值、collision邏輯、schema、API contract。
+- 測試結果：159（現有，內容完全不變）+ 3（新增）= **162 tests passed, 0 failed**。
+- 存檔影響：無。
+- **下一步**：呢個hotfix merge之後，Charlie下次喺iPhone重試joystick移動，畫面出現嘅toast／Safari console嘅`console.warn`/`console.error`會直接顯示真正errorCode或exception內容，到時先可以針對真正root cause提交正式修正計劃。
+- Rollback基準：本次hotfix rollback base = `main` @ `fefb11876a233fe2948a9a59a327cb31d8ba311c`（即P1-07A merge之後嘅main）。更舊歷史checkpoint reference（唔係本次rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。

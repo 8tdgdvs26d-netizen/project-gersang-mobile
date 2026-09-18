@@ -1,6 +1,6 @@
 import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
-import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,CHARACTER_SMOOTHING_MS,CAMERA_SMOOTHING_MS} from './movement.js';
+import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,describeWorldMoveError,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,CHARACTER_SMOOTHING_MS,CAMERA_SMOOTHING_MS} from './movement.js';
 const S={sessionId:'',snap:null,cities:[],roads:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],storages:{},tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'map',modal:null,mapView:'follow'};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
 const post=(p,b)=>req(p,{method:'POST',body:JSON.stringify(b)});
@@ -184,9 +184,26 @@ function updateTravelProgress(){
 // tickMovementFrame()'s requestAnimationFrame loop below, which eases the display toward
 // whatever S.snap.worldPosition/state currently say. This keeps "what we ask the server for"
 // and "what we show on screen" cleanly separated, per P1-07A's server-authoritative requirement.
+//
+// P1-07 Movement Failure Diagnostic Hotfix — a real-device report found joystick input and
+// camera/UI working normally while the character never actually moved, with zero on-screen
+// indication of why. Root cause is NOT yet confirmed. This hotfix only makes failures visible
+// (REJECTED errorCode, or a network/command exception) — it does not change server behavior,
+// retry behavior, or any movement/throttle/collision logic.
 const sendWorldMove=createCoalescingSender(async({x,y})=>{
-  const r=await command('/api/commands/world/move',{targetX:x,targetY:y});
-  if(r.status==='REJECTED')return;
+  let r;
+  try{
+    r=await command('/api/commands/world/move',{targetX:x,targetY:y});
+  }catch(err){
+    console.error('sendWorldMove: command() threw (network or server exception)',err);
+    toast(`移動指令失敗：${err?.message||'網絡或伺服器錯誤'}`);
+    return;
+  }
+  if(r.status==='REJECTED'){
+    console.warn('sendWorldMove: REJECTED',r.errorCode);
+    toast(describeWorldMoveError(r.errorCode));
+    return;
+  }
   S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state;
   if(r.data.collided)toast('撞到障礙物');
 });

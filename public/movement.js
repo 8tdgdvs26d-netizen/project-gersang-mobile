@@ -67,3 +67,23 @@ export function isMovementAllowed(mapView){
 export function shouldSendJoystickMove(mapView,joystickInputActive){
   return isMovementAllowed(mapView)&&!!joystickInputActive;
 }
+
+// P1-07 Movement Failure Diagnostic Hotfix — maps a /api/commands/world/move REJECTED
+// errorCode to a readable message, so a rejection is never silently swallowed by the UI.
+// This is display-only: it does not change, retry, or interpret server behavior in any way.
+// Root cause of the real-device "joystick responds but character never moves" report is NOT
+// yet confirmed — this mapping only makes whatever the server actually returns visible.
+const WORLD_MOVE_ERROR_MESSAGES={
+  ERR_SESSION_REPLACED:'Session已被另一個登入取代，請重新整理頁面',
+  ERR_INVALID_STATE:'目前狀態不能移動（例如旅行中）',
+  ERR_BATTLE_SETTLEMENT_REQUIRED:'有戰鬥獎勵未處理，請先到戰鬥頁面結算',
+  ERR_INVALID_WORLD_TARGET:'移動目標座標無效',
+  ERR_IDEMPOTENCY_KEY_REQUIRED:'指令格式錯誤（缺少idempotency key）',
+  ERR_COMMAND_CONFLICT:'指令衝突，請重試'
+};
+
+// Unknown/unmapped errorCode: return it as-is rather than a generic "unknown error" string, so
+// the raw server errorCode always stays visible for diagnosis.
+export function describeWorldMoveError(errorCode){
+  return WORLD_MOVE_ERROR_MESSAGES[errorCode]||errorCode||'移動指令被拒絕（原因不明）';
+}
