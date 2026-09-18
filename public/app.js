@@ -1,7 +1,7 @@
 import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS,OBSTACLES} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
 import {PLAYER_COLLISION_RADIUS,inflateRect} from './worldgeometry.js';
-import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD} from './movement.js';
+import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD} from './movement.js';
 // P1-07B: same INFLATED_OBSTACLES construction as server.mjs's own (OBSTACLES.map(inflateRect)) —
 // used only as a presentation-only prediction clamp (see clampPredictedStep), never as the real
 // collision authority, which remains server.mjs's own segmentBlocked() over the same primitives.
@@ -203,8 +203,15 @@ function updateTravelProgress(){
 // P1-07B — REJECTED and a network/command exception also set predictionSuspended=true, so
 // tickMovementFrame stops advancing the predicted position further ahead while something is
 // actually wrong (rather than just capping its lead, which is for normal latency, not failure).
-// A fresh successful (ACCEPTED) response clears it again. See tickMovementFrame for how this
-// combines with reconciliation.
+// A fresh successful, non-collided (ACCEPTED, collided:false) response clears it again. See
+// tickMovementFrame for how this combines with reconciliation.
+//
+// P1-07B Merge Gate review — an ACCEPTED response with collided:true also suspends prediction.
+// Client prediction sweeps in small per-frame steps; server.mjs's moveWorld() sweeps in one shot
+// from the authoritative serverPosition to the requested target. On a fast turn right against an
+// obstacle these two sweeps can briefly disagree, so once the server has actually said collided,
+// prediction must stop advancing (not just cap its lead) until reconciliation — driven by the
+// same collided:true — has pulled it back in line, exactly like the REJECTED/exception case.
 const sendWorldMove=createCoalescingSender(async({x,y})=>{
   let r;
   try{
@@ -222,7 +229,7 @@ const sendWorldMove=createCoalescingSender(async({x,y})=>{
     return;
   }
   S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state;
-  predictionSuspended=false;
+  predictionSuspended=shouldSuspendAfterAccepted(r.data);
   if(r.data.collided)toast('撞到障礙物');
 });
 

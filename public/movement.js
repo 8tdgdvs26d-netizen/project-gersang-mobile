@@ -164,10 +164,22 @@ export function advancePredictedPosition(current,serverPosition,input,dt,velocit
 // P1-07B reconciliation banding: given the current predicted/server divergence, returns which
 // easing smoothing constant to actively correct with, or `null` to signal an immediate hard reset
 // (divergence too large for easing to look right). Reconciliation is only ever actively run by the
-// caller for the specific triggers approved for P1-07B (REJECTED, a network/command exception, or
-// a divergence that has grown past `maxLead` on its own) — a normal successful, non-colliding
-// response never calls this at all, since normal lead within `maxLead` is expected, not an error.
+// caller for the specific triggers approved for P1-07B (REJECTED, a network/command exception, an
+// ACCEPTED response with collided:true, or a divergence that has grown past `maxLead` on its own)
+// — a normal successful, non-colliding response never calls this at all, since normal lead within
+// `maxLead` is expected, not an error.
 export function reconciliationSmoothingMs(distance,maxLead=MAX_PREDICTION_LEAD,hardResetDistance=RECONCILE_HARD_RESET_DISTANCE,smoothingMs=RECONCILE_SMOOTHING_MS,strongSmoothingMs=RECONCILE_STRONG_SMOOTHING_MS){
   if(distance>hardResetDistance)return null;
   return distance>maxLead?strongSmoothingMs:smoothingMs;
+}
+
+// P1-07B Merge Gate review — whether an ACCEPTED /world/move response should suspend prediction
+// (stop it advancing further until reconciliation pulls it back in line). Client prediction sweeps
+// in small per-frame steps while server.mjs's moveWorld() sweeps in one shot from the authoritative
+// serverPosition to the requested target; on a fast turn right against an obstacle these two sweeps
+// can briefly disagree, so collided:true must suspend exactly like REJECTED/an exception does.
+// A normal, non-colliding ACCEPTED response must resume prediction, not stay suspended — that was
+// the round-1 forward/backward pulsing bug this whole reconciliation design exists to avoid.
+export function shouldSuspendAfterAccepted(response){
+  return !!response?.collided;
 }

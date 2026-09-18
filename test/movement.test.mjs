@@ -13,6 +13,7 @@ import {
   clampPredictedStep,
   advancePredictedPosition,
   reconciliationSmoothingMs,
+  shouldSuspendAfterAccepted,
   JOYSTICK_RADIUS,
   JOYSTICK_DEADZONE,
   JOYSTICK_STEP_DISTANCE,
@@ -348,4 +349,26 @@ test('reconciliationSmoothingMs: custom thresholds/constants are honored, not ha
   assert.equal(reconciliationSmoothingMs(10,5,20,111,222),222);
   assert.equal(reconciliationSmoothingMs(10,20,20,111,222),111);
   assert.equal(reconciliationSmoothingMs(30,20,20,111,222),null);
+});
+
+// --- shouldSuspendAfterAccepted (P1-07B Merge Gate review) ---
+// A collided:true ACCEPTED response must suspend prediction (client's per-frame swept prediction
+// and server.mjs's own single-sweep moveWorld() can briefly disagree on a fast turn against an
+// obstacle); a normal, non-colliding ACCEPTED response must resume it, not leave it suspended.
+
+test('shouldSuspendAfterAccepted: a collided:true ACCEPTED response suspends prediction',()=>{
+  assert.equal(shouldSuspendAfterAccepted({worldPosition:{x:1,y:1},state:'IN_CITY',throttled:false,collided:true}),true);
+});
+
+test('shouldSuspendAfterAccepted: a normal, non-collided ACCEPTED response resumes prediction (does not stay suspended)',()=>{
+  assert.equal(shouldSuspendAfterAccepted({worldPosition:{x:1,y:1},state:'IN_WORLD',throttled:false,collided:false}),false);
+});
+
+test('shouldSuspendAfterAccepted: a throttled (zero-displacement, non-collided) ACCEPTED response still resumes prediction — throttling alone is not a collision',()=>{
+  assert.equal(shouldSuspendAfterAccepted({worldPosition:{x:1,y:1},state:'IN_CITY',throttled:true,collided:false}),false);
+});
+
+test('shouldSuspendAfterAccepted: missing/undefined response data defaults to not suspended (never throws)',()=>{
+  assert.equal(shouldSuspendAfterAccepted(undefined),false);
+  assert.equal(shouldSuspendAfterAccepted({}),false);
 });

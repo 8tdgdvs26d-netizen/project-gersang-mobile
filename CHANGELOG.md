@@ -357,3 +357,11 @@
 - 存檔影響：無。
 - 已知限制／真機Acceptance Gate（**Merge後仍未代表P1-07正式pass**）：`MAX_PREDICTION_LEAD`/`RECONCILE_SMOOTHING_MS`/`RECONCILE_STRONG_SMOOTHING_MS`/`RECONCILE_HARD_RESET_DISTANCE`全部係Prototype Parameter，真機test後可能需要再調（尤其`RECONCILE_STRONG_SMOOTHING_MS`目前同`RECONCILE_SMOOTHING_MS`數值一樣，只係獨立tunable，未必代表已經係最佳分野）。真機連續移動手感、camera同步、collision修正是否突兀、release即停手感——全部要Charlie親身iPhone驗證。
 - Rollback基準：P1-07B正式rollback base = `main` @ `5705955a90cb11b25de63bca0ac22b2da49f736f`（即P1-07 Diagnostic Hotfix merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-07B rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
+
+### P1-07B Merge Gate review（修正collision reconciliation漏洞，經Charlie發現同批准）
+
+- **問題**：`sendWorldMove`原本淨係喺`REJECTED`／network exception先set`predictionSuspended=true`；`ACCEPTED`response（包括`collided:true`）一律set返`predictionSuspended=false`，冇觸發reconciliation，違反咗Plan本身「collision/server correction要觸發reconciliation」嘅原則。根因：client prediction用per-frame細步曲線前進，`server.mjs`嘅`moveWorld()`就由authoritative`serverPosition`一次過對住requested target做swept segment check——快速轉向／貼障礙物嗰陣，兩者可能短暫出現唔同結果；如果server已經回`collided:true`，client理應停止繼續prediction直到lead cap先停，而唔係將個flag清返做false當正常move處理。
+- **修正**：`public/movement.js`新增pure helper`shouldSuspendAfterAccepted(response)`——`collided:true`返`true`（suspend），`collided:false`（包括throttled但非collided）返`false`（resume）。`public/app.js`嘅`sendWorldMove`ACCEPTED分支改用呢個helper決定`predictionSuspended`，取代原本直接set`false`。純一個決策邏輯修正，`server.mjs`/API/schema/collision geometry/joystick參數/prediction lead cap/reconciliation thresholds/camera source——一個字冇改。
+- 新增4個regression test（`test/movement.test.mjs`）：`collided:true`嘅ACCEPTED response令prediction suspend、正常`collided:false`嘅ACCEPTED response令prediction resume（唔會停留喺suspended）、單純throttled（零位移但非collided）唔算collision唔會suspend、缺失response data唔會拋錯預設唔suspend。
+- 測試結果：184（round前，內容不變）+ 4（新增）= 188 tests passed, 0 failed。
+- Rollback基準：同上。
