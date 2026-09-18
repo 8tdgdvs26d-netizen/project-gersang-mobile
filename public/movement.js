@@ -1,12 +1,15 @@
-// Pure, DOM-free movement/joystick/smoothing math (P1-07A) — Client Input Layer only.
+import {pointInRect,segmentIntersectsRect} from './worldgeometry.js';
+
+// Pure, DOM-free movement/joystick/prediction math (P1-07A/P1-07B) — Client Input Layer only.
 // Server remains the sole authoritative source of world position (see server.mjs's moveWorld());
 // these functions only decide (a) what target to *ask* the server for, from the joystick's
-// direction+magnitude, and (b) how to smoothly *display* the last confirmed server position —
-// they never move the character themselves, and display easing only ever chases the latest
-// known server truth, never a client-predicted/extrapolated position.
+// direction+magnitude, and (b) how to *predict* a continuous visual position while the joystick
+// is held, bounded by the same collision/bounds rules as the server and by a hard lead cap —
+// they never move the character themselves, never persist, and are never treated as truth: the
+// prediction is always reconciled back toward the latest confirmed serverPosition.
 
 // Prototype Parameters — tunable, not a final UX spec; expected to be re-tuned after real-device
-// (iPhone) testing per P1-07A's acceptance gate.
+// (iPhone) testing per P1-07A/P1-07B's acceptance gate.
 export const JOYSTICK_RADIUS=52;
 export const JOYSTICK_DEADZONE=10;
 export const JOYSTICK_STEP_DISTANCE=18;
@@ -16,8 +19,32 @@ export const JOYSTICK_STEP_DISTANCE=18;
 // position would then only advance roughly every 2 client sends (~every 200ms+), directly
 // re-introducing the double-throttle stutter P1-07A exists to fix.
 export const JOYSTICK_SEND_INTERVAL_MS=140;
-export const CHARACTER_SMOOTHING_MS=80;
-export const CAMERA_SMOOTHING_MS=120;
+
+// P1-07B — Continuous Visual Movement + Server Reconciliation. P1-07A's discrete
+// serverPosition-snapshot + exponential-easing model produced visible "velocity pulsing": every
+// ~140ms the server position jumps by a full JOYSTICK_STEP_DISTANCE, and two independent easing
+// chains (character + camera) each re-accelerate to chase that jump, then decay until the next
+// one — a sawtooth in perceived speed, worse on camera (120ms) than character (80ms). P1-07B
+// replaces this with a client-side *predicted* position that advances continuously every frame
+// while the joystick is held, capped at MAX_PREDICTION_LEAD ahead of the last confirmed
+// serverPosition, and both the hero marker and the camera now render from this single continuous
+// position (see app.js's tickMovementFrame) — removing the old CHARACTER_SMOOTHING_MS/
+// CAMERA_SMOOTHING_MS constants entirely, since there is no longer a discrete jump to smooth.
+
+// How far (px) the predicted position may lead the last confirmed serverPosition. Prediction
+// self-caps at this distance and simply stops advancing (waits for the server to catch up) —
+// this is normal, expected lead, not an error, and must never actively pull the prediction back.
+export const MAX_PREDICTION_LEAD=36;
+// Correction smoothing (ms) used only while actively reconciling (see reconciliationSmoothingMs)
+// and the current divergence is still within MAX_PREDICTION_LEAD.
+export const RECONCILE_SMOOTHING_MS=40;
+// Correction smoothing (ms) used while actively reconciling and divergence is between
+// MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE — same value as RECONCILE_SMOOTHING_MS
+// today, kept as an independently tunable constant for real-device re-tuning.
+export const RECONCILE_STRONG_SMOOTHING_MS=40;
+// Beyond this divergence (px, 3x JOYSTICK_STEP_DISTANCE), easing would itself look like an odd
+// slide across an unrelated distance — snap predicted position straight to serverPosition instead.
+export const RECONCILE_HARD_RESET_DISTANCE=54;
 
 // Raw pointer offset (dx,dy) from the joystick's fixed center, in px, mapped to a normalized
 // direction + magnitude. Anything within the deadzone is treated as no input at all. Magnitude
@@ -86,4 +113,73 @@ const WORLD_MOVE_ERROR_MESSAGES={
 // the raw server errorCode always stays visible for diagnosis.
 export function describeWorldMoveError(errorCode){
   return WORLD_MOVE_ERROR_MESSAGES[errorCode]||errorCode||'移動指令被拒絕（原因不明）';
+}
+
+// P1-07B — the predicted-position advance speed, derived from the existing joystick constants
+// rather than a new independent tunable: JOYSTICK_STEP_DISTANCE px accepted roughly every
+// JOYSTICK_SEND_INTERVAL_MS ms is the server's own long-run average accepted speed, so predicting
+// at this exact derived velocity keeps the client's visual speed from drifting away from the
+// server's true speed over a long hold, regardless of what either constant is tuned to later.
+export function predictionVelocity(stepDistance=JOYSTICK_STEP_DISTANCE,sendIntervalMs=JOYSTICK_SEND_INTERVAL_MS){
+  return stepDistance/sendIntervalMs;
+}
+
+// Mirrors server.mjs's segmentBlocked() escape-only semantics exactly (see moveWorld()): if the
+// current point already sits inside a given inflated obstacle, that specific obstacle only blocks
+// the step when the candidate is STILL inside it — a candidate that lands outside is a genuine
+// escape and is allowed. Every other obstacle uses the normal swept-segment check. Not exported
+// from worldgeometry.js (server.mjs's own copy of this glue isn't either), so this is kept as a
+// thin duplicate over the shared pointInRect/segmentIntersectsRect primitives, not a rewritten
+// rule — the actual geometry truth (obstacle rects, inflation radius, intersection math) is 100%
+// shared and cannot drift from server.mjs.
+export function isStepBlocked(x1,y1,x2,y2,inflatedObstacles){
+  return inflatedObstacles.some(rect=>pointInRect(x1,y1,rect)?pointInRect(x2,y2,rect):segmentIntersectsRect(x1,y1,x2,y2,rect));
+}
+
+// Presentation-only prediction clamp: bounds first (same clamp shape as server.mjs's moveWorld()),
+// then a swept collision check from `current` to the bounded candidate. Blocked → stays at
+// `current` (no partial slide toward the obstacle), exactly mirroring the server's own
+// all-or-nothing step semantics. This can only ever be at least as strict as the server, never
+// looser — it never determines the real outcome, only how far the prediction is allowed to
+// visually lead before the server's own response is the final word.
+export function clampPredictedStep(current,candidate,bounds,inflatedObstacles){
+  const boundedX=Math.max(bounds.min,Math.min(bounds.max,candidate.x));
+  const boundedY=Math.max(bounds.min,Math.min(bounds.max,candidate.y));
+  if(isStepBlocked(current.x,current.y,boundedX,boundedY,inflatedObstacles))return{x:current.x,y:current.y};
+  return{x:boundedX,y:boundedY};
+}
+
+// One frame's worth of continuous predicted-position advance: moves `current` by the joystick's
+// direction+magnitude at `velocity` px/ms over `dt` ms. Self-caps at `maxLead` px from
+// `serverPosition` — a candidate that would lead by more than that simply freezes prediction in
+// place for this frame (waits for the server to catch up), rather than being pulled back; this is
+// normal expected lead, not an error. Returns `current` unchanged when there is no active input.
+export function advancePredictedPosition(current,serverPosition,input,dt,velocity,maxLead){
+  if(!input?.active)return current;
+  const candidate={x:current.x+input.dirX*input.magnitude*velocity*dt,y:current.y+input.dirY*input.magnitude*velocity*dt};
+  if(Math.hypot(candidate.x-serverPosition.x,candidate.y-serverPosition.y)>maxLead)return current;
+  return candidate;
+}
+
+// P1-07B reconciliation banding: given the current predicted/server divergence, returns which
+// easing smoothing constant to actively correct with, or `null` to signal an immediate hard reset
+// (divergence too large for easing to look right). Reconciliation is only ever actively run by the
+// caller for the specific triggers approved for P1-07B (REJECTED, a network/command exception, an
+// ACCEPTED response with collided:true, or a divergence that has grown past `maxLead` on its own)
+// — a normal successful, non-colliding response never calls this at all, since normal lead within
+// `maxLead` is expected, not an error.
+export function reconciliationSmoothingMs(distance,maxLead=MAX_PREDICTION_LEAD,hardResetDistance=RECONCILE_HARD_RESET_DISTANCE,smoothingMs=RECONCILE_SMOOTHING_MS,strongSmoothingMs=RECONCILE_STRONG_SMOOTHING_MS){
+  if(distance>hardResetDistance)return null;
+  return distance>maxLead?strongSmoothingMs:smoothingMs;
+}
+
+// P1-07B Merge Gate review — whether an ACCEPTED /world/move response should suspend prediction
+// (stop it advancing further until reconciliation pulls it back in line). Client prediction sweeps
+// in small per-frame steps while server.mjs's moveWorld() sweeps in one shot from the authoritative
+// serverPosition to the requested target; on a fast turn right against an obstacle these two sweeps
+// can briefly disagree, so collided:true must suspend exactly like REJECTED/an exception does.
+// A normal, non-colliding ACCEPTED response must resume prediction, not stay suspended — that was
+// the round-1 forward/backward pulsing bug this whole reconciliation design exists to avoid.
+export function shouldSuspendAfterAccepted(response){
+  return !!response?.collided;
 }
