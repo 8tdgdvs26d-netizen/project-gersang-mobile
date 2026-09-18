@@ -4,6 +4,7 @@ import { extname, join, normalize, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
+import { WORLD_BOUNDS, PLAYER_COLLISION_RADIUS, OBSTACLES, inflateRect, segmentIntersectsRect, pointInRect } from "./public/worldgeometry.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
@@ -291,11 +292,19 @@ function reroute(env){const e=check(env);if(e)return e;return idem(env.idempoten
 function resolveArrival(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const t=db.prepare(`SELECT * FROM travel WHERE character_id='char-demo'`).get();if(!t)return{status:'REJECTED',errorCode:'ERR_NO_TRAVEL'};if(Date.now()<t.eta)return{status:'REJECTED',errorCode:'ERR_NOT_ARRIVED'};db.prepare(`UPDATE travel SET status='ARRIVED' WHERE character_id='char-demo'`).run();const w=arrivalWorldColumns(t.to_city);db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY'${w.sql} WHERE id='char-demo'`).run(t.to_city,...w.params);return{status:'ACCEPTED',data:{cityId:t.to_city}}})}
 function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot(),p=env.payload;if(s.state!=='IN_CITY'||s.cityId!==p.cityId)return{status:'REJECTED',errorCode:'ERR_PHYSICAL_PRESENCE_REQUIRED'};if(p.quantity<=0)return{status:'REJECTED',errorCode:'ERR_INVALID_QUANTITY'};const cur=db.prepare(`SELECT quantity FROM storage WHERE character_id='char-demo' AND city_id=? AND good_id=?`).get(s.cityId,p.goodTypeId)?.quantity??0;if(p.direction==='CARGO_TO_STORAGE'){changeCargo(p.goodTypeId,-p.quantity);db.prepare(`INSERT INTO storage VALUES('char-demo',?,?,?) ON CONFLICT(character_id,city_id,good_id) DO UPDATE SET quantity=quantity+excluded.quantity`).run(s.cityId,p.goodTypeId,p.quantity)}else if(p.direction==='STORAGE_TO_CARGO'){if(cur<p.quantity)throw new Error('ERR_INSUFFICIENT_STORAGE');db.prepare(`UPDATE storage SET quantity=quantity-? WHERE character_id='char-demo' AND city_id=? AND good_id=?`).run(p.quantity,s.cityId,p.goodTypeId);changeCargo(p.goodTypeId,p.quantity)}else return{status:'REJECTED',errorCode:'ERR_INVALID_DIRECTION'};return{status:'ACCEPTED',data:{quantity:p.quantity}}})}
 
-// Movement Prototype Parameters (P1-02) — not final balance/UX specs, subject to Playtest.
-const WORLD_BOUNDS={min:0,max:1000};
+// Movement Prototype Parameters (P1-02/P1-04) — not final balance/UX specs, subject to Playtest.
 const MAX_WORLD_STEP=60;
 const MOVEMENT_MIN_INTERVAL_MS=120;
 let lastWorldMoveAt=0;
+// Obstacles inflated once by the Prototype player-collision radius (P1-04); collision checks
+// always run against these, never against the raw OBSTACLES rectangles.
+const INFLATED_OBSTACLES=OBSTACLES.map(r=>inflateRect(r,PLAYER_COLLISION_RADIUS));
+// Legacy-position compatibility: a persisted worldPosition predating P1-04's obstacles could
+// already sit inside an (inflated) obstacle. Minimum preferred behavior: allow leaving that
+// specific obstacle, but keep blocking entry/crossing for every other obstacle as normal.
+function segmentBlocked(x1,y1,x2,y2){
+  return INFLATED_OBSTACLES.some(rect=>!pointInRect(x1,y1,rect)&&segmentIntersectsRect(x1,y1,x2,y2,rect));
+}
 function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{
   const s=snapshot();
   if(s.state!=='IN_CITY'&&s.state!=='IN_WORLD')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};
@@ -304,15 +313,23 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
   if(!Number.isFinite(targetX)||!Number.isFinite(targetY))return{status:'REJECTED',errorCode:'ERR_INVALID_WORLD_TARGET'};
   const current=s.worldPosition;
   const now=Date.now(),throttled=now-lastWorldMoveAt<MOVEMENT_MIN_INTERVAL_MS;
-  let nextX=current.x,nextY=current.y;
+  let nextX=current.x,nextY=current.y,collided=false;
   if(!throttled){
     const dx=targetX-current.x,dy=targetY-current.y,distance=Math.hypot(dx,dy),ratio=distance>0?Math.min(distance,MAX_WORLD_STEP)/distance:0;
-    nextX=Math.max(WORLD_BOUNDS.min,Math.min(WORLD_BOUNDS.max,current.x+dx*ratio));
-    nextY=Math.max(WORLD_BOUNDS.min,Math.min(WORLD_BOUNDS.max,current.y+dy*ratio));
+    const boundedX=Math.max(WORLD_BOUNDS.min,Math.min(WORLD_BOUNDS.max,current.x+dx*ratio));
+    const boundedY=Math.max(WORLD_BOUNDS.min,Math.min(WORLD_BOUNDS.max,current.y+dy*ratio));
     lastWorldMoveAt=now;
+    if(segmentBlocked(current.x,current.y,boundedX,boundedY)){
+      collided=true;
+    }else{
+      nextX=boundedX;nextY=boundedY;
+    }
   }
-  db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(nextX,nextY);
-  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:'IN_WORLD',throttled}};
+  const moved=nextX!==current.x||nextY!==current.y;
+  // Zero actual displacement — whether from throttling or from a blocked collision — must never
+  // flip IN_CITY -> IN_WORLD. Only a genuinely accepted, non-zero move may trigger that transition.
+  if(moved)db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(nextX,nextY);
+  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:moved?'IN_WORLD':s.state,throttled,collided}};
 })}
 
 async function api(req,res){

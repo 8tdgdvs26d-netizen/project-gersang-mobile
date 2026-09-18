@@ -17,8 +17,10 @@ import {
   resolveWorldPosition,
   computeCameraViewBox,
   WORLD_BOUNDS,
+  OBSTACLES,
   CAMERA_VIEWPORT_SIZE
 } from '../public/worldmap.js';
+import {OBSTACLES as GEOMETRY_OBSTACLES} from '../public/worldgeometry.js';
 
 let child,base,dir,sessionId;
 const request=async(path,options={})=>{const r=await fetch(base+path,{headers:{'content-type':'application/json'},...options});return r.json()};
@@ -169,6 +171,31 @@ test('renderWorldMapHtml renders each bidirectional road once and places roads b
   const firstCityNodeIndex=html.indexOf('class="map-city"');
   assert.ok(firstRoadIndex>=0&&firstCityNodeIndex>=0);
   assert.ok(firstRoadIndex<firstCityNodeIndex);
+});
+
+test('worldmap.js re-exports the same OBSTACLES array instance from the shared worldgeometry.js module (no duplicated copy)',()=>{
+  assert.equal(OBSTACLES,GEOMETRY_OBSTACLES);
+});
+
+test('renderWorldMapHtml renders one <rect class="map-obstacle"> per shared OBSTACLES entry, using its actual bounds',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_CITY',cityId:'a'};
+  const html=renderWorldMapHtml({snap,cities,roads:[]});
+  const obstacleMatches=html.match(/class="map-obstacle"/g)||[];
+  assert.equal(obstacleMatches.length,OBSTACLES.length);
+  for(const o of OBSTACLES){
+    assert.ok(html.includes(`data-obstacle="${o.id}"`));
+    assert.ok(html.includes(`x="${o.minX}" y="${o.minY}" width="${o.maxX-o.minX}" height="${o.maxY-o.minY}"`));
+  }
+});
+
+test('renderWorldMapHtml performs no client-side collision logic: obstacles render even when the hero marker sits inside one',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const insideObstacle={x:(OBSTACLES[0].minX+OBSTACLES[0].maxX)/2,y:(OBSTACLES[0].minY+OBSTACLES[0].maxY)/2};
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:insideObstacle};
+  const html=renderWorldMapHtml({snap,cities,roads:[]});
+  assert.ok(html.includes('class="hero-marker"'));
+  assert.ok(html.includes('class="map-obstacle"'));
 });
 
 test('selecting a map city calls the existing travel/start command',()=>{

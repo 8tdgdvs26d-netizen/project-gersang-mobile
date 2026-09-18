@@ -192,6 +192,7 @@ const sendWorldMove=createCoalescingSender(async({x,y})=>{
   if(hero){hero.setAttribute('cx',r.data.worldPosition.x);hero.setAttribute('cy',r.data.worldPosition.y)}
   const svg=document.querySelector('.world-map');
   if(svg)svg.setAttribute('viewBox',viewBoxAttr(computeCameraViewBox(r.data.worldPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS)));
+  if(r.data.collided)toast('撞到障礙物');
 });
 function moveWorld(targetX,targetY){sendWorldMove({x:targetX,y:targetY})}
 function setupWorldMovePointer(){
