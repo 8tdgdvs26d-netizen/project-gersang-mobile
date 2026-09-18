@@ -211,3 +211,19 @@
 - 新增1個test（`test/world-collision.test.mjs`）：legacy已經喺障礙物內，candidate都仍然喺同一障礙物內嘅move會被擋（`collided:true`、position/state不變）——用嚟直接證明「喺牆內唔可以自由行走」，同原有「郁出嚟先算escape」、「escape之後由外面再入返去會被擋」兩個test互補，三個test合埋完整覆蓋escape-only語義。
 - 測試結果：112（round 1，內容不變）+ 1（新增）= 113 tests passed, 0 failed。
 - Rollback基準：同上。
+
+## P1-05 — 2026-09-18 — Roads Non-Constraining Prototype（Test-only）
+
+- 分類：《萬行誌：白手 — Canonical v0.5》Phase 1 第五個開發任務（GitHub Issue #12）。
+- 起點：`main` @ `1bc45a609f97c348b57dfebab0ae14e8b1a52a8a`（即P1-04 merge之後）。
+- 目標：驗證「道路存在，但道路唔係軌道」——玩家自由世界移動必須完全唔受`roads`資料限制，可以沿路行、離開道路、橫越道路、喺冇道路連接嘅方向自由移動，淨係受World Bounds、P1-04 Obstacles、P1-02 movement step/throttle限制。
+- **Coding前research結論（經Charlie批准方向：test-only + documentation，零功能code change）**：詳細閱讀同grep`server.mjs`、`public/worldmap.js`、`public/app.js`、P1-04 collision code之後確認，`world/move`（`moveWorld()`）由頭到尾冇任何`roads`table查詢、冇road lookup、冇route依賴——`roads`只喺`fastest()`（`travel/start`用）、`normalizedSegments()`（travel segments用）、`GET /api/roads`（純display）呢幾處出現，同`moveWorld()`完全獨立。Client端`public/app.js`嘅pointer movement（`svgPointFromEvent`、`setupWorldMovePointer`、`moveWorld()`、`sendWorldMove`）同樣冇讀取`S.roads`。P1-04嘅Obstacle collision（`OBSTACLES`、`segmentBlocked()`）同`roads`table係兩個完全獨立資料源，冇任何交叉引用。**即係話P1-05想驗證嘅原則喺現有代碼已經100%成立**，唔係刻意解耦設計，而係自由移動同碰撞邏輯從未讀過road資料。缺口純粹係測試覆蓋——冇一個現有test直接證明「road→off-road」、「off-road→off-road」、「cross-road」呢啲情況。
+- 修改：
+  - 新增`test/world-roads-non-constraining.test.mjs`（新檔，8個server HTTP regression test，用`ac`道路——starter-village{220,150}至hill-market{780,150}，兩端y座標一樣所以成條路係`y=150`、`x:220..780`嘅水平線，喺遠離兩個P1-04 obstacle嘅`x=400`區域測試）：test region冇同任何obstacle重疊嘅setup sanity check、`GET /api/roads`確認`ac`路徑同座標、road→off-road（`(400,150)`郁去`(400,50)`，因`MAX_WORLD_STEP`clamp實際落喺`(400,90)`）、off-road→off-road（`(50,50)`↔`(90,50)`）、cross-road（`(400,100)`郁去`(400,200)`，因clamp實際落喺`(400,160)`，途中確實穿越咗`y=150`嗰條路，`collided:false`）、道路上落點本身唔會觸發collision、P1-04 obstacle collision喺呢個改動之後依然正常擋（regression confirm）、`MAX_WORLD_STEP`移動step clamp喺road走廊附近同樣唔受road影響、正常clamp做單一60單位step（呢個唔係真正嘅`WORLD_BOUNDS`邊界clamp——真正嘅world bounds邊界clamp regression coverage已經存在喺`test/world-movement.test.mjs`同`test/world-collision.test.mjs`）。
+  - `CHANGELOG.md`（本段）。
+  - **`server.mjs`、`public/app.js`、`public/worldmap.js`、`public/worldgeometry.js`、`public/styles.css`、DB schema／存檔格式、Travel/Reroute實作——一個字都冇改**，`git diff`可以直接核實。
+- **不涉及**：道路加速／減速、道路成本／體力、道路自動導航、Pathfinding/A*、auto-walk、道路磁吸／snap-to-road、waypoint、minimap路線規劃、道路危險度／encounter frequency modifier、正式城市入口、第4座城市、世界怪物／Encounter、P1-04障礙物幾何／位置（完全冇改）、經濟／戰鬥／裝備／傭兵／成長、Database schema／存檔格式、Travel/Reroute規格、正式joystick、Render設定、引擎轉換。
+- 測試結果：113（現有，內容完全不變）+ 8（新增）= 121 tests passed, 0 failed。既有Travel/Reroute相關test（`test/world-movement.test.mjs`、`test/worldmap.test.mjs`、`test/world-entity.test.mjs`、`test/hardening.test.mjs`、`test/battle.test.mjs`）全部未經修改，一齊跑證明零回歸。
+- 存檔影響：無。
+- 已知風險：手指喺road視覺線上滑動時嘅觸感／視覺回饋純屬UX感受問題，未經真機驗證，明確留返P1-07實機驗收處理，今次唔提前處理。
+- Rollback基準：P1-05正式rollback base = `main` @ `1bc45a609f97c348b57dfebab0ae14e8b1a52a8a`（即P1-04 merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-05 rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
