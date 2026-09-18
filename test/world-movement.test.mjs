@@ -5,12 +5,14 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
+import {MOVE_SPEED_RATE,MOVE_CATCHUP_CAP_MS} from '../public/movement.js';
 
 let child,base,dir,sessionId;
 const request=async(path,options={})=>{const r=await fetch(base+path,{headers:{'content-type':'application/json'},...options});return r.json()};
 const post=(path,body)=>request(path,{method:'POST',body:JSON.stringify(body)});
 const envelope=(key,payload)=>({commandId:crypto.randomUUID(),idempotencyKey:key,sessionId,characterId:'char-demo',clientSentAt:new Date().toISOString(),payload});
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const setPosition=(x,y,state)=>{const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE characters SET world_x=?,world_y=?,state=? WHERE id='char-demo'`).run(x,y,state);fixture.close()};
 
 test.before(async()=>{
   dir=await mkdtemp(join(tmpdir(),'myrial-world-movement-'));
@@ -32,7 +34,10 @@ test('a legal move is accepted, transitions IN_CITY to IN_WORLD, and updates wor
 });
 
 test('IN_WORLD accepts further legal moves',async()=>{
-  await wait(150);
+  // P1-07D: wait comfortably past MOVE_CATCHUP_CAP_MS so the elapsed-time allowance is not the
+  // limiting factor here — this test is about accepting further legal moves, not about the
+  // allowance/clamp mechanics themselves (see the teleport-clamp test below for that).
+  await wait(MOVE_CATCHUP_CAP_MS+100);
   const before=await request('/api/character/char-demo/snapshot');
   assert.equal(before.state,'IN_WORLD');
   const moved=await post('/api/commands/world/move',envelope('move-legal-2',{targetX:before.worldPosition.x,targetY:before.worldPosition.y+30}));
@@ -41,13 +46,39 @@ test('IN_WORLD accepts further legal moves',async()=>{
   assert.deepEqual(moved.data.worldPosition,{x:before.worldPosition.x,y:before.worldPosition.y+30});
 });
 
-test("world/move clamps a single command's displacement to the server's max step distance, preventing a one-shot teleport",async()=>{
-  await wait(150);
+// P1-07D — Latency-Decoupled Movement (Issue #23). Replaces the old flat MAX_WORLD_STEP=60 clamp
+// assertion: a single command's displacement is now bounded by
+// MOVE_SPEED_RATE * min(elapsedSinceLastNonThrottledAttempt, MOVE_CATCHUP_CAP_MS), not a flat
+// constant — see server.mjs's moveWorld() for the full, accurate invariant (this bound is about a
+// single command's maximum displacement only; it does not prove actual held duration or an average
+// speed). The protection this test exists to prove — no one-shot teleport, regardless of how far the
+// requested target is — is unchanged, just now expressed as a time-scaled ceiling instead of a flat
+// one. Waits comfortably past MOVE_CATCHUP_CAP_MS so the allowance actually saturates at the hard
+// ceiling (the most direct exercise of "never exceeds it"), and so this request is never throttled.
+test("world/move clamps a single command's displacement to the elapsed-time allowance, never exceeding the bounded catch-up ceiling, regardless of how far the requested target is",async()=>{
+  await wait(MOVE_CATCHUP_CAP_MS+100);
   const before=await request('/api/character/char-demo/snapshot');
   const moved=await post('/api/commands/world/move',envelope('move-teleport-attempt',{targetX:before.worldPosition.x+99999,targetY:before.worldPosition.y}));
   assert.equal(moved.status,'ACCEPTED');
   const distance=Math.hypot(moved.data.worldPosition.x-before.worldPosition.x,moved.data.worldPosition.y-before.worldPosition.y);
-  assert.ok(distance<=60.0001,`expected displacement <=60, got ${distance}`);
+  const maxPossible=MOVE_SPEED_RATE*MOVE_CATCHUP_CAP_MS;
+  assert.ok(distance<=maxPossible+0.0001,`expected displacement <= hard catch-up ceiling ${maxPossible}, got ${distance}`);
+  assert.ok(distance>0);
+});
+
+test("world/move sent shortly after the previous one clamps to a small, elapsed-time-proportional displacement, not the full catch-up ceiling",async()=>{
+  const before=await request('/api/character/char-demo/snapshot');
+  // This command itself sets lastWorldMoveAt=now; the FOLLOWING command (after a short wait, still
+  // comfortably above MOVEMENT_MIN_INTERVAL_MS=120 so it is not throttled) should only be granted a
+  // small allowance proportional to that short elapsed gap, not the full MOVE_CATCHUP_CAP_MS ceiling.
+  await post('/api/commands/world/move',envelope('move-shortwait-anchor',{targetX:before.worldPosition.x,targetY:before.worldPosition.y}));
+  await wait(150);
+  const afterAnchor=await request('/api/character/char-demo/snapshot');
+  const moved=await post('/api/commands/world/move',envelope('move-shortwait-attempt',{targetX:afterAnchor.worldPosition.x+99999,targetY:afterAnchor.worldPosition.y}));
+  assert.equal(moved.status,'ACCEPTED');
+  const distance=Math.hypot(moved.data.worldPosition.x-afterAnchor.worldPosition.x,moved.data.worldPosition.y-afterAnchor.worldPosition.y);
+  const maxPossible=MOVE_SPEED_RATE*MOVE_CATCHUP_CAP_MS;
+  assert.ok(distance<maxPossible-1,`expected a short-elapsed displacement well under the full ceiling ${maxPossible}, got ${distance}`);
   assert.ok(distance>0);
 });
 
@@ -135,4 +166,62 @@ test('world/move rejects a non-numeric or missing target payload without crashin
   assert.equal(missing.errorCode,'ERR_INVALID_WORLD_TARGET');
   const after=await request('/api/character/char-demo/snapshot');
   assert.deepEqual(after.worldPosition,before.worldPosition);
+});
+
+// P1-07D — Latency-Decoupled Movement (Issue #23). Simulates a sustained single-in-flight hold at a
+// fixed request cadence (standing in for round-trip time, since asyncqueue.js's single-in-flight
+// coalescing means "how often a request actually lands" is effectively bound by RTT) and proves the
+// server grants close to the full cadence-proportional allowance each cycle — the steady-state
+// throughput this whole feature exists to decouple from a flat per-call cap.
+for(const cadenceMs of [400,500,700]){
+  test(`world/move sustains catch-up at a ${cadenceMs}ms request cadence: each cycle's grant is close to MOVE_SPEED_RATE*cadence, not clipped to a flat per-call cap`,async()=>{
+    setPosition(100,500,'IN_WORLD'); // plenty of rightward room (900px) within WORLD_BOUNDS for
+                                       // every cycle's grant, and a clean slate independent of
+                                       // whatever earlier tests left lastWorldMoveAt/position at
+    await wait(150);
+    // Anchor move: establishes a clean lastWorldMoveAt "now" so the FIRST cadence cycle's elapsed
+    // time is exactly one cadence wait, not inflated by this test's own setup waits.
+    const anchor=await post('/api/commands/world/move',envelope(`move-cadence-${cadenceMs}-anchor`,{targetX:100,targetY:500}));
+    assert.equal(anchor.status,'ACCEPTED');
+    let position=anchor.data.worldPosition;
+    let totalDistance=0;
+    const cycles=3;
+    for(let i=0;i<cycles;i++){
+      await wait(cadenceMs);
+      const moved=await post('/api/commands/world/move',envelope(`move-cadence-${cadenceMs}-${i}`,{targetX:position.x+99999,targetY:position.y}));
+      assert.equal(moved.status,'ACCEPTED');
+      const distance=Math.hypot(moved.data.worldPosition.x-position.x,moved.data.worldPosition.y-position.y);
+      totalDistance+=distance;
+      position=moved.data.worldPosition;
+    }
+    const expectedPerCycle=MOVE_SPEED_RATE*cadenceMs,expectedTotal=expectedPerCycle*cycles;
+    // Generous tolerance for real wall-clock scheduling jitter around setTimeout — the point being
+    // proven is "close to the full cadence-proportional allowance every cycle", not exact-to-the-ms.
+    assert.ok(totalDistance>=expectedTotal*0.85,`expected total displacement close to ${expectedTotal} (${cycles} cycles at ${cadenceMs}ms), got ${totalDistance}`);
+    assert.ok(totalDistance<=expectedTotal*1.15,`expected total displacement not to exceed ${expectedTotal} by more than jitter tolerance, got ${totalDistance}`);
+  });
+}
+
+test('world/move: the maximum single-command grant is close to MOVE_SPEED_RATE*MOVE_CATCHUP_CAP_MS (~128.6px), achieved once elapsed time reaches the cap',async()=>{
+  setPosition(100,500,'IN_WORLD');
+  await wait(MOVE_CATCHUP_CAP_MS+100);
+  const moved=await post('/api/commands/world/move',envelope('move-cap-boundary',{targetX:100+99999,targetY:500}));
+  assert.equal(moved.status,'ACCEPTED');
+  const distance=Math.hypot(moved.data.worldPosition.x-100,moved.data.worldPosition.y-500);
+  const expected=MOVE_SPEED_RATE*MOVE_CATCHUP_CAP_MS;
+  assert.ok(Math.abs(distance-expected)<expected*0.05,`expected displacement close to the ${expected}px cap, got ${distance}`);
+});
+
+test('world/move: elapsed time beyond MOVE_CATCHUP_CAP_MS does not increase the single-command allowance any further — the cap is a hard ceiling, not just a floor',async()=>{
+  setPosition(100,500,'IN_WORLD');
+  await wait(MOVE_CATCHUP_CAP_MS+100);
+  const atCap=await post('/api/commands/world/move',envelope('move-beyond-cap-a',{targetX:100+99999,targetY:500}));
+  assert.equal(atCap.status,'ACCEPTED');
+  const distanceAtCap=Math.hypot(atCap.data.worldPosition.x-100,atCap.data.worldPosition.y-500);
+  const afterAtCap=atCap.data.worldPosition;
+  await wait(MOVE_CATCHUP_CAP_MS*2+200); // twice as long an idle gap
+  const beyondCap=await post('/api/commands/world/move',envelope('move-beyond-cap-b',{targetX:afterAtCap.x+99999,targetY:afterAtCap.y}));
+  assert.equal(beyondCap.status,'ACCEPTED');
+  const distanceBeyondCap=Math.hypot(beyondCap.data.worldPosition.x-afterAtCap.x,beyondCap.data.worldPosition.y-afterAtCap.y);
+  assert.ok(Math.abs(distanceBeyondCap-distanceAtCap)<distanceAtCap*0.05,`expected the doubled-idle-gap grant (${distanceBeyondCap}) to be no larger than the at-cap grant (${distanceAtCap}), proving the cap is a hard ceiling`);
 });

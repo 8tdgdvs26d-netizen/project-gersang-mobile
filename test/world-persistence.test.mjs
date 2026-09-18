@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {OBSTACLES,PLAYER_COLLISION_RADIUS,inflateRect,pointInRect} from '../public/worldgeometry.js';
+import {MOVE_CATCHUP_CAP_MS} from '../public/movement.js';
 
 // P1-06 (test-only, no production code change): proves the already-approved persistence
 // contract established by P1-01/P1-02/P1-04 — accepted non-zero moves persist, zero-displacement
@@ -65,7 +66,7 @@ test('collision: a blocked move is ACCEPTED with collided:true, and a direct DB 
   assert.equal(pointInRect(start.x,start.y,inflatedA),false,'test setup: start must be outside the obstacle');
   assert.equal(pointInRect(centerA.x,centerA.y,inflatedA),true,'test setup: target must land inside the obstacle');
   setPosition(start.x,start.y,'IN_WORLD');
-  await wait(150);
+  await wait(MOVE_CATCHUP_CAP_MS+100);
   const rowBefore=readCharacterRow();
   const blocked=await post('/api/commands/world/move',envelope('persist-collision',{targetX:centerA.x,targetY:centerA.y}));
   assert.equal(blocked.status,'ACCEPTED');

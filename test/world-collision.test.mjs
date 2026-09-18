@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {OBSTACLES,PLAYER_COLLISION_RADIUS,inflateRect,pointInRect} from '../public/worldgeometry.js';
+import {MOVE_SPEED_RATE,MOVE_CATCHUP_CAP_MS} from '../public/movement.js';
 
 let child,base,dir,sessionId;
 const request=async(path,options={})=>{const r=await fetch(base+path,{headers:{'content-type':'application/json'},...options});return r.json()};
@@ -71,14 +72,17 @@ test('a swept move whose start and end points are both outside a thin obstacle, 
 test('a collision-blocked move consumes the normal movement interval like any other move (an immediate follow-up is throttled), but there is no permanent lock-out: a legal move after the normal interval still succeeds',async()=>{
   const start={x:inflatedA.minX-30,y:centerA.y};
   setPosition(start.x,start.y,'IN_WORLD');
-  await wait(150);
+  // P1-07D: wait comfortably past MOVE_CATCHUP_CAP_MS so the elapsed-time allowance is not the
+  // limiting factor for the collision-entry distance this test needs (this test is about
+  // throttle/lock-out semantics, not about the allowance mechanics themselves).
+  await wait(MOVE_CATCHUP_CAP_MS+100);
   const blocked=await post('/api/commands/world/move',envelope('collision-then-legal-a',{targetX:centerA.x,targetY:centerA.y}));
   assert.equal(blocked.data.collided,true);
   assert.equal(blocked.data.throttled,false);
   const immediateFollowUp=await post('/api/commands/world/move',envelope('collision-then-legal-immediate',{targetX:start.x,targetY:start.y-60}));
   assert.equal(immediateFollowUp.data.throttled,true,'a collision-blocked move must still consume the normal MOVEMENT_MIN_INTERVAL_MS window, same as any other move');
   assert.deepEqual(immediateFollowUp.data.worldPosition,start);
-  await wait(150);
+  await wait(MOVE_CATCHUP_CAP_MS+100);
   const legalTarget={x:start.x,y:start.y-60};
   const legal=await post('/api/commands/world/move',envelope('collision-then-legal-b',{targetX:legalTarget.x,targetY:legalTarget.y}));
   assert.equal(legal.status,'ACCEPTED');
@@ -88,7 +92,7 @@ test('a collision-blocked move consumes the normal movement interval like any ot
 
 test('a genuinely legal (non-zero, uncollided) move from IN_CITY transitions to IN_WORLD',async()=>{
   setPosition(50,50,'IN_CITY');
-  await wait(150);
+  await wait(MOVE_CATCHUP_CAP_MS+100);
   const moved=await post('/api/commands/world/move',envelope('collision-legal-transition',{targetX:90,targetY:50}));
   assert.equal(moved.status,'ACCEPTED');
   assert.equal(moved.data.collided,false);
@@ -114,7 +118,7 @@ test('legacy compatibility: a persisted position already inside an inflated obst
   const center={x:(inflatedB.minX+inflatedB.maxX)/2,y:(inflatedB.minY+inflatedB.maxY)/2};
   assert.equal(pointInRect(center.x,center.y,inflatedB),true,'test setup: legacy position must start inside the obstacle');
   setPosition(center.x,center.y,'IN_CITY');
-  await wait(150);
+  await wait(MOVE_CATCHUP_CAP_MS+100);
   const escaped=await post('/api/commands/world/move',envelope('collision-legacy-escape',{targetX:center.x,targetY:center.y-135}));
   assert.equal(escaped.status,'ACCEPTED');
   assert.equal(escaped.data.collided,false);
@@ -148,6 +152,22 @@ test('legacy compatibility: once escaped, re-entering the same obstacle from out
   assert.equal(blocked.status,'ACCEPTED');
   assert.equal(blocked.data.collided,true);
   assert.deepEqual(blocked.data.worldPosition,outside);
+});
+
+test('P1-07D: a much longer swept segment (enabled by the elapsed-time allowance, well beyond the old flat MAX_WORLD_STEP=60 scale) is still correctly blocked by segmentBlocked — the swept-segment check was always designed for arbitrary-length segments, and the allowance change does not weaken it',async()=>{
+  const start={x:inflatedA.minX-100,y:centerA.y}; // ~124px from centerA — beyond the old 60px cap,
+                                                    // within the new elapsed-time allowance
+  const requestedDistance=Math.hypot(centerA.x-start.x,centerA.y-start.y);
+  assert.ok(requestedDistance>60,`test setup: requested distance ${requestedDistance} must exceed the old flat cap to prove this is a genuinely longer segment`);
+  assert.ok(requestedDistance<MOVE_SPEED_RATE*MOVE_CATCHUP_CAP_MS,`test setup: requested distance ${requestedDistance} must be reachable within a single command's allowance`);
+  assert.equal(pointInRect(start.x,start.y,inflatedA),false,'test setup: start point must be outside the obstacle');
+  assert.equal(pointInRect(centerA.x,centerA.y,inflatedA),true,'test setup: target point must land inside the obstacle');
+  setPosition(start.x,start.y,'IN_WORLD');
+  await wait(MOVE_CATCHUP_CAP_MS+100);
+  const blocked=await post('/api/commands/world/move',envelope('collision-long-segment',{targetX:centerA.x,targetY:centerA.y}));
+  assert.equal(blocked.status,'ACCEPTED');
+  assert.equal(blocked.data.collided,true);
+  assert.deepEqual(blocked.data.worldPosition,start);
 });
 
 test('world/bounds clamp continues to work correctly alongside the new obstacle collision check',async()=>{
