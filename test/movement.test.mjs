@@ -7,6 +7,7 @@ import {
   easeTowards,
   isMovementAllowed,
   shouldSendJoystickMove,
+  describeWorldMoveError,
   JOYSTICK_RADIUS,
   JOYSTICK_DEADZONE,
   JOYSTICK_SEND_INTERVAL_MS
@@ -156,4 +157,33 @@ test('shouldSendJoystickMove: full map blocks sending even when the joystick its
 test('shouldSendJoystickMove: follow view only sends when the joystick input is actually active',()=>{
   assert.equal(shouldSendJoystickMove('follow',true),true);
   assert.equal(shouldSendJoystickMove('follow',false),false);
+});
+
+// --- describeWorldMoveError (P1-07 Movement Failure Diagnostic Hotfix) ---
+// Display-only mapping so a /world/move REJECTED response is never silently swallowed by the UI.
+
+test('describeWorldMoveError: every known server.mjs world/move errorCode has a distinct, readable message',()=>{
+  const knownCodes=[
+    'ERR_SESSION_REPLACED',
+    'ERR_INVALID_STATE',
+    'ERR_BATTLE_SETTLEMENT_REQUIRED',
+    'ERR_INVALID_WORLD_TARGET',
+    'ERR_IDEMPOTENCY_KEY_REQUIRED',
+    'ERR_COMMAND_CONFLICT'
+  ];
+  const messages=knownCodes.map(describeWorldMoveError);
+  for(const message of messages)assert.notEqual(message,undefined);
+  for(let i=0;i<knownCodes.length;i++)assert.notEqual(messages[i],knownCodes[i],`expected a human-readable message for ${knownCodes[i]}, not the raw code`);
+  assert.equal(new Set(messages).size,messages.length,'expected every known errorCode to map to a distinct message');
+});
+
+test('describeWorldMoveError: an unmapped/unknown errorCode is returned as-is, never hidden behind a generic label',()=>{
+  assert.equal(describeWorldMoveError('ERR_SOME_FUTURE_CODE_NOT_YET_MAPPED'),'ERR_SOME_FUTURE_CODE_NOT_YET_MAPPED');
+});
+
+test('describeWorldMoveError: a missing/empty errorCode still returns a non-empty fallback message (never blank)',()=>{
+  assert.equal(typeof describeWorldMoveError(undefined),'string');
+  assert.ok(describeWorldMoveError(undefined).length>0);
+  assert.equal(typeof describeWorldMoveError(null),'string');
+  assert.ok(describeWorldMoveError(null).length>0);
 });
