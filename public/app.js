@@ -1,6 +1,12 @@
-import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS} from './worldmap.js';
+import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS,OBSTACLES} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
-import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,describeWorldMoveError,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,CHARACTER_SMOOTHING_MS,CAMERA_SMOOTHING_MS} from './movement.js';
+import {PLAYER_COLLISION_RADIUS,inflateRect} from './worldgeometry.js';
+import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD} from './movement.js';
+// P1-07B: same INFLATED_OBSTACLES construction as server.mjs's own (OBSTACLES.map(inflateRect)) —
+// used only as a presentation-only prediction clamp (see clampPredictedStep), never as the real
+// collision authority, which remains server.mjs's own segmentBlocked() over the same primitives.
+const INFLATED_OBSTACLES=OBSTACLES.map(r=>inflateRect(r,PLAYER_COLLISION_RADIUS));
+const PREDICTION_VELOCITY=predictionVelocity();
 const S={sessionId:'',snap:null,cities:[],roads:[],encounters:[],roster:[],equipment:[],deploymentUnitIds:null,deploymentPositions:{},deploymentSelectedUnitId:'hero',market:[],marketMode:'BUY',storage:[],storages:{},tx:[],battle:null,selectedUnitIds:[],focusTargetId:null,armedSkill:null,battleScrollLeft:0,battlePanDragging:false,battlePanFrame:0,hitUnitIds:[],skillEffects:[],battleLog:[],seenEnemyCastIds:[],tab:'map',modal:null,mapView:'follow'};
 async function req(path,opts={}){const r=await fetch(path,{headers:{'content-type':'application/json'},...opts});const b=await r.json();if(!r.ok)throw new Error(b.errorCode||`HTTP_${r.status}`);return b}
 const post=(p,b)=>req(p,{method:'POST',body:JSON.stringify(b)});
@@ -15,6 +21,10 @@ function ensureDeployment(){const team=S.deploymentUnitIds||[],used=new Set();fo
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),1500)}
 async function refresh(){
   S.snap=await req('/api/character/char-demo/snapshot');
+  // P1-07B: a full refresh() replaces S.snap wholesale (e.g. after travel/arrival/settlement) —
+  // whatever the client was predicting before this is no longer trustworthy, so force a hard
+  // reset of the predicted position to the fresh authoritative one on the next animation frame.
+  predictionResetPending=true;
   const [market,storageList,tx,battle,roster,equipment]=await Promise.all([req(`/api/cities/${S.snap.cityId}/market`),req('/api/character/char-demo/storage'),req('/api/character/char-demo/transactions'),req('/api/character/char-demo/battle'),req('/api/character/char-demo/roster'),req('/api/character/char-demo/equipment')]);
   S.market=market;S.storages=Object.fromEntries(storageList.map(x=>[x.cityId,x.goods]));S.storage=S.storages[S.snap.cityId]||[];S.tx=tx;S.roster=roster;S.equipment=equipment;if(S.deploymentUnitIds===null)S.deploymentUnitIds=roster.map(x=>x.id);ensureDeployment();setBattle(battle);if(battle?.status==='ACTIVE'||battle?.reward?.settlementRequired)S.tab='battle';
   render();
@@ -31,7 +41,7 @@ function render(){
   const oldScroll=document.querySelector('.battle-scroll');if(oldScroll)S.battleScrollLeft=oldScroll.scrollLeft;
   const combatLocked=S.tab==='battle'&&(S.battle?.status==='ACTIVE'||S.battle?.reward?.settlementRequired);
   const tabs=combatLocked?'':`<div class="tabs">${nav('map','地圖')}${nav('cargo','貨艙')}${nav('battle','戰鬥')}${nav('history','紀錄')}</div>`;
-  document.querySelector('#app').innerHTML=`<div class="shell ${combatLocked?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.32.0</div><div class="city">${cityName(s.cityId)}</div><div class="small">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
+  document.querySelector('#app').innerHTML=`<div class="shell ${combatLocked?'combat-shell':''}"><section class="card top"><div><div class="small">Combat Prototype v0.32.0</div><div class="city">${cityName(s.cityId)}</div><div class="small" id="state-label">${s.state}</div></div><div class="money">💰 ${s.walletGold}</div></section>${tabs}${view()}</div>`;
   document.querySelectorAll('[data-tab]').forEach(x=>x.onclick=()=>{S.tab=x.dataset.tab;render()});wire();setupBattlePan();setupJoystick();if(S.hitUnitIds.length)setTimeout(()=>S.hitUnitIds=[],400);if(S.modal)showModal();
 }
 function view(){
@@ -181,15 +191,20 @@ function updateTravelProgress(){
 }
 // P1-07A: sendWorldMove is data-only — it updates the authoritative S.snap and nothing else.
 // All on-screen presentation (hero marker position, camera viewBox) is owned exclusively by
-// tickMovementFrame()'s requestAnimationFrame loop below, which eases the display toward
-// whatever S.snap.worldPosition/state currently say. This keeps "what we ask the server for"
+// tickMovementFrame()'s requestAnimationFrame loop below. This keeps "what we ask the server for"
 // and "what we show on screen" cleanly separated, per P1-07A's server-authoritative requirement.
 //
 // P1-07 Movement Failure Diagnostic Hotfix — a real-device report found joystick input and
 // camera/UI working normally while the character never actually moved, with zero on-screen
-// indication of why. Root cause is NOT yet confirmed. This hotfix only makes failures visible
-// (REJECTED errorCode, or a network/command exception) — it does not change server behavior,
-// retry behavior, or any movement/throttle/collision logic.
+// indication of why. This hotfix makes failures visible (REJECTED errorCode, or a network/command
+// exception) — it does not change server behavior, retry behavior, or any movement/throttle/
+// collision logic.
+//
+// P1-07B — REJECTED and a network/command exception also set predictionSuspended=true, so
+// tickMovementFrame stops advancing the predicted position further ahead while something is
+// actually wrong (rather than just capping its lead, which is for normal latency, not failure).
+// A fresh successful (ACCEPTED) response clears it again. See tickMovementFrame for how this
+// combines with reconciliation.
 const sendWorldMove=createCoalescingSender(async({x,y})=>{
   let r;
   try{
@@ -197,14 +212,17 @@ const sendWorldMove=createCoalescingSender(async({x,y})=>{
   }catch(err){
     console.error('sendWorldMove: command() threw (network or server exception)',err);
     toast(`移動指令失敗：${err?.message||'網絡或伺服器錯誤'}`);
+    predictionSuspended=true;
     return;
   }
   if(r.status==='REJECTED'){
     console.warn('sendWorldMove: REJECTED',r.errorCode);
     toast(describeWorldMoveError(r.errorCode));
+    predictionSuspended=true;
     return;
   }
   S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state;
+  predictionSuspended=false;
   if(r.data.collided)toast('撞到障礙物');
 });
 
@@ -236,12 +254,22 @@ function setupJoystick(){
   };
 }
 
-// Presentation smoothing (P1-07A): eases the displayed hero position and camera box toward the
-// latest authoritative server values every animation frame, using delta-time based easing (frame
-// rate independent — see movement.js's easeTowards). Display never leads or predicts past the
-// server's last confirmed position, so it can never visually cross an obstacle the server has
-// already rejected: it just eases toward that same unchanged, safe point and stops there.
-let displayPosition=null,displayCamera=null,lastFrameTime=0,lastJoystickSendAt=0;
+// P1-07B — Continuous Visual Movement + Server Reconciliation. Replaces P1-07A's discrete
+// serverPosition-snapshot + exponential-easing model (which produced visible "velocity pulsing" —
+// see movement.js's file header for the root-cause math). `predictedPosition` now advances
+// continuously every frame while the joystick is held, capped at MAX_PREDICTION_LEAD ahead of the
+// last confirmed serverPosition (normal expected lead, never actively pulled back for this alone —
+// see sendWorldMove's ACCEPTED/collided:false path, which does nothing extra). Both the hero
+// marker and the camera render from this single continuous position — no more separate camera
+// easing chasing its own discrete target, which was the "second layer" of pulsing.
+//
+// Active reconciliation (easing back toward serverPosition, or an immediate hard reset) only runs
+// when predictionSuspended is set (REJECTED / network exception — see sendWorldMove) or when
+// divergence has grown past MAX_PREDICTION_LEAD on its own; a normal, healthy, non-colliding
+// response never triggers it. Collision/boundary cases are handled by clampPredictedStep already
+// keeping the prediction from advancing past what the server would reject in the first place, so
+// they normally never produce a large enough gap to need active correction at all.
+let predictedPosition=null,predictionSuspended=false,predictionResetPending=false,lastFrameTime=0,lastJoystickSendAt=0;
 function tickMovementFrame(now){
   requestAnimationFrame(tickMovementFrame);
   const dt=lastFrameTime?Math.min(now-lastFrameTime,100):16;
@@ -249,19 +277,30 @@ function tickMovementFrame(now){
   if(!S.snap||S.snap.state==='TRAVELING')return;
   const serverPos=S.snap.worldPosition;
   if(!serverPos)return;
-  if(S.snap.state==='IN_WORLD'){
-    if(!displayPosition)displayPosition={...serverPos};
-    displayPosition={x:easeTowards(displayPosition.x,serverPos.x,dt,CHARACTER_SMOOTHING_MS),y:easeTowards(displayPosition.y,serverPos.y,dt,CHARACTER_SMOOTHING_MS)};
+  if(S.snap.state!=='IN_WORLD'||predictionResetPending){
+    predictedPosition={...serverPos};
+    predictionResetPending=false;
+    predictionSuspended=false;
   }else{
-    displayPosition={...serverPos};
+    if(!predictedPosition)predictedPosition={...serverPos};
+    const distance=Math.hypot(predictedPosition.x-serverPos.x,predictedPosition.y-serverPos.y);
+    const smoothingMs=(predictionSuspended||distance>MAX_PREDICTION_LEAD)?reconciliationSmoothingMs(distance):undefined;
+    if(smoothingMs===null){
+      predictedPosition={...serverPos};
+    }else if(smoothingMs!==undefined){
+      predictedPosition={x:easeTowards(predictedPosition.x,serverPos.x,dt,smoothingMs),y:easeTowards(predictedPosition.y,serverPos.y,dt,smoothingMs)};
+    }else if(joystickActive&&shouldSendJoystickMove(S.mapView,joystickInput.active)){
+      const candidate=advancePredictedPosition(predictedPosition,serverPos,joystickInput,dt,PREDICTION_VELOCITY,MAX_PREDICTION_LEAD);
+      predictedPosition=clampPredictedStep(predictedPosition,candidate,WORLD_BOUNDS,INFLATED_OBSTACLES);
+    }
   }
   const hero=document.querySelector('.hero-marker');
-  if(hero){hero.setAttribute('cx',displayPosition.x);hero.setAttribute('cy',displayPosition.y)}
-  const targetCamera=resolveEffectiveViewBox(S.mapView,S.snap.state,serverPos,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
-  if(!displayCamera)displayCamera={...targetCamera};
-  displayCamera={x:easeTowards(displayCamera.x,targetCamera.x,dt,CAMERA_SMOOTHING_MS),y:easeTowards(displayCamera.y,targetCamera.y,dt,CAMERA_SMOOTHING_MS),width:easeTowards(displayCamera.width,targetCamera.width,dt,CAMERA_SMOOTHING_MS),height:easeTowards(displayCamera.height,targetCamera.height,dt,CAMERA_SMOOTHING_MS)};
+  if(hero){hero.setAttribute('cx',predictedPosition.x);hero.setAttribute('cy',predictedPosition.y)}
+  const stateLabel=document.querySelector('#state-label');
+  if(stateLabel&&stateLabel.textContent!==S.snap.state)stateLabel.textContent=S.snap.state;
+  const camera=resolveEffectiveViewBox(S.mapView,S.snap.state,predictedPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
   const svg=document.querySelector('.world-map');
-  if(svg)svg.setAttribute('viewBox',viewBoxAttr(displayCamera));
+  if(svg)svg.setAttribute('viewBox',viewBoxAttr(camera));
   if(joystickActive&&shouldSendJoystickMove(S.mapView,joystickInput.active)&&now-lastJoystickSendAt>=JOYSTICK_SEND_INTERVAL_MS){
     lastJoystickSendAt=now;
     const target=computeJoystickTarget(serverPos,joystickInput,JOYSTICK_STEP_DISTANCE);

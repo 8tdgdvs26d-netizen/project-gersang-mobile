@@ -316,3 +316,44 @@
 - 存檔影響：無。
 - **下一步**：呢個hotfix merge之後，Charlie下次喺iPhone重試joystick移動，畫面出現嘅toast／Safari console嘅`console.warn`/`console.error`會直接顯示真正errorCode或exception內容，到時先可以針對真正root cause提交正式修正計劃。
 - Rollback基準：本次hotfix rollback base = `main` @ `fefb11876a233fe2948a9a59a327cb31d8ba311c`（即P1-07A merge之後嘅main）。更舊歷史checkpoint reference（唔係本次rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。
+
+## P1-07B — 2026-09-18 — Continuous Visual Movement + Server Reconciliation
+
+- 分類：《萬行誌：白手 — Canonical v0.5》Phase 1 第二輪真機驗收後嘅blocking UX remediation（GitHub Issue #19）。P1-07A+diagnostic hotfix部署後，Charlie第二輪iPhone真機錄影確認joystick同Follow/Full Map已經正常driving`/world/move`，但角色移動同camera追蹤仍然明顯「卡卡下」（velocity pulsing），diagnostic toast冇見任何rejection/network error。今次修正嘅係movement presentation model本身，**唔係新增玩法**。
+- 起點：`main` @ `5705955a90cb11b25de63bca0ac22b2da49f736f`（即P1-07 Diagnostic Hotfix merge之後）。
+
+### Pulsing根因（read-only research確認，有數得計）
+
+`sendWorldMove`每`JOYSTICK_SEND_INTERVAL_MS=140ms`先攞到一次server response，而`JOYSTICK_STEP_DISTANCE=18`細過`MAX_WORLD_STEP=60`，即係每次accepted response都令`serverPosition`**離散跳18px**。P1-07A用`easeTowards`exponential easing（character 80ms／camera 120ms）追呢個離散target：用`factor=1-exp(-dt/smoothingMs)`計，穩定狀態下character嘅視覺誤差喺每個140ms週期入面喺~3.8px同~21.8px之間擺動（速度比約5.7倍），camera（用緊獨立、追住同一組離散`serverPos`嘅easing鏈）誤差擺動幅度仲大（~26.1px峰值）而且相位唔同步——兩條獨立exponential easing各自追住同一條離散階梯，形成issue講嘅「加速→追近→再跳前→再追」pulsing，同「camera第二層拖尾」。
+
+### 方案（經Charlie批准嘅修正版UX決定）
+
+- 新增client-only**連續predicted position**：joystick held時，每個animation frame（唔止每140ms send嗰刻）都根據方向＋強度＋dt連續前進，唔再淨係喺離散server snapshot之間做exponential easing。
+- **速度直接由現有常數推導**：`predictionVelocity = JOYSTICK_STEP_DISTANCE / JOYSTICK_SEND_INTERVAL_MS`（18/140 px/ms），唔新增獨立speed常數，確保視覺速度長遠同server真實批准速度一致，唔會漂移。
+- 新增**`MAX_PREDICTION_LEAD=36px`**：predicted position最多可以領先最新confirmed serverPosition 36px，到頂就停止local prediction（等server追上），**呢個係正常expected lead，唔係error，唔會被主動拉返**——一般successful、非collided嘅response（`collided=false`、`state`正常）完全唔做backward reconciliation，只俾server逐步追近prediction，避免重新製造forward/backward sawtooth。
+- **Reconciliation淨係喺特定觸發先做**：`REJECTED`／network或command exception（呢兩種仲會即刻`predictionSuspended=true`令prediction停止再前進，等下次成功send先resume）、以及divergence自然超出`MAX_PREDICTION_LEAD`。Divergence≤36px用`RECONCILE_SMOOTHING_MS=40ms`溫和修正，36~54px（`RECONCILE_HARD_RESET_DISTANCE=54`＝3×`JOYSTICK_STEP_DISTANCE`）用`RECONCILE_STRONG_SMOOTHING_MS=40ms`（獨立可調常數，暫時同上）較快修正，>54px或者非`IN_WORLD`／`refresh()`（reload/travel/settlement等）觸發即刻hard reset，唔做動畫。
+- **Collision/boundary**：新增`clampPredictedStep()`／`isStepBlocked()`，直接reuse`public/worldgeometry.js`嘅`pointInRect`/`segmentIntersectsRect`primitives（同`server.mjs`一樣嘅`OBSTACLES.map(inflateRect)`），逐字mirror`server.mjs`嘅`segmentBlocked()`escape-only語義同「bounds clamp先、collision check後、blocked就企定唔郁」嘅all-or-nothing順序。因為prediction本身已經用緊同server一樣嘅規則clamp住，正常撞牆嗰陣predicted本身就已經停喺接近server真正會拒絕嘅位置，唔會出現「肉眼穿牆好深先被拉返」。**呢個純粹係presentation-only clamp，只會比server更嚴唔會更鬆，真正collision權威永遠喺`server.mjs`**。
+- **Camera改跟`predictedPosition`**（renderPosition），移除獨立嘅120ms camera easing——Camera同character而家共用同一個已經連續嘅position，唔再各自追住離散target，消除咗「第二層拖尾」。
+- **Release即停**：`pointerup`/`pointercancel`/`onlostpointercapture`已有嘅`reset()`令`joystickActive=false`，prediction下一frame即刻唔再前進，冇任何慣性/滑行。
+- **Full Map保持inspection-only**：`isMovementAllowed`/`shouldSendJoystickMove`呢兩個現有pure helper完全冇改，繼續同時gate住prediction advance同server send。
+- **`IN_CITY`stale label**：根因係頂部狀態標籤淨係喺`render()`成個HTML重建嗰刻寫一次，但`sendWorldMove`（P1-07A刻意設計）改`S.snap.state`喺記憶體入面唔call`render()`，令標籤停留喺舊字。最小修正：加`id="state-label"`，喺`tickMovementFrame()`（同`.hero-marker`/`.world-map`一樣嘅presentation patch位置）每frame檢查、有變就update textContent，唔做full render。
+
+### 改動
+
+- `public/movement.js`：新增Prototype Parameters `MAX_PREDICTION_LEAD=36`、`RECONCILE_SMOOTHING_MS=40`、`RECONCILE_STRONG_SMOOTHING_MS=40`、`RECONCILE_HARD_RESET_DISTANCE=54`；新增pure helper `predictionVelocity()`、`isStepBlocked()`、`clampPredictedStep()`、`advancePredictedPosition()`、`reconciliationSmoothingMs()`；**移除**`CHARACTER_SMOOTHING_MS`／`CAMERA_SMOOTHING_MS`（被新model完全取代，全repo已冇任何地方使用，屬dead code清理，唔係未經批准改動）。
+- `public/app.js`：`tickMovementFrame()`重寫（prediction advance + lead cap + reconciliation banding + camera改source + state-label patch）；`sendWorldMove`喺REJECTED/exception分支加`predictionSuspended=true`、ACCEPTED成功分支清返false；`refresh()`加`predictionResetPending=true`；`render()`嘅狀態標籤加`id="state-label"`；joystick input（`computeJoystickInput`/`clampJoystickKnob`）、send target計算（`computeJoystickTarget`，仍然由`serverPos`計，唔係predicted）、send interval（140ms）、joystick radius/deadzone——全部**一個字冇改**。
+- `CHANGELOG.md`（本段）。
+- **`server.mjs`、`public/worldmap.js`、`public/worldgeometry.js`、`public/styles.css`、DB schema/persistence、API contract、movement state machine、physical city entry——一個字都冇改**，`git diff --stat`可核實（只有`public/app.js`、`public/movement.js`、`test/movement.test.mjs`三個檔）。
+
+### 真機smoke test
+
+用headless Chromium + iPhone viewport模擬持續按住joystick 1.8秒，逐frame取樣hero marker位置：每個~16ms樣本嘅位移穩定喺1.7~3.6px範圍（連續細步，冇離散大跳），同P1-07A舊model「一次跳18px再exponential衰減」嘅pattern明顯唔同。放手後50ms同350ms嘅位置完全一致（即刻停、冇滑行）。狀態標籤正確顯示`IN_WORLD`（唔再stale）。另外確認Full Map入面拖joystick，class帶`joystick-disabled`且角色位置完全唔變，切返Follow正常。（呢個屬engineering-level smoke test，**唔代表P1-07B/P1-07正式pass**，仍然需要Charlie iPhone真機驗收。）
+
+### 測試
+
+新增22個test（`test/movement.test.mjs`）：`predictionVelocity`數值推導、4個Prototype Parameter鎖定值、`isStepBlocked`/`clampPredictedStep`同`test/world-collision.test.mjs`一樣嘅obstacle fixture做parity驗證（包括escape-only legacy語義）、`advancePredictedPosition`嘅lead cap邊界（含inclusive boundary）同「lead係相對serverPosition量度，唔係相對原點」、`reconciliationSmoothingMs`三檔邊界（含兩個inclusive boundary）同自訂threshold參數化驗證。
+
+- 測試結果：162（現有，內容完全不變）+ 22（新增）= **184 tests passed, 0 failed**。
+- 存檔影響：無。
+- 已知限制／真機Acceptance Gate（**Merge後仍未代表P1-07正式pass**）：`MAX_PREDICTION_LEAD`/`RECONCILE_SMOOTHING_MS`/`RECONCILE_STRONG_SMOOTHING_MS`/`RECONCILE_HARD_RESET_DISTANCE`全部係Prototype Parameter，真機test後可能需要再調（尤其`RECONCILE_STRONG_SMOOTHING_MS`目前同`RECONCILE_SMOOTHING_MS`數值一樣，只係獨立tunable，未必代表已經係最佳分野）。真機連續移動手感、camera同步、collision修正是否突兀、release即停手感——全部要Charlie親身iPhone驗證。
+- Rollback基準：P1-07B正式rollback base = `main` @ `5705955a90cb11b25de63bca0ac22b2da49f736f`（即P1-07 Diagnostic Hotfix merge之後嘅main）。更舊歷史checkpoint reference（唔係P1-07B rollback base）：`879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`。

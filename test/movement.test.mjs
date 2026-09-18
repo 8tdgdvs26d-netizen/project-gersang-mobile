@@ -8,10 +8,21 @@ import {
   isMovementAllowed,
   shouldSendJoystickMove,
   describeWorldMoveError,
+  predictionVelocity,
+  isStepBlocked,
+  clampPredictedStep,
+  advancePredictedPosition,
+  reconciliationSmoothingMs,
   JOYSTICK_RADIUS,
   JOYSTICK_DEADZONE,
-  JOYSTICK_SEND_INTERVAL_MS
+  JOYSTICK_STEP_DISTANCE,
+  JOYSTICK_SEND_INTERVAL_MS,
+  MAX_PREDICTION_LEAD,
+  RECONCILE_SMOOTHING_MS,
+  RECONCILE_STRONG_SMOOTHING_MS,
+  RECONCILE_HARD_RESET_DISTANCE
 } from '../public/movement.js';
+import {WORLD_BOUNDS,PLAYER_COLLISION_RADIUS,OBSTACLES,inflateRect,pointInRect} from '../public/worldgeometry.js';
 
 // --- Client/server throttle timing: must never oscillate against each other ---
 
@@ -186,4 +197,155 @@ test('describeWorldMoveError: a missing/empty errorCode still returns a non-empt
   assert.ok(describeWorldMoveError(undefined).length>0);
   assert.equal(typeof describeWorldMoveError(null),'string');
   assert.ok(describeWorldMoveError(null).length>0);
+});
+
+// --- P1-07B: Continuous Visual Movement + Server Reconciliation ---
+
+// --- predictionVelocity: derived from existing constants, not an independent speed ---
+
+test('predictionVelocity: defaults to exactly JOYSTICK_STEP_DISTANCE / JOYSTICK_SEND_INTERVAL_MS, not a separately-tuned constant',()=>{
+  assert.equal(predictionVelocity(),JOYSTICK_STEP_DISTANCE/JOYSTICK_SEND_INTERVAL_MS);
+});
+
+test('predictionVelocity: computes correctly for arbitrary step/interval inputs',()=>{
+  assert.equal(predictionVelocity(36,120),0.3);
+  assert.equal(predictionVelocity(10,100),0.1);
+});
+
+// --- Prototype Parameter locks ---
+
+test('P1-07B reconciliation constants are locked at their currently-approved values',()=>{
+  assert.equal(MAX_PREDICTION_LEAD,36);
+  assert.equal(RECONCILE_SMOOTHING_MS,40);
+  assert.equal(RECONCILE_STRONG_SMOOTHING_MS,40);
+  assert.equal(RECONCILE_HARD_RESET_DISTANCE,54);
+  assert.equal(RECONCILE_HARD_RESET_DISTANCE,JOYSTICK_STEP_DISTANCE*3,'hard reset distance is documented as 3x JOYSTICK_STEP_DISTANCE');
+});
+
+// --- isStepBlocked / clampPredictedStep: must be at least as strict as server.mjs's own
+// segmentBlocked()/moveWorld() — parity tests using the exact same obstacle fixtures as
+// test/world-collision.test.mjs, so client prediction and server truth cannot silently drift. ---
+
+const inflatedObstacles=OBSTACLES.map(o=>inflateRect(o,PLAYER_COLLISION_RADIUS));
+const ridgeA=OBSTACLES.find(o=>o.id==='ridge-a'),inflatedA=inflateRect(ridgeA,PLAYER_COLLISION_RADIUS);
+const ridgeB=OBSTACLES.find(o=>o.id==='ridge-b'),inflatedB=inflateRect(ridgeB,PLAYER_COLLISION_RADIUS);
+const centerA={x:(inflatedA.minX+inflatedA.maxX)/2,y:(inflatedA.minY+inflatedA.maxY)/2};
+const centerB={x:(inflatedB.minX+inflatedB.maxX)/2,y:(inflatedB.minY+inflatedB.maxY)/2};
+
+test('isStepBlocked: a step landing inside an inflated obstacle from clean outside space is blocked (parity with server.mjs collision behavior)',()=>{
+  const start={x:inflatedA.minX-30,y:centerA.y};
+  assert.equal(isStepBlocked(start.x,start.y,centerA.x,centerA.y,inflatedObstacles),true);
+});
+
+test('isStepBlocked: escape-only legacy semantics — already inside an obstacle, a step that lands outside is allowed (mirrors server.mjs collision-legacy-escape fixture)',()=>{
+  assert.equal(pointInRect(centerB.x,centerB.y,inflatedB),true,'test setup: start must be inside the obstacle');
+  const escapeTarget={x:centerB.x,y:centerB.y-135};
+  assert.equal(pointInRect(escapeTarget.x,escapeTarget.y,inflatedB),false,'test setup: escape target must land outside');
+  assert.equal(isStepBlocked(centerB.x,centerB.y,escapeTarget.x,escapeTarget.y,inflatedObstacles),false);
+});
+
+test('isStepBlocked: escape-only legacy semantics — already inside an obstacle, a step that stays inside the SAME obstacle is still blocked (mirrors server.mjs collision-legacy-still-inside fixture)',()=>{
+  const stillInside={x:centerB.x+15,y:centerB.y};
+  assert.equal(pointInRect(stillInside.x,stillInside.y,inflatedB),true,'test setup: candidate must still land inside the same obstacle');
+  assert.equal(isStepBlocked(centerB.x,centerB.y,stillInside.x,stillInside.y,inflatedObstacles),true);
+});
+
+test('clampPredictedStep: an unobstructed, in-bounds candidate passes through unchanged',()=>{
+  const current={x:500,y:500},candidate={x:510,y:505};
+  assert.deepEqual(clampPredictedStep(current,candidate,WORLD_BOUNDS,inflatedObstacles),candidate);
+});
+
+test('clampPredictedStep: a candidate beyond WORLD_BOUNDS is clamped to the edge, same shape as server.mjs\'s own bounds clamp',()=>{
+  const current={x:5,y:500},candidate={x:-40,y:1500};
+  const result=clampPredictedStep(current,candidate,WORLD_BOUNDS,inflatedObstacles);
+  assert.equal(result.x,WORLD_BOUNDS.min);
+  assert.equal(result.y,WORLD_BOUNDS.max);
+});
+
+test('clampPredictedStep: a candidate that would collide freezes at current (no partial slide toward the obstacle)',()=>{
+  const current={x:inflatedA.minX-30,y:centerA.y};
+  const result=clampPredictedStep(current,{x:centerA.x,y:centerA.y},WORLD_BOUNDS,inflatedObstacles);
+  assert.deepEqual(result,current);
+});
+
+test('clampPredictedStep: escape-only — starting inside an obstacle, stepping outward is allowed',()=>{
+  const escapeTarget={x:centerB.x,y:centerB.y-135};
+  const result=clampPredictedStep(centerB,escapeTarget,WORLD_BOUNDS,inflatedObstacles);
+  assert.deepEqual(result,escapeTarget);
+});
+
+// --- advancePredictedPosition: per-frame continuous advance, self-capped at MAX_PREDICTION_LEAD ---
+
+test('advancePredictedPosition: inactive input leaves the position unchanged',()=>{
+  const current={x:100,y:100},server={x:100,y:100};
+  const inactive={active:false,dirX:0,dirY:0,magnitude:0};
+  assert.deepEqual(advancePredictedPosition(current,server,inactive,16,0.1286,36),current);
+});
+
+test('advancePredictedPosition: dt=0 produces no movement',()=>{
+  const current={x:100,y:100},server={x:100,y:100};
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  assert.deepEqual(advancePredictedPosition(current,server,input,0,0.1286,36),current);
+});
+
+test('advancePredictedPosition: full-magnitude input advances by velocity*dt in the input direction',()=>{
+  const current={x:100,y:100},server={x:100,y:100};
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=advancePredictedPosition(current,server,input,100,0.2,36);
+  assert.ok(Math.abs(result.x-120)<1e-9,`expected x~120, got ${result.x}`);
+  assert.equal(result.y,100);
+});
+
+test('advancePredictedPosition: a candidate exactly at maxLead from serverPosition is allowed (inclusive boundary, matches this codebase\'s existing boundary convention)',()=>{
+  const current={x:100,y:100},server={x:100,y:100};
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=advancePredictedPosition(current,server,input,180,0.2,36); // delta = 0.2*180 = 36 exactly
+  assert.ok(Math.abs(result.x-136)<1e-9);
+});
+
+test('advancePredictedPosition: a candidate that would exceed maxLead freezes prediction at current instead of overshooting',()=>{
+  const current={x:100,y:100},server={x:100,y:100};
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=advancePredictedPosition(current,server,input,200,0.2,36); // delta = 40, would exceed 36
+  assert.deepEqual(result,current);
+});
+
+test('advancePredictedPosition: the lead cap is measured against serverPosition, not the origin — a predicted position already leading is only free to advance further up to the same cap',()=>{
+  const current={x:130,y:100},server={x:100,y:100}; // already leading by 30
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  const smallStep=advancePredictedPosition(current,server,input,10,0.2,36); // +2px -> lead 32, within cap
+  assert.ok(Math.abs(smallStep.x-132)<1e-9);
+  const bigStep=advancePredictedPosition(current,server,input,100,0.2,36); // +20px -> lead 50, exceeds cap
+  assert.deepEqual(bigStep,current);
+});
+
+// --- reconciliationSmoothingMs: distance-based correction banding ---
+
+test('reconciliationSmoothingMs: within MAX_PREDICTION_LEAD returns the gentle smoothing constant',()=>{
+  assert.equal(reconciliationSmoothingMs(10),RECONCILE_SMOOTHING_MS);
+  assert.equal(reconciliationSmoothingMs(0),RECONCILE_SMOOTHING_MS);
+});
+
+test('reconciliationSmoothingMs: exactly at MAX_PREDICTION_LEAD is still the gentle band (inclusive boundary)',()=>{
+  assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD),RECONCILE_SMOOTHING_MS);
+});
+
+test('reconciliationSmoothingMs: between MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE returns the strong smoothing constant',()=>{
+  assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD+1),RECONCILE_STRONG_SMOOTHING_MS);
+  assert.equal(reconciliationSmoothingMs(45),RECONCILE_STRONG_SMOOTHING_MS);
+});
+
+test('reconciliationSmoothingMs: exactly at RECONCILE_HARD_RESET_DISTANCE is still the strong band (inclusive boundary)',()=>{
+  assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE),RECONCILE_STRONG_SMOOTHING_MS);
+});
+
+test('reconciliationSmoothingMs: beyond RECONCILE_HARD_RESET_DISTANCE returns null to signal an immediate hard reset',()=>{
+  assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE+1),null);
+  assert.equal(reconciliationSmoothingMs(1000),null);
+});
+
+test('reconciliationSmoothingMs: custom thresholds/constants are honored, not hardcoded internally',()=>{
+  assert.equal(reconciliationSmoothingMs(10,5,20,111,222),222);
+  assert.equal(reconciliationSmoothingMs(10,20,20,111,222),111);
+  assert.equal(reconciliationSmoothingMs(30,20,20,111,222),null);
 });
