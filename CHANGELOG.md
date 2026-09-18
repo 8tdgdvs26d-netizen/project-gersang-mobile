@@ -154,3 +154,60 @@
   - `test/worldmap.test.mjs`：原有嘅camera-follow render測試改用`IN_WORLD` snap；新增2個test明確證明`IN_CITY`同`TRAVELING`都保持`0 0 1000 1000`並且所有城市喺HTML入面`data-city`都齊全可撳。
 - 測試結果：84（round 1，其中1個test因為呢個修正而更新描述及snap.state，內容邏輯正確反映新行為）+ 2（新增）= 86 tests passed, 0 failed；現有city-tap／travel／reroute相關test完全冇削弱。
 - Rollback基準：同上。
+
+## P1-04 — 2026-09-18 — Bounds + Collision / Obstacles Prototype
+
+- 分類：《萬行誌：白手 — Canonical v0.5》Phase 1 第四個開發任務（GitHub Issue #10）。
+- 起點：`main` @ `8c703388c72fe12b3a36956c3a9d1b4a704c7cb9`（即P1-03 merge之後）。
+- 目標：喺P1-02自由世界移動之上，加入第一個Server-authoritative嘅障礙物碰撞Prototype，證明世界空間可以有玩家郁唔過去嘅地方。今次係Prototype，障礙物位置／大小／數量未鎖死。
+- Shared geometry module（經Charlie修正批准，取代原本「Server／Client各自複製一份」嘅方案）：
+  - 新增`public/worldgeometry.js`——一個DOM-free、Node同browser都可以直接`import`嘅shared module，集中保存`WORLD_BOUNDS`、`PLAYER_COLLISION_RADIUS`、`OBSTACLES`、`inflateRect`、`segmentIntersectsRect`（swept segment-vs-axis-aligned-rectangle，Liang-Barsky parametric clipping）、`pointInRect`。
+  - `server.mjs`直接`import`呢個module做碰撞判定；`public/worldmap.js`直接`import`同一個module做障礙物render，唔再自己維護一份`WORLD_BOUNDS`副本。`public`目錄本身已經由`server.mjs`static serve，冇加新static route。
+  - 呢個係將`WORLD_BOUNDS`由P1-03「Server/Client各自複製、人手同步」嘅做法，改做真正single source of truth；今次冇建立大型config framework，純粹一個檔案幾個pure function／常數。
+- 碰撞方案（經Charlie批准）：Swept segment-vs-rectangle（唔係只check endpoint）——由`current`去bounds-safe candidate嘅整條移動路徑做intersection test，保證「起點同終點都喺障礙物外，但移動路徑穿過薄障礙物」嘅情況都會判定碰撞（`MAX_WORLD_STEP`=60可能大過障礙物闊度，endpoint-only會漏判）。
+- Player Collision Radius（Prototype Parameter，經Charlie批准）：`PLAYER_COLLISION_RADIUS`=14，對齊現有hero marker嘅視覺SVG半徑（`r="14"`）。呢個半徑淨係用嚟inflate障礙物矩形做碰撞判定，`WORLD_BOUNDS`維持玩家中心座標`0..1000`唔變，冇改做`14..986`。
+- 障礙物位置（Prototype提案，未鎖死）：兩個軸對齊矩形——`ridge-a`（世界座標`700,400`至`720,550`）、`ridge-b`（`550,400`至`620,470`）。兩者連同inflate之後嘅範圍都刻意避開三座城市座標同出生點（starter-village／hill-market／harbour-city），已有專屬regression test覆蓋。
+- Movement順序（同Charlie批准嘅一致）：驗證state/payload → 計算target方向 → `MAX_WORLD_STEP`clamp → `WORLD_BOUNDS`clamp（bounds-safe candidate）→ 由`current`去candidate做swept obstacle collision → 撞到就位置不變、揸唔到就寫入candidate。冇physics engine、冇pathfinding。
+- Collision response：`status`仍然`ACCEPTED`、response新增`data.collided`（boolean）、撞到時`worldPosition`維持`current`不變，唔做clamp-to-edge、唔做sliding。
+- 零位移唔可以觸發state transition（修正咗P1-02遺留嘅一個bug，經Charlie發現）：原本`moveWorld()`嘅DB UPDATE無論任何情況都寫`state='IN_WORLD'`，連throttled（零位移）個case都會錯誤咁將`IN_CITY`轉做`IN_WORLD`。今次修正為：只有實際產生非零位移嘅移動（`nextX/nextY`同`current`唔同）先會寫入資料庫同轉`IN_WORLD`；throttled同collision-blocked兩種零位移情況，依家都會保持原本嘅state同position完全不變。
+- Legacy存檔相容性（經Charlie要求，語義喺Review round 2修正）：唔假設「之後嘅write有驗證所以DB一定合法」——P1-04新增障礙物之前已經存在嘅`worldPosition`存檔，理論上可能已經跌咗入新障礙物（inflate之後）嘅範圍。處理方式（escape-only）：如果`current`本身已經喺某個inflated障礙物範圍內，嗰個障礙物只有喺candidate**仍然喺同一個障礙物內**先會擋（唔容許喺牆內自由行走或者逐步穿越成幅牆）；candidate實際離開咗嗰個障礙物先算合法escape。其他障礙物仍然照常swept check（由外面進入／穿越任何障礙物繼續會被擋）。冇自動migration、冇reset存檔、冇改DB schema。
+- 修改：
+  - `server.mjs`：`import`新shared module；移除本地`WORLD_BOUNDS`定義；`moveWorld()`重寫，加入swept obstacle collision、zero-displacement狀態修正、legacy escape-only邏輯、response新增`collided`欄位。
+  - `public/worldmap.js`：`import`shared module嘅`WORLD_BOUNDS`／`OBSTACLES`（re-export俾`app.js`繼續用），移除自己嘅重複定義；`renderWorldMapHtml()`加返障礙物SVG `<rect class="map-obstacle">`，純render唔做碰撞判定。
+  - `public/app.js`：`sendWorldMove`嘅accepted response callback，`r.data.collided===true`時call現有`toast()`做輕量Prototype回饋。
+  - `public/styles.css`：新增`.map-obstacle`最小樣式（填色＋邊框），冇改動任何現有規則、layout、zoom或minimap。
+- **不涉及**：道路、城市實體入口、世界怪物、動態障礙物、NPC/單位碰撞、sliding、bouncing、clamp-to-edge、pathfinding/A*、physics engine、Database schema／存檔格式migration、Travel／Reroute邏輯、minimap、zoom、正式joystick、Render設定、引擎轉換。
+- 新增22個test：
+  - `test/worldgeometry.test.mjs`（新檔）+10：`WORLD_BOUNDS`/`PLAYER_COLLISION_RADIUS`/`OBSTACLES`形狀同數值、`inflateRect`、`pointInRect`邊界inclusive語義、`segmentIntersectsRect`——完全miss、薄障礙物穿越（兩端都喺外面）、endpoint入障礙物、靠近但無touch、邊界grazing、退化零長度segment、平行且喺外面。
+  - `test/world-collision.test.mjs`（新檔）+9：城市／出生點全部outside inflated障礙物、endpoint-inside碰撞、thin-wall swept碰撞（兩端都喺外面）、碰撞會正常消耗移動間隔（同其他move一樣update `lastWorldMoveAt`）但唔會永久卡死——等正常interval過咗之後仍然可以繼續合法移動、真正合法位移先`IN_CITY`→`IN_WORLD`、throttled零位移唔轉`IN_WORLD`、legacy已經喺障礙物內可以安全郁出嚟、郁出嚟之後由外面再入返去仍然會被擋、world bounds clamp同碰撞check並存正常運作。
+  - `test/worldmap.test.mjs`+3：`worldmap.js`嘅`OBSTACLES`同shared module係同一個array instance（冇複製）、`renderWorldMapHtml`用shared data render每一個障礙物、client render唔做碰撞判定（hero marker喺障礙物內都照樣畫）。
+- 測試結果：86（現有，內容不變）+ 22（新增）= 108 tests passed, 0 failed。
+- 存檔影響：無新schema；沿用P1-01嘅additive `world_x`/`world_y`。障礙物純粹係code常數，唔存喺database。
+- 已知限制／風險：
+  - 障礙物位置／大小純屬Prototype提案，冇經過真正嘅世界設計評估，日後極可能需要重新調整。
+  - Legacy escape-only邏輯只保證「郁得出」，唔保證揀最短／最自然嘅逃脫路線——如果玩家一次過落喺兩個障礙物重疊嘅範圍（今次冇出現，但理論上可能），行為未經測試。
+  - 障礙物視覺樣式（`.map-obstacle`）未經真機／真人Playtest外觀確認。
+  - `collided`嘅toast文案未經Charlie正式批准字眼，只係Prototype暫定訊息。
+- Rollback基準：`main` 起點 `879c1022c647efc8c6aeaf6d04b2961d8d841525` / `checkpoint/v30-pre-claude`；P1-03基準 `8c703388c72fe12b3a36956c3a9d1b4a704c7cb9`。
+
+### P1-04 Review round 1（修正Client blocking bug，經Charlie發現同批准）
+
+- **問題**：Charlie喺Merge Gate審查發現，`public/app.js`嘅`sendWorldMove`accepted response callback，無論`r.data.state`係咩，都直接將SVG `viewBox`改做400×400 camera-follow。P1-04本身已經令collision同throttled兩種零位移case保持原state（`IN_CITY`唔會轉`IN_WORLD`），但呢個client callback完全冇理會`state`，令Server明明仲係`IN_CITY`，畫面就已經切咗做400×400 camera，重新引入咗P1-03 Review round 2先修正過嘅「其他城市跌出鏡頭範圍、travel/reroute撳唔到」問題。
+- **修正**：
+  - `public/worldmap.js`新增exported pure function `resolveMapViewBox(state,position,viewportSize,bounds)`——`state==='IN_WORLD'`且有position先用`computeCameraViewBox`，其他一律用full-world viewBox。`renderWorldMapHtml()`改用呢個function（行為完全不變，純粹抽出重用）。
+  - `public/app.js`嘅`sendWorldMove`callback改用同一個`resolveMapViewBox(r.data.state,r.data.worldPosition,...)`，唔再自己call`computeCameraViewBox`。因為呢個helper本身就會按`state`揀返啱嘅viewBox，就算async movement response喺`pointerup`嘅`render()`之後先返嚟都唔會再錯誤覆蓋——唔需要額外加sequencing/lock邏輯。
+  - Server collision邏輯今次冇改。
+- **文件／test描述修正**：原本test/CHANGELOG形容「碰撞之後move ability唔被consume」唔準確——實際上collision-blocked move同其他move一樣會update`lastWorldMoveAt`，即係會正常消耗`MOVEMENT_MIN_INTERVAL_MS`（120ms）移動間隔。`test/world-collision.test.mjs`嗰個test改名並加多一個assertion，直接證明「碰撞後立即再send確實會被throttled」，然後先證明「等正常interval之後仍然可以繼續合法移動，冇永久卡死」——依家test同描述準確反映實際行為。
+- 新增4個test（`test/worldmap.test.mjs`）：`resolveMapViewBox`喺`IN_WORLD`／`IN_CITY`（模擬collision或throttled零位移response仍然帶position）／`TRAVELING`／`IN_WORLD`但冇position四種情況嘅pure function測試。
+- 測試結果：108（round 1，其中1個test改名並加強assertion，內容邏輯正確反映實際行為）+ 4（新增）= 112 tests passed, 0 failed。
+- Branch名偏離（`claude/clever-gauss-ayt5ff`取代原定`claude/p1-04-bounds-collision-obstacles`）今次Charlie已接受，冇重開PR。
+- Rollback基準：同上。
+
+### P1-04 Review round 2（修正legacy escape-only語義，經Charlie發現同批准）
+
+- **問題**：Charlie發現`server.mjs`嘅`segmentBlocked()`原本實作，喺`current`已經喺某個inflated障礙物內嗰陣，會**完全skip**嗰個障礙物嘅intersection check——結果變成legacy玩家一旦出生／落喺牆內，可以喺牆內自由行走，甚至逐步移動穿過成幅牆，先由另一邊離開。呢個同已批准嘅語義「容許由障礙物內向外逃離」唔一致：正確語義應該係「淨係真正離開咗嗰個障礙物先算合法」，唔係「喺牆內乜都得」。
+- **修正**：`segmentBlocked(x1,y1,x2,y2)`依家對每個障礙物獨立判斷——如果`current`喺呢個障礙物內，改為檢查candidate（`x2,y2`）係咪**仍然**喺同一個障礙物內：仍然喺入面就阻擋（保持`current`不變），真正離開咗先當合法escape。如果`current`本身喺障礙物外，維持原有嘅normal swept `segmentIntersectsRect`檢查唔變。其他障礙物一律獨立照常檢查，冇改動。
+- 冇做：migration、teleport out、pathfinding、sliding、nearest-exit calculation、physics redesign——純粹一行判斷邏輯修正。
+- 新增1個test（`test/world-collision.test.mjs`）：legacy已經喺障礙物內，candidate都仍然喺同一障礙物內嘅move會被擋（`collided:true`、position/state不變）——用嚟直接證明「喺牆內唔可以自由行走」，同原有「郁出嚟先算escape」、「escape之後由外面再入返去會被擋」兩個test互補，三個test合埋完整覆蓋escape-only語義。
+- 測試結果：112（round 1，內容不變）+ 1（新增）= 113 tests passed, 0 failed。
+- Rollback基準：同上。

@@ -1,3 +1,5 @@
+import {WORLD_BOUNDS,OBSTACLES} from './worldgeometry.js';
+
 const REGION_META=[
   {id:'NT_WEST',name:'新界西',x:0,y:0,w:500,h:330,open:true},
   {id:'NT_EAST',name:'新界東',x:500,y:0,w:500,h:330,open:true},
@@ -123,9 +125,9 @@ export function resolveWorldPosition(snap,citiesById,roadsById,now){
   return snap.worldPosition??citiesById[snap.cityId]?.coordinates;
 }
 
-// Prototype bounds only — must stay in sync with server.mjs's WORLD_BOUNDS (0..1000).
-// This is not a shared single source of truth: server and client each keep their own copy.
-export const WORLD_BOUNDS={min:0,max:1000};
+// WORLD_BOUNDS and OBSTACLES come from the shared public/worldgeometry.js module (P1-04),
+// re-exported here so app.js can keep importing them from worldmap.js.
+export {WORLD_BOUNDS,OBSTACLES};
 // Camera Prototype Parameter, not a final spec — subject to Playtest tuning.
 export const CAMERA_VIEWPORT_SIZE=400;
 
@@ -138,17 +140,26 @@ export function computeCameraViewBox(position,viewportSize,bounds){
 
 export function viewBoxAttr(box){return `${box.x} ${box.y} ${box.width} ${box.height}`}
 
+// Single source of truth for "which viewBox does this state get" (P1-04 review round 1) —
+// shared by renderWorldMapHtml() and app.js's sendWorldMove callback, so an async movement
+// response can never force camera-follow onto a state (e.g. IN_CITY after a collision or a
+// throttled zero-displacement move) that must keep the full-world view.
+export function resolveMapViewBox(state,position,viewportSize,bounds){
+  if(state==='IN_WORLD'&&position)return computeCameraViewBox(position,viewportSize,bounds);
+  return {x:bounds.min,y:bounds.min,width:bounds.max,height:bounds.max};
+}
+
 export function renderWorldMapHtml(state){
   const citiesById=indexById(state.cities);
   const roadsById=indexById(state.roads||[]);
   const heroPosition=resolveWorldPosition(state.snap,citiesById,roadsById,Date.now());
-  const fullWorldViewBox={x:WORLD_BOUNDS.min,y:WORLD_BOUNDS.min,width:WORLD_BOUNDS.max,height:WORLD_BOUNDS.max};
-  const camera=state.snap.state==='IN_WORLD'&&heroPosition?computeCameraViewBox(heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS):fullWorldViewBox;
+  const camera=resolveMapViewBox(state.snap.state,heroPosition,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS);
   const zones=REGION_META.map(r=>`<g class="map-region ${r.open?'':'region-locked'}"><rect x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}"></rect><text class="map-region-label" x="${r.x+r.w/2}" y="${r.y+30}">${r.name}</text></g>`).join('');
   const roads=roadsSvg(state.cities,state.roads);
+  const obstacles=OBSTACLES.map(o=>`<rect class="map-obstacle" data-obstacle="${o.id}" x="${o.minX}" y="${o.minY}" width="${o.maxX-o.minX}" height="${o.maxY-o.minY}"></rect>`).join('');
   const nodes=state.cities.map(c=>`<g class="map-city" data-city="${c.id}"><circle cx="${c.coordinates.x}" cy="${c.coordinates.y}" r="26"></circle><text x="${c.coordinates.x}" y="${c.coordinates.y+44}">${c.name}</text></g>`).join('');
   const hero=heroPosition?`<circle class="hero-marker" cx="${heroPosition.x}" cy="${heroPosition.y}" r="14"></circle>`:'';
-  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${nodes}${hero}</svg></div>${travelStatusHtml(state)}</section>`;
+  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${obstacles}${nodes}${hero}</svg></div>${travelStatusHtml(state)}</section>`;
 }
 
 export function renderCityHubHtml(state){
