@@ -325,10 +325,10 @@ export function nextGenerationAnchor(anchorInput,nextInput,cosThreshold=DIRECTIO
   const anchorActive=!!anchorInput?.active,nextActive=!!nextInput?.active;
   if(anchorActive!==nextActive)return{bump:true,anchor:nextActive?{...nextInput}:null};
   if(!nextActive)return{bump:false,anchor:null};
-  const dot=anchorInput.dirX*nextInput.dirX+anchorInput.dirY*nextInput.dirY;
-  const directionChanged=dot<cosThreshold;
-  const magnitudeChanged=Math.abs(nextInput.magnitude-anchorInput.magnitude)>magnitudeThreshold;
-  if(directionChanged||magnitudeChanged)return{bump:true,anchor:{...nextInput}};
+  // Final P1-07 transport: a held joystick is one continuous intent. Direction and magnitude
+  // changes are steering updates, not new network generations. Bumping on every accumulated 15°
+  // turn made curved/diagonal input repeatedly invalidate in-flight work and re-project prediction.
+  // Press/release (handled above) and explicit hard resyncs remain the generation boundaries.
   return{bump:false,anchor:anchorInput};
 }
 
