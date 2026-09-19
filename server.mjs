@@ -387,7 +387,7 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.32.0',phase:'P3 World Map & City Hub Vertical Slice'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.32.0',phase:'Phase 1 Free World Movement'});
   if(req.method==='GET'&&u.pathname==='/api/battle/encounters')return reply(res,200,encounterSummaries());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/roster')return reply(res,200,rosterSnapshot());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/equipment')return reply(res,200,equipmentSnapshot());
