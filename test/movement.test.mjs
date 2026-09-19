@@ -37,6 +37,7 @@ import {
   nextGenerationAnchor,
   guardStaleGeneration,
   applyMovementIntent,
+  applyContinuousMovementIntent,
   invalidateMovementGeneration
 } from '../public/movement.js';
 import {createCoalescingSender} from '../public/asyncqueue.js';
@@ -916,4 +917,30 @@ test('Race Case E — resync-before-await race: production actually calls invali
 
   resolveSnapshot(); // let the simulated resync's own async work finish, for harness cleanliness
   await snapshotPromise;
+});
+
+
+// --- P1-07 Final: continuous steering under ordered parallel transport ---
+test('applyContinuousMovementIntent: a held 90° turn stays in the same generation',()=>{
+  const state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:7,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  const next=applyContinuousMovementIntent(state,{active:true,dirX:0,dirY:1,magnitude:1});
+  assert.equal(next.movementGeneration,7);
+  assert.equal(next.joystickInput.dirY,1);
+});
+
+test('applyContinuousMovementIntent: diagonal steering and magnitude drift do not repeatedly invalidate the held intent',()=>{
+  let state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:3,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  for(const deg of [15,30,45,60,75,90]){
+    const rad=deg*Math.PI/180;
+    state={...state,...applyContinuousMovementIntent(state,{active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:0.8})};
+    assert.equal(state.movementGeneration,3);
+  }
+});
+
+test('applyContinuousMovementIntent: release and re-press remain hard generation boundaries',()=>{
+  let state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:4,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  state={...state,...applyContinuousMovementIntent(state,{active:false,dirX:0,dirY:0,magnitude:0})};
+  assert.equal(state.movementGeneration,5);
+  state={...state,...applyContinuousMovementIntent(state,{active:true,dirX:0,dirY:1,magnitude:1})};
+  assert.equal(state.movementGeneration,6);
 });
