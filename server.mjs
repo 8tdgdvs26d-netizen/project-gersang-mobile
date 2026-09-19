@@ -356,10 +356,13 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
   if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};
   const {targetX,targetY,moveSequence}=env.payload;
   if(!Number.isFinite(targetX)||!Number.isFinite(targetY))return{status:'REJECTED',errorCode:'ERR_INVALID_WORLD_TARGET'};
-  if(!Number.isSafeInteger(moveSequence)||moveSequence<1)return{status:'REJECTED',errorCode:'ERR_INVALID_MOVE_SEQUENCE'};
   const lastSequence=lastWorldMoveSequenceBySession.get(env.sessionId)||0;
-  if(moveSequence<=lastSequence)return{status:'ACCEPTED',data:{worldPosition:s.worldPosition,state:s.state,throttled:false,collided:false,staleSequence:true}};
-  lastWorldMoveSequenceBySession.set(env.sessionId,moveSequence);
+  // Legacy/test callers without a sequence remain compatible; the production mobile client always
+  // sends one. An explicitly supplied malformed sequence is rejected rather than silently reordered.
+  if(moveSequence!==undefined&&(!Number.isSafeInteger(moveSequence)||moveSequence<1))return{status:'REJECTED',errorCode:'ERR_INVALID_MOVE_SEQUENCE'};
+  const effectiveMoveSequence=moveSequence??lastSequence+1;
+  if(effectiveMoveSequence<=lastSequence)return{status:'ACCEPTED',data:{worldPosition:s.worldPosition,state:s.state,throttled:false,collided:false,staleSequence:true}};
+  lastWorldMoveSequenceBySession.set(env.sessionId,effectiveMoveSequence);
   const current=s.worldPosition;
   const now=Date.now(),throttled=now-lastWorldMoveAt<MOVEMENT_MIN_INTERVAL_MS;
   let nextX=current.x,nextY=current.y,collided=false;
