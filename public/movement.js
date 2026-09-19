@@ -34,7 +34,7 @@ export const JOYSTICK_SEND_INTERVAL_MS=140;
 // How far (px) the predicted position may lead the last confirmed serverPosition. Prediction
 // self-caps at this distance and simply stops advancing (waits for the server to catch up) —
 // this is normal, expected lead, not an error, and must never actively pull the prediction back.
-export const MAX_PREDICTION_LEAD=36;
+export const MAX_PREDICTION_LEAD=50;
 // Correction smoothing (ms) used only while actively reconciling (see reconciliationSmoothingMs)
 // and the current divergence is still within MAX_PREDICTION_LEAD.
 export const RECONCILE_SMOOTHING_MS=40;
@@ -350,6 +350,19 @@ export function applyMovementIntent(state,nextInput){
     joystickInput:nextInput,
     movementGeneration:bump?state.movementGeneration+1:state.movementGeneration,
     generationAnchorInput:anchor
+  };
+}
+
+// P1-07 Final: with ordered parallel transport, steering while the joystick remains held is one
+// continuous intent. Only press/release changes generation; ordinary turns and magnitude drift
+// update the live input without invalidating in-flight movement on every accumulated angle change.
+export function applyContinuousMovementIntent(state,nextInput){
+  const wasActive=!!state.joystickInput?.active,nextActive=!!nextInput?.active;
+  const boundary=wasActive!==nextActive;
+  return{
+    joystickInput:nextInput,
+    movementGeneration:boundary?state.movementGeneration+1:state.movementGeneration,
+    generationAnchorInput:nextActive?(boundary?{...nextInput}:state.generationAnchorInput||{...nextInput}):null
   };
 }
 

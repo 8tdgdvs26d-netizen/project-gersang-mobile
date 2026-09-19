@@ -9,7 +9,16 @@ import {
   formatFlag,
   formatLeadReadout,
   TELEMETRY_FPS_SMOOTHING_MS,
-  TELEMETRY_OVERLAY_PATCH_INTERVAL_MS
+  TELEMETRY_OVERLAY_PATCH_INTERVAL_MS,
+  isNearLeadCap,
+  isCapFrozenFrame,
+  nextCapFrozenStreakMs,
+  capFrozenRatio,
+  formatPercent,
+  formatPx,
+  formatCount,
+  TELEMETRY_LEAD_CAP_TOLERANCE_PX,
+  TELEMETRY_NO_PROGRESS_EPSILON_PX
 } from '../public/telemetry.js';
 
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). All DOM-free pure functions,
@@ -159,4 +168,131 @@ test('formatLeadReadout: matches the "31.4 / 36px" shape from Issue #21',()=>{
 test('formatLeadReadout: rounds the lead distance to one decimal place',()=>{
   assert.equal(formatLeadReadout(0,36),'0.0 / 36px');
   assert.equal(formatLeadReadout(35.999,36),'36.0 / 36px');
+});
+
+// --- P1-07 Root Cause Measurement Test: isNearLeadCap (leadCapHit) ---
+
+test('P1-07 Root Cause Measurement Test constants are locked at their approved diagnostic-only values',()=>{
+  assert.equal(TELEMETRY_LEAD_CAP_TOLERANCE_PX,0.5);
+  assert.equal(TELEMETRY_NO_PROGRESS_EPSILON_PX,0.01);
+});
+
+test('isNearLeadCap: well below the cap is false',()=>{
+  assert.equal(isNearLeadCap(10,36),false);
+});
+
+test('isNearLeadCap: exactly at the cap is true',()=>{
+  assert.equal(isNearLeadCap(36,36),true);
+});
+
+test('isNearLeadCap: within tolerance below the cap (35.5px, default 0.5px tolerance) is true',()=>{
+  assert.equal(isNearLeadCap(35.5,36),true);
+});
+
+test('isNearLeadCap: just outside the default tolerance (35.49px) is false',()=>{
+  assert.equal(isNearLeadCap(35.49,36),false);
+});
+
+test('isNearLeadCap: a custom tolerance is honored',()=>{
+  assert.equal(isNearLeadCap(30,36,10),true);
+  assert.equal(isNearLeadCap(20,36,10),false);
+});
+
+// --- P1-07 Root Cause Measurement Test: isCapFrozenFrame (capFrozenFrame) ---
+// Must measure an OUTCOME (no forward progress while already at/near the cap), never proximity
+// alone — see movement.test.mjs's advancePredictedPosition tests for the production behavior this
+// mirrors read-only.
+
+test('isCapFrozenFrame: inactive (joystick not driving this frame) is never frozen, regardless of distance',()=>{
+  assert.equal(isCapFrozenFrame({active:false,aheadBefore:36,aheadAfter:36,maxLead:36}),false);
+});
+
+test('isCapFrozenFrame: active, far from the cap, is never frozen even with zero progress (nothing to freeze against yet)',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:5,aheadAfter:5,maxLead:36}),false);
+});
+
+test('isCapFrozenFrame: active, at the cap, zero forward progress this frame — frozen',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:36,maxLead:36}),true);
+});
+
+test('isCapFrozenFrame: active, at the cap, but still gaining real forward progress this frame — NOT frozen (proximity alone is never sufficient, matches the Root Cause Measurement Test\'s explicit "cannot use proximity as a crude proxy" requirement)',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:40,maxLead:36}),false);
+});
+
+test('isCapFrozenFrame: active, at the cap, progress within the floating-point noise epsilon still counts as frozen',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:36.005,maxLead:36}),true);
+});
+
+test('isCapFrozenFrame: null aheadBefore/aheadAfter (no active input direction to project onto) is never frozen',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:null,aheadAfter:36,maxLead:36}),false);
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:null,maxLead:36}),false);
+});
+
+test('isCapFrozenFrame: negative "ahead" (server legitimately caught up/passed predicted, P1-07D) is never near the cap, never frozen',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:-50,aheadAfter:-50,maxLead:36}),false);
+});
+
+// --- P1-07 Root Cause Measurement Test: nextCapFrozenStreakMs (capFrozenDuration) ---
+
+test('nextCapFrozenStreakMs: accumulates dt while frozen',()=>{
+  let streak=0;
+  streak=nextCapFrozenStreakMs(streak,true,16);
+  streak=nextCapFrozenStreakMs(streak,true,16);
+  streak=nextCapFrozenStreakMs(streak,true,16);
+  assert.equal(streak,48);
+});
+
+test('nextCapFrozenStreakMs: resets to 0 the instant a frame is not frozen',()=>{
+  let streak=nextCapFrozenStreakMs(0,true,100);
+  assert.equal(streak,100);
+  streak=nextCapFrozenStreakMs(streak,false,16);
+  assert.equal(streak,0);
+});
+
+// --- P1-07 Root Cause Measurement Test: capFrozenRatio (capFrozenRatio) ---
+
+test('capFrozenRatio: zero active time so far returns 0, not NaN/Infinity',()=>{
+  assert.equal(capFrozenRatio(500,0),0);
+});
+
+test('capFrozenRatio: correct time-based ratio',()=>{
+  assert.equal(capFrozenRatio(250,1000),0.25);
+});
+
+test('capFrozenRatio: never frozen returns exactly 0',()=>{
+  assert.equal(capFrozenRatio(0,1000),0);
+});
+
+test('capFrozenRatio: frozen for the entire active window returns exactly 1',()=>{
+  assert.equal(capFrozenRatio(1000,1000),1);
+});
+
+// --- P1-07 Root Cause Measurement Test: display formatting ---
+
+test('formatPercent: null renders as the en-dash placeholder',()=>{
+  assert.equal(formatPercent(null),'–');
+});
+
+test('formatPercent: formats as a one-decimal percentage',()=>{
+  assert.equal(formatPercent(0.25),'25.0%');
+  assert.equal(formatPercent(0),'0.0%');
+  assert.equal(formatPercent(1),'100.0%');
+});
+
+test('formatPx: null renders as the en-dash placeholder',()=>{
+  assert.equal(formatPx(null),'–');
+});
+
+test('formatPx: formats to one decimal place with a px suffix',()=>{
+  assert.equal(formatPx(12.34),'12.3px');
+  assert.equal(formatPx(0),'0.0px');
+});
+
+test('formatCount: null renders as the en-dash placeholder, distinct from a real zero count',()=>{
+  assert.equal(formatCount(null),'–');
+});
+
+test('formatCount: formats an integer count as-is',()=>{
+  assert.equal(formatCount(0),'0');
+  assert.equal(formatCount(7),'7');
 });

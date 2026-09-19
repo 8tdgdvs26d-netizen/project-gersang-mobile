@@ -428,3 +428,17 @@ test('renderWorldMapHtml: the telemetry overlay is purely additive — joystick 
   assert.ok(html.includes('id="map-view-toggle"'));
   assert.ok(html.indexOf('id="telemetry-overlay"')>html.indexOf('id="joystick-base"'),'telemetry overlay should be appended after the joystick, never inserted between existing controls');
 });
+
+// --- P1-07 Root Cause Measurement Test: 7 more overlay data-point ids, purely additive to the
+// existing P1-07C shell above (that test is left untouched — this only adds new coverage). ---
+
+test('renderWorldMapHtml renders the P1-07 Root Cause Measurement Test overlay ids, appended after the existing P1-07C ones, each starting as a placeholder',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  const newIds=['telemetry-leadcaphit','telemetry-capfrozen','telemetry-frozen-current','telemetry-frozen-total','telemetry-frozen-ratio','telemetry-correction','telemetry-hardresets'];
+  for(const id of newIds){
+    assert.ok(html.includes(`id="${id}"`),`expected the overlay shell to include #${id}`);
+    assert.ok(html.indexOf(`id="${id}"`)>html.indexOf('id="telemetry-errorcode"'),`expected #${id} to be appended after the existing P1-07C ids, never inserted between them`);
+  }
+});

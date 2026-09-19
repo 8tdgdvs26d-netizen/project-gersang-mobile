@@ -296,6 +296,7 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 // Movement Prototype Parameters (P1-02/P1-04) — not final balance/UX specs, subject to Playtest.
 const MOVEMENT_MIN_INTERVAL_MS=120;
 let lastWorldMoveAt=0;
+const lastWorldMoveSequenceBySession=new Map();
 // P1-07D — Latency-Decoupled Movement (Issue #23). MAX_WORLD_STEP's flat per-call cap is retired in
 // favor of an elapsed-time-scaled catch-up allowance (see moveWorld() below) — the same protective
 // role, just no longer bound to a fixed cadence, so a single delayed response over a slow connection
@@ -353,8 +354,15 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
   const s=snapshot();
   if(s.state!=='IN_CITY'&&s.state!=='IN_WORLD')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};
   if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};
-  const {targetX,targetY}=env.payload;
+  const {targetX,targetY,moveSequence}=env.payload;
   if(!Number.isFinite(targetX)||!Number.isFinite(targetY))return{status:'REJECTED',errorCode:'ERR_INVALID_WORLD_TARGET'};
+  const lastSequence=lastWorldMoveSequenceBySession.get(env.sessionId)||0;
+  // Legacy/test callers without a sequence remain compatible; the production mobile client always
+  // sends one. An explicitly supplied malformed sequence is rejected rather than silently reordered.
+  if(moveSequence!==undefined&&(!Number.isSafeInteger(moveSequence)||moveSequence<1))return{status:'REJECTED',errorCode:'ERR_INVALID_MOVE_SEQUENCE'};
+  const effectiveMoveSequence=moveSequence??lastSequence+1;
+  if(effectiveMoveSequence<=lastSequence)return{status:'ACCEPTED',data:{worldPosition:s.worldPosition,state:s.state,throttled:false,collided:false,staleSequence:true}};
+  lastWorldMoveSequenceBySession.set(env.sessionId,effectiveMoveSequence);
   const current=s.worldPosition;
   const now=Date.now(),throttled=now-lastWorldMoveAt<MOVEMENT_MIN_INTERVAL_MS;
   let nextX=current.x,nextY=current.y,collided=false;
@@ -374,7 +382,7 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
   // Zero actual displacement — whether from throttling or from a blocked collision — must never
   // flip IN_CITY -> IN_WORLD. Only a genuinely accepted, non-zero move may trigger that transition.
   if(moved)db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(nextX,nextY);
-  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:moved?'IN_WORLD':s.state,throttled,collided}};
+  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:moved?'IN_WORLD':s.state,throttled,collided,staleSequence:false}};
 })}
 
 async function api(req,res){
