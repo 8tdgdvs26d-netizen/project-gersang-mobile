@@ -34,7 +34,7 @@ export const JOYSTICK_SEND_INTERVAL_MS=140;
 // How far (px) the predicted position may lead the last confirmed serverPosition. Prediction
 // self-caps at this distance and simply stops advancing (waits for the server to catch up) —
 // this is normal, expected lead, not an error, and must never actively pull the prediction back.
-export const MAX_PREDICTION_LEAD=36;
+export const MAX_PREDICTION_LEAD=100;
 // Correction smoothing (ms) used only while actively reconciling (see reconciliationSmoothingMs)
 // and the current divergence is still within MAX_PREDICTION_LEAD.
 export const RECONCILE_SMOOTHING_MS=40;

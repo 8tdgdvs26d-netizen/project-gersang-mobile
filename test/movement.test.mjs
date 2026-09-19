@@ -233,7 +233,7 @@ test('predictionVelocity: computes correctly for arbitrary step/interval inputs'
 // --- Prototype Parameter locks ---
 
 test('P1-07B reconciliation constants are locked at their currently-approved values',()=>{
-  assert.equal(MAX_PREDICTION_LEAD,36);
+  assert.equal(MAX_PREDICTION_LEAD,100);
   assert.equal(RECONCILE_SMOOTHING_MS,40);
   assert.equal(RECONCILE_STRONG_SMOOTHING_MS,40);
   assert.equal(RECONCILE_HARD_RESET_DISTANCE,54);
