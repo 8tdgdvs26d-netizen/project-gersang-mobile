@@ -332,6 +332,27 @@ export function nextGenerationAnchor(anchorInput,nextInput,cosThreshold=DIRECTIO
   return{bump:false,anchor:anchorInput};
 }
 
+// P1-07D Merge Gate review — the single synchronous state-transition every movement-intent-changing
+// event (pointerdown/pointermove/pointerup/pointercancel/lostpointercapture, a Full Map toggle, a
+// hard resync) must go through, applied atomically at the moment the input itself changes — never
+// deferred to the next animation frame. This closes a real race: createCoalescingSender's `finally`
+// can dequeue and immediately re-invoke a pending send from within a resolved network Promise's
+// microtask, which can happen BEFORE the next requestAnimationFrame callback runs. If
+// movementGeneration only bumped inside tickMovementFrame (once per RAF), a release/direction/
+// magnitude change that happened moments earlier — but before the next RAF — would leave
+// movementGeneration still at its OLD value at exactly the moment guardStaleGeneration needs to see
+// the NEW one, letting an already-abandoned pending target slip through to the network. Pure
+// input/output (no module-level state touched here) so it is directly testable, and is the exact
+// function app.js's own synchronous wrapper calls — not a re-implemented copy.
+export function applyMovementIntent(state,nextInput){
+  const{bump,anchor}=nextGenerationAnchor(state.generationAnchorInput,nextInput);
+  return{
+    joystickInput:nextInput,
+    movementGeneration:bump?state.movementGeneration+1:state.movementGeneration,
+    generationAnchorInput:anchor
+  };
+}
+
 // P1-07D — wraps a network-call function so it is skipped entirely (never invoked) when the
 // generation bound to this call no longer matches the live one at the moment of actual invocation.
 // Used by app.js's sendWorldMove so a pending target that was queued (coalesced) under one

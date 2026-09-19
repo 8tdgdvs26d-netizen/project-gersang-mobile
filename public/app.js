@@ -1,7 +1,7 @@
 import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS,OBSTACLES} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
 import {PLAYER_COLLISION_RADIUS,inflateRect} from './worldgeometry.js';
-import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD,movementDivergence,catchUpDebtAfterGrant,nextCatchUpDebt,clampEarnedTarget,nextEarnedPosition,idleSettlePosition,nextGenerationAnchor,guardStaleGeneration,MOVE_CATCHUP_CAP_MS} from './movement.js';
+import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD,movementDivergence,catchUpDebtAfterGrant,nextCatchUpDebt,clampEarnedTarget,nextEarnedPosition,idleSettlePosition,applyMovementIntent as computeNextMovementIntent,guardStaleGeneration,MOVE_CATCHUP_CAP_MS} from './movement.js';
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
 // the existing movement path above; nothing in this import or the code that uses it changes any
 // movement/joystick/prediction/reconciliation/camera behavior.
@@ -29,6 +29,11 @@ async function refresh(){
   // whatever the client was predicting before this is no longer trustworthy, so force a hard
   // reset of the predicted position to the fresh authoritative one on the next animation frame.
   predictionResetPending=true;
+  // P1-07D Merge Gate review: bump movementGeneration SYNCHRONOUSLY, right here — not deferred to
+  // the next tickMovementFrame — so any pending target still queued under the old generation is
+  // already stale by the time asyncqueue.js might dequeue it, closing the same race window
+  // applyMovementIntent exists to close for ordinary joystick input changes (see its own comment).
+  movementGeneration++;generationAnchorInput=null;
   const [market,storageList,tx,battle,roster,equipment]=await Promise.all([req(`/api/cities/${S.snap.cityId}/market`),req('/api/character/char-demo/storage'),req('/api/character/char-demo/transactions'),req('/api/character/char-demo/battle'),req('/api/character/char-demo/roster'),req('/api/character/char-demo/equipment')]);
   S.market=market;S.storages=Object.fromEntries(storageList.map(x=>[x.cityId,x.goods]));S.storage=S.storages[S.snap.cityId]||[];S.tx=tx;S.roster=roster;S.equipment=equipment;if(S.deploymentUnitIds===null)S.deploymentUnitIds=roster.map(x=>x.id);ensureDeployment();setBattle(battle);if(battle?.status==='ACTIVE'||battle?.reward?.settlementRequired)S.tab='battle';
   render();
@@ -115,7 +120,7 @@ function qty(g){return Math.max(1,Number(document.querySelector(`[data-q="${g}"]
 function wire(){
   document.querySelectorAll('[data-market-mode]').forEach(b=>b.onclick=()=>{S.marketMode=b.dataset.marketMode;render()});document.querySelectorAll('[data-buy]').forEach(b=>b.onclick=()=>openQuote(b.dataset.buy,'BUY',qty(b.dataset.buy)));document.querySelectorAll('[data-sell]').forEach(b=>b.onclick=()=>openQuote(b.dataset.sell,'SELL',qty(b.dataset.sell)));document.querySelectorAll('[data-equipment-sell]').forEach(b=>b.onclick=()=>openEquipmentQuote(b.dataset.equipmentSell));document.querySelectorAll('[data-store]').forEach(b=>b.onclick=()=>move('CARGO_TO_STORAGE',b.dataset.store));document.querySelectorAll('[data-withdraw]').forEach(b=>b.onclick=()=>move('STORAGE_TO_CARGO',b.dataset.withdraw));document.querySelectorAll('[data-store-equipment]').forEach(b=>b.onclick=()=>storeEquipment(b.dataset.storeEquipment));document.querySelectorAll('[data-withdraw-equipment]').forEach(b=>b.onclick=()=>withdrawEquipment(b.dataset.withdrawEquipment,b.dataset.withdrawUnit));document.querySelectorAll('[data-transfer-item]').forEach(b=>b.onclick=()=>transferEquipment(b.dataset.transferItem,b.dataset.transferUnit));document.querySelectorAll('[data-city]').forEach(el=>el.onclick=()=>handleCityTap(el.dataset.city,{snap:S.snap,travel,reroute}));document.querySelector('#arrive')?.addEventListener('click',arrival);document.querySelector('[data-enter-hub]')?.addEventListener('click',()=>{S.tab='hub';render()});document.querySelectorAll('[data-hub-enter]').forEach(b=>b.onclick=()=>{S.tab=b.dataset.hubEnter;render()});document.querySelector('[data-hub-leave]')?.addEventListener('click',()=>{S.tab=leaveCityHub().tab;render()});document.querySelectorAll('[data-back-hub]').forEach(b=>b.onclick=()=>{S.tab='hub';render()});document.querySelectorAll('[data-settle-loot]').forEach(b=>b.onclick=()=>settleLoot(b.dataset.settleLoot,b.dataset.ownerUnit));document.querySelectorAll('[data-equip-item]').forEach(b=>b.onclick=()=>equip(b.dataset.equipItem,b.dataset.equipUnit));document.querySelectorAll('[data-unequip-item]').forEach(b=>b.onclick=()=>unequip(b.dataset.unequipItem,b.dataset.equipUnit));document.querySelectorAll('[data-deploy-unit]').forEach(b=>b.onclick=()=>toggleDeploymentUnit(b.dataset.deployUnit));document.querySelectorAll('[data-deployment-row]').forEach(b=>b.onclick=()=>deploymentTap(Number(b.dataset.deploymentRow),Number(b.dataset.deploymentCol),b.dataset.deploymentUnit));document.querySelectorAll('[data-deployment-preset]').forEach(b=>b.onclick=()=>setDeploymentPreset(b.dataset.deploymentPreset));document.querySelectorAll('[data-start-encounter]').forEach(b=>b.onclick=()=>startBattle(b.dataset.startEncounter));document.querySelector('#retreat')?.addEventListener('click',retreatBattle);document.querySelector('#select-all')?.addEventListener('click',selectAllUnits);document.querySelector('#hold-position')?.addEventListener('click',holdPosition);document.querySelector('#clear-selection')?.addEventListener('click',clearSelection);document.querySelectorAll('.battle-cell').forEach(c=>c.onclick=()=>battleTap(c));document.querySelectorAll('[data-target-unit]').forEach(b=>b.onclick=()=>targetEnemy(b.dataset.targetUnit));document.querySelectorAll('[data-skill-unit]').forEach(b=>b.onclick=()=>useSkill(b.dataset.skillUnit,b.dataset.skillId));document.querySelector('#battle-pan')?.addEventListener('input',panBattle);document.querySelector('#map-view-toggle')?.addEventListener('click',toggleMapView);
 }
-function toggleMapView(){S.mapView=S.mapView==='follow'?'full':'follow';if(S.mapView==='full'){joystickActive=false;joystickInput={active:false,dirX:0,dirY:0,magnitude:0}}render()}
+function toggleMapView(){S.mapView=S.mapView==='follow'?'full':'follow';if(S.mapView==='full'){joystickActive=false;applyMovementIntent({active:false,dirX:0,dirY:0,magnitude:0})}render()}
 async function settleLoot(decision,ownerUnitId){const battleId=S.battle?.id;if(!battleId)return;const r=await command('/api/commands/battle/settle-loot',{battleId,decision,...(ownerUnitId?{ownerUnitId}:{})});if(r.status==='REJECTED')return toast(r.errorCode);const owner=S.roster.find(x=>x.id===ownerUnitId)?.name;toast(decision==='KEEP'?`戰利品已放入${owner}背包`:'已放棄戰利品');await refresh()}
 async function equip(itemId,unitId){const r=await command('/api/commands/equipment/equip',{itemId,unitId});if(r.status==='REJECTED')return toast('裝備失敗');toast('裝備完成，能力已更新');await refresh()}
 async function unequip(itemId,unitId){const r=await command('/api/commands/equipment/unequip',{itemId,unitId});if(r.status==='REJECTED')return toast('卸下失敗');toast('裝備已放回角色背包');await refresh()}
@@ -315,16 +320,28 @@ const sendWorldMove=createCoalescingSender(async(target)=>{
 // Only one movement input mechanism is ever active: the joystick is the sole driver of free
 // world movement now.
 let joystickActive=false,joystickPointerId=null,joystickInput={active:false,dirX:0,dirY:0,magnitude:0};
+// P1-07D Merge Gate review — the SINGLE synchronous path every joystickInput-changing event must go
+// through (pointerdown/pointermove/pointerup/pointercancel/lostpointercapture, plus toggleMapView's
+// forced release above). Applies movement.js's pure computeNextMovementIntent (exported as
+// applyMovementIntent) and writes its result straight into module state, atomically, at the moment
+// the input itself changes — never deferred to the next tickMovementFrame/RAF. See that function's
+// own comment for the exact race this closes.
+function applyMovementIntent(nextInput){
+  const next=computeNextMovementIntent({joystickInput,movementGeneration,generationAnchorInput},nextInput);
+  joystickInput=next.joystickInput;
+  movementGeneration=next.movementGeneration;
+  generationAnchorInput=next.generationAnchorInput;
+}
 function updateJoystickFromEvent(event,centerX,centerY,knob){
   const dx=event.clientX-centerX,dy=event.clientY-centerY;
   const knobOffset=clampJoystickKnob(dx,dy,JOYSTICK_RADIUS);
   if(knob)knob.style.transform=`translate(${knobOffset.x}px,${knobOffset.y}px)`;
-  joystickInput=computeJoystickInput(dx,dy,JOYSTICK_RADIUS,JOYSTICK_DEADZONE);
+  applyMovementIntent(computeJoystickInput(dx,dy,JOYSTICK_RADIUS,JOYSTICK_DEADZONE));
 }
 function setupJoystick(){
   const base=document.querySelector('#joystick-base');
   const knob=document.querySelector('#joystick-knob');
-  const reset=()=>{joystickActive=false;joystickPointerId=null;joystickInput={active:false,dirX:0,dirY:0,magnitude:0};if(knob)knob.style.transform='translate(0px,0px)'};
+  const reset=()=>{joystickActive=false;joystickPointerId=null;applyMovementIntent({active:false,dirX:0,dirY:0,magnitude:0});if(knob)knob.style.transform='translate(0px,0px)'};
   reset();
   if(!base||base.classList.contains('joystick-disabled'))return;
   base.onpointerdown=event=>{
@@ -373,15 +390,12 @@ function tickMovementFrame(now){
   const serverPos=S.snap.worldPosition;
   if(!serverPos)return;
   const notYetInWorld=S.snap.state!=='IN_WORLD',resetPending=predictionResetPending;
-
-  if(resetPending){
-    movementGeneration++;
-    generationAnchorInput=null;
-  }else{
-    const{bump,anchor}=nextGenerationAnchor(generationAnchorInput,joystickInput);
-    if(bump)movementGeneration++;
-    generationAnchorInput=anchor;
-  }
+  // P1-07D Merge Gate review: movementGeneration/generationAnchorInput are NOT bumped here anymore
+  // — they're already up to date by the time this runs, updated synchronously at the moment
+  // joystickInput itself changed (applyMovementIntent) or a resync was requested (refresh(), right
+  // where predictionResetPending is set). Bumping again from a per-frame snapshot here would either
+  // double-bump an already-applied change or, worse, be the very race this fix closes (see
+  // applyMovementIntent's comment in movement.js).
 
   if(!predictedPosition)predictedPosition={...serverPos};
   if(notYetInWorld||resetPending){

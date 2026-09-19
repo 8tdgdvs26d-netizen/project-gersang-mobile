@@ -35,7 +35,8 @@ import {
   nextEarnedPosition,
   idleSettlePosition,
   nextGenerationAnchor,
-  guardStaleGeneration
+  guardStaleGeneration,
+  applyMovementIntent
 } from '../public/movement.js';
 import {createCoalescingSender} from '../public/asyncqueue.js';
 import {WORLD_BOUNDS,PLAYER_COLLISION_RADIUS,OBSTACLES,inflateRect,pointInRect} from '../public/worldgeometry.js';
@@ -790,4 +791,99 @@ test('guardStaleGeneration: a matching generation invokes the network function a
   const guarded=guardStaleGeneration(networkCall,()=>1);
   const outcome=await guarded({generation:1,x:5,y:6});
   assert.deepEqual(outcome,{dropped:false,result:{status:'ACCEPTED',data:{worldPosition:{x:5,y:6}}}});
+});
+
+// --- applyMovementIntent: the single synchronous state transition (Merge Gate review — closes the
+// input-event-to-next-RAF race) ---
+
+test('applyMovementIntent: a meaningful direction change bumps generation and updates the anchor, synchronously, from pure input/output (no module-level state)',()=>{
+  const state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:5,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  const nextInput={active:true,dirX:0,dirY:1,magnitude:1}; // 90°
+  const next=applyMovementIntent(state,nextInput);
+  assert.equal(next.movementGeneration,6);
+  assert.deepEqual(next.joystickInput,nextInput);
+  assert.deepEqual(next.generationAnchorInput,nextInput);
+});
+
+test('applyMovementIntent: a micro tremor does not bump generation, and leaves the anchor unchanged',()=>{
+  const anchor={active:true,dirX:1,dirY:0,magnitude:1};
+  const state={joystickInput:anchor,movementGeneration:5,generationAnchorInput:anchor};
+  const rad=2*Math.PI/180,nextInput={active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1};
+  const next=applyMovementIntent(state,nextInput);
+  assert.equal(next.movementGeneration,5);
+  assert.deepEqual(next.generationAnchorInput,anchor);
+  assert.deepEqual(next.joystickInput,nextInput,'joystickInput itself always updates, regardless of whether generation bumped');
+});
+
+test('applyMovementIntent: release (active->inactive) always bumps',()=>{
+  const state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:5,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  const next=applyMovementIntent(state,{active:false,dirX:0,dirY:0,magnitude:0});
+  assert.equal(next.movementGeneration,6);
+});
+
+// --- P1-07D Merge Gate review — race regression: movementGeneration must already be current the
+// INSTANT the input changes, not just by the next animation frame. These tests deliberately never
+// simulate a "tick"/RAF at all — they apply the intent change synchronously, in the same turn as
+// queuing the pending request, exactly reproducing the race window an animation-frame-deferred bump
+// would miss. Each uses the REAL, unmodified createCoalescingSender and the REAL guardStaleGeneration
+// (imported from movement.js, never a re-implemented mock), wrapped the same way app.js's
+// sendWorldMove wraps them, so the network-call count is genuine production behavior, not a
+// comparison of two numbers. ---
+
+function raceHarness(){
+  let state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:5,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  let callCount=0,resolveA;
+  const slowNetworkCall=async({x,y})=>{
+    callCount++;
+    return new Promise(resolve=>{resolveA=()=>resolve({status:'ACCEPTED',data:{worldPosition:{x,y}}})});
+  };
+  const guardedMoveCall=guardStaleGeneration(slowNetworkCall,()=>state.movementGeneration);
+  // Same shape as app.js's production sendWorldMove.
+  const sender=createCoalescingSender(async(target)=>{await guardedMoveCall(target)});
+  return{get state(){return state},set state(next){state=next},get callCount(){return callCount},sender,resolveA:()=>resolveA()};
+}
+
+test('Race Case A — release race: B must be dropped even though the release happens synchronously, with NO animation-frame tick between the release and A resolving',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1}); // A: dequeues immediately, in-flight at generation 5
+  h.sender({generation:h.state.movementGeneration,x:2,y:2}); // B: queued, still generation 5 at THIS moment
+  h.state=applyMovementIntent(h.state,{active:false,dirX:0,dirY:0,magnitude:0}); // synchronous release, no tick simulated
+  assert.equal(h.state.movementGeneration,6,'release must have already bumped generation before A resolves');
+  h.resolveA(); // A resolves -> asyncqueue's finally auto-dequeues B -> run(B), which reads the NOW-current generation
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,1,'B must be dropped — release already bumped generation before A resolved, with no RAF in between');
+});
+
+test('Race Case B — direction-change race: 0°->90° mid-flight, A resolving before any tick, B must never reach the network',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1});
+  h.sender({generation:h.state.movementGeneration,x:2,y:2});
+  h.state=applyMovementIntent(h.state,{active:true,dirX:0,dirY:1,magnitude:1}); // 90° turn, synchronous
+  assert.equal(h.state.movementGeneration,6);
+  h.resolveA();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,1,'B must be dropped — a 90° direction change already bumped generation before A resolved');
+});
+
+test('Race Case C — magnitude-change race: 1.0->0.2 mid-flight, A resolving before any tick, B must never reach the network',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1});
+  h.sender({generation:h.state.movementGeneration,x:2,y:2});
+  h.state=applyMovementIntent(h.state,{active:true,dirX:1,dirY:0,magnitude:0.2}); // major magnitude drop, synchronous
+  assert.equal(h.state.movementGeneration,6);
+  h.resolveA();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,1,'B must be dropped — a major magnitude drop already bumped generation before A resolved');
+});
+
+test('Race Case D — micro tremor: a 2° change (below threshold) leaves generation unchanged, so B sends normally',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1});
+  h.sender({generation:h.state.movementGeneration,x:2,y:2});
+  const rad=2*Math.PI/180;
+  h.state=applyMovementIntent(h.state,{active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1}); // tremor
+  assert.equal(h.state.movementGeneration,5,'a tremor must not bump generation');
+  h.resolveA();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,2,'B must send normally — its generation still matches, exactly as production would behave for a genuine still-current pending target');
 });

@@ -319,11 +319,14 @@ let lastWorldMoveAt=0;
 //     and "server-only proof of actual held time" cannot all be achieved simultaneously against this
 //     absolute-target, single-in-flight, unchanged-payload API. MOVE_CATCHUP_CAP_MS therefore plays
 //     a dual role: it bounds both the legitimate high-RTT catch-up this feature exists to allow, and
-//     the worst-case single-command burst such a non-honest client could obtain. For this
-//     single-character Prototype (no multiplayer economy at stake yet — see the per-character
-//     movement-timing note below), the residual risk is that a modified client could sustain the
-//     same long-run average speed as an honest one without ever simulating continuous holding; it
-//     cannot exceed that average speed, and there is no other player for it to unfairly affect.
+//     the worst-case single-command burst such a non-honest client could obtain. That single-command
+//     burst bound is the ONLY guarantee in force here — there is no long-run-average-speed guarantee
+//     of any kind: a modified/scripted client issuing repeated commands each separated by roughly
+//     MOVE_CATCHUP_CAP_MS of idle time can draw the full single-command allowance on every one of
+//     them, and this file makes no claim about, and does not bound, what that adds up to over an
+//     arbitrary wall-clock window. For this single-character Prototype (no multiplayer economy at
+//     stake yet — see the per-character movement-timing note below), that residual gap is accepted
+//     as-is, not because it is proven bounded.
 //
 // MOVE_CATCHUP_CAP_MS=1000ms (see public/movement.js) is a Prototype Parameter, not a Canonical
 // balance number — chosen against P1-07C real-device telemetry showing observed RTT roughly
