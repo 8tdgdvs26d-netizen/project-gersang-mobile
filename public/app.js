@@ -1,5 +1,5 @@
 import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS,OBSTACLES} from './worldmap.js';
-import {createCoalescingSender} from './asyncqueue.js';
+import {createCoalescingSender} from './asyncqueue.js'; // retained for regression coverage; movement diagnostic below bypasses RTT serialization
 import {PLAYER_COLLISION_RADIUS,inflateRect} from './worldgeometry.js';
 import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD,movementDivergence,catchUpDebtAfterGrant,nextCatchUpDebt,clampEarnedTarget,nextEarnedPosition,idleSettlePosition,applyMovementIntent as computeNextMovementIntent,invalidateMovementGeneration as computeInvalidatedMovementGeneration,guardStaleGeneration,MOVE_CATCHUP_CAP_MS} from './movement.js';
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
@@ -283,7 +283,9 @@ function patchTelemetryOverlay(now,leadPx){
 // call this exact same guardStaleGeneration export — never a hand-duplicated copy of the same check.
 const networkMoveCall=({x,y})=>command('/api/commands/world/move',{targetX:x,targetY:y});
 const guardedMoveCall=guardStaleGeneration(networkMoveCall,()=>movementGeneration);
-const sendWorldMove=createCoalescingSender(async(target)=>{
+let movementRequestSequence=0,latestCompletedMovementSequence=0;
+const sendWorldMove=async(target)=>{
+  const requestSequence=++movementRequestSequence;
   const{generation}=target;
   // P1-07C: startedAt is taken at the true start of the network command (this callback only ever
   // runs once createCoalescingSender actually dequeues it — see Plan §2), never at enqueue time.
@@ -312,6 +314,10 @@ const sendWorldMove=createCoalescingSender(async(target)=>{
     telemetryMoveInFlight=false;
     return;
   }
+  // Diagnostic transport: multiple movement requests may be in flight. If a newer request has
+  // already completed, this older completion must not roll client truth backwards.
+  if(requestSequence<latestCompletedMovementSequence){telemetryMoveInFlight=false;return}
+  latestCompletedMovementSequence=requestSequence;
   const r=outcome.result;
   const stale=generation!==movementGeneration;
   if(r.status==='REJECTED'){
@@ -341,7 +347,7 @@ const sendWorldMove=createCoalescingSender(async(target)=>{
   }
   recordMoveTelemetry({status:'ACCEPTED',errorCode:null,throttled:r.data.throttled,collided:r.data.collided,startedAt});
   telemetryMoveInFlight=false;
-});
+};
 
 // Virtual joystick (P1-07A) — fixed bottom-left, replaces the old SVG direct-drag-to-move input.
 // Only one movement input mechanism is ever active: the joystick is the sole driver of free
