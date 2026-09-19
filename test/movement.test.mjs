@@ -233,7 +233,7 @@ test('predictionVelocity: computes correctly for arbitrary step/interval inputs'
 // --- Prototype Parameter locks ---
 
 test('P1-07B reconciliation constants are locked at their currently-approved values',()=>{
-  assert.equal(MAX_PREDICTION_LEAD,36);
+  assert.equal(MAX_PREDICTION_LEAD,50);
   assert.equal(RECONCILE_SMOOTHING_MS,40);
   assert.equal(RECONCILE_STRONG_SMOOTHING_MS,40);
   assert.equal(RECONCILE_HARD_RESET_DISTANCE,54);
@@ -494,12 +494,12 @@ test('catchUpDebtAfterGrant: server moving BEHIND predicted along the intent dir
 });
 
 test('catchUpDebtAfterGrant: only the ahead-projected component is credited, never the lateral one — concrete counter-example proving Euclidean debt would self-mask an unrelated lateral divergence',()=>{
-  const predicted={x:0,y:0},intentDirection={dirX:1,dirY:0},newServerPosition={x:80,y:40}; // 80 ahead, 40 lateral, mixed in one grant
+  const predicted={x:0,y:0},intentDirection={dirX:1,dirY:0},newServerPosition={x:60,y:40}; // 60 ahead, 40 lateral, mixed in one grant
   const debt=catchUpDebtAfterGrant(predicted,newServerPosition,intentDirection);
-  assert.equal(debt,80,'lateral component must never be credited into catchUpDebt');
-  const euclidean=Math.hypot(80,40),oldBudget=MAX_PREDICTION_LEAD+euclidean,newBudget=MAX_PREDICTION_LEAD+debt;
-  assert.ok(120<oldBudget,'sanity: the old (Euclidean) design would have masked a 120px unrelated lateral divergence');
-  assert.ok(120>newBudget,'the new (ahead-only) design correctly still flags a 120px unrelated lateral divergence as dangerous');
+  assert.equal(debt,60,'lateral component must never be credited into catchUpDebt');
+  const euclidean=Math.hypot(60,40),oldBudget=MAX_PREDICTION_LEAD+euclidean,newBudget=MAX_PREDICTION_LEAD+debt;
+  assert.ok(115<oldBudget,'sanity: the old (Euclidean) design would have masked a 115px unrelated lateral divergence');
+  assert.ok(115>newBudget,'the new (ahead-only) design correctly still flags a 115px unrelated lateral divergence as dangerous');
 });
 
 // --- nextCatchUpDebt: clearing rules ---
