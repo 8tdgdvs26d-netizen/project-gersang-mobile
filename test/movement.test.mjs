@@ -21,8 +21,25 @@ import {
   MAX_PREDICTION_LEAD,
   RECONCILE_SMOOTHING_MS,
   RECONCILE_STRONG_SMOOTHING_MS,
-  RECONCILE_HARD_RESET_DISTANCE
+  RECONCILE_HARD_RESET_DISTANCE,
+  MOVE_CATCHUP_CAP_MS,
+  MOVE_SPEED_RATE,
+  DIRECTION_CHANGE_COS_THRESHOLD,
+  MAGNITUDE_CHANGE_THRESHOLD,
+  IDLE_SETTLE_EPSILON_PX,
+  integrateInputPosition,
+  movementDivergence,
+  catchUpDebtAfterGrant,
+  nextCatchUpDebt,
+  clampEarnedTarget,
+  nextEarnedPosition,
+  idleSettlePosition,
+  nextGenerationAnchor,
+  guardStaleGeneration,
+  applyMovementIntent,
+  invalidateMovementGeneration
 } from '../public/movement.js';
+import {createCoalescingSender} from '../public/asyncqueue.js';
 import {WORLD_BOUNDS,PLAYER_COLLISION_RADIUS,OBSTACLES,inflateRect,pointInRect} from '../public/worldgeometry.js';
 
 // --- Client/server throttle timing: must never oscillate against each other ---
@@ -371,4 +388,532 @@ test('shouldSuspendAfterAccepted: a throttled (zero-displacement, non-collided) 
 test('shouldSuspendAfterAccepted: missing/undefined response data defaults to not suspended (never throws)',()=>{
   assert.equal(shouldSuspendAfterAccepted(undefined),false);
   assert.equal(shouldSuspendAfterAccepted({}),false);
+});
+
+// =====================================================================================
+// P1-07D — Latency-Decoupled Movement (Issue #23), Architecture Plan v4/v4.1/v4.2/v4.3/v4.4
+// =====================================================================================
+
+// --- integrateInputPosition: pure, single-purpose frame integration (Blocker 1, v4.1) ---
+
+test('integrateInputPosition: inactive input leaves the position unchanged',()=>{
+  const position={x:10,y:10};
+  assert.deepEqual(integrateInputPosition(position,{active:false,dirX:0,dirY:0,magnitude:0},16,0.1286),position);
+});
+
+test('integrateInputPosition: advances by velocity*dt*magnitude in the input direction, with no lead cap and no bleed of any kind',()=>{
+  const position={x:0,y:0},input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=integrateInputPosition(position,input,1000,0.2); // 200px — far beyond any MAX_PREDICTION_LEAD
+  assert.ok(Math.abs(result.x-200)<1e-9,`expected an uncapped 200px advance, got ${result.x}`);
+  assert.equal(result.y,0);
+});
+
+test('integrateInputPosition: half magnitude halves the advance',()=>{
+  const result=integrateInputPosition({x:0,y:0},{active:true,dirX:1,dirY:0,magnitude:0.5},100,0.2);
+  assert.ok(Math.abs(result.x-10)<1e-9);
+});
+
+// --- advancePredictedPosition (v4.1/v4.2/v4.4): directional forward-freeze + lateral bleed-off,
+// now built on integrateInputPosition, must never contaminate earnedPosition (see below) ---
+
+test('advancePredictedPosition: predicted LEGITIMATELY BEHIND server along the input direction never freezes — only being too far AHEAD does (v4.1 fix for the large-grant freeze-deadlock)',()=>{
+  const current={x:0,y:0},server={x:90,y:0}; // predicted is 90px behind server, same axis as input
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=advancePredictedPosition(current,server,input,16,0.1286,36);
+  assert.ok(result.x>current.x,`expected forward progress even while far behind, got x=${result.x}`);
+});
+
+test('advancePredictedPosition: predicted too far AHEAD along the input direction still freezes (unchanged, directional not Euclidean)',()=>{
+  const current={x:136,y:0},server={x:100,y:0}; // already leading by 36 = maxLead
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=advancePredictedPosition(current,server,input,16,0.1286,36);
+  assert.deepEqual(result,current);
+});
+
+test('advancePredictedPosition: lateral bleed-off never changes the ahead (forward-direction) component',()=>{
+  const current={x:30,y:20},server={x:0,y:0}; // ahead=30 (along +X), lateral=20
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=advancePredictedPosition(current,server,input,16,0.1286,36,0.1286);
+  const expectedAhead=30+0.1286*16; // forward step, entirely unaffected by bleed
+  assert.ok(Math.abs(result.x-expectedAhead)<1e-6,`expected ahead component ${expectedAhead}, got ${result.x}`);
+  assert.ok(result.y<20,'expected the lateral component to have bled down, not stayed at 20');
+});
+
+test('advancePredictedPosition: lateral divergence monotonically decreases each frame and fully resolves within the expected bounded window',()=>{
+  let predicted={x:0,y:54},server={x:0,y:0}; // 54px purely lateral to a +X hold
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  let previousLateral=54;
+  for(let i=0;i<50;i++){
+    predicted=advancePredictedPosition(predicted,server,input,16,0.1286,36,0.1286);
+    const lateral=Math.abs(predicted.y-server.y);
+    assert.ok(lateral<=previousLateral+1e-9,`lateral divergence must never increase (frame ${i}: ${lateral} > ${previousLateral})`);
+    previousLateral=lateral;
+  }
+  assert.ok(previousLateral<1,`expected the 54px lateral offset to have resolved to well under 1px within 50 frames (~800ms), got ${previousLateral}`);
+});
+
+// --- movementDivergence: signed ahead/lateral decomposition ---
+
+test('movementDivergence: no active input falls back to plain Euclidean distance as `ahead`, with lateral=0',()=>{
+  const result=movementDivergence({x:10,y:0},{x:0,y:0},null);
+  assert.equal(result.ahead,10);
+  assert.equal(result.lateral,0);
+});
+
+test('movementDivergence: predicted directly ahead of server along the input direction gives a positive ahead, zero lateral',()=>{
+  const result=movementDivergence({x:36,y:0},{x:0,y:0},{active:true,dirX:1,dirY:0,magnitude:1});
+  assert.ok(Math.abs(result.ahead-36)<1e-9);
+  assert.ok(Math.abs(result.lateral)<1e-9);
+});
+
+test('movementDivergence: server ahead of predicted along the input direction gives a NEGATIVE ahead (never dangerous, however large)',()=>{
+  const result=movementDivergence({x:0,y:0},{x:90,y:0},{active:true,dirX:1,dirY:0,magnitude:1});
+  assert.ok(Math.abs(result.ahead-(-90))<1e-9);
+});
+
+test('movementDivergence: pure perpendicular offset gives ahead=0, full magnitude as lateral',()=>{
+  const result=movementDivergence({x:0,y:54},{x:0,y:0},{active:true,dirX:1,dirY:0,magnitude:1});
+  assert.ok(Math.abs(result.ahead)<1e-9);
+  assert.ok(Math.abs(result.lateral-54)<1e-9);
+});
+
+// --- catchUpDebtAfterGrant: ahead-only credit (v4.4 cleanup) ---
+
+test('catchUpDebtAfterGrant: no intent direction (e.g. grant landed while idle) credits nothing',()=>{
+  assert.equal(catchUpDebtAfterGrant({x:0,y:0},{x:90,y:0},null),0);
+});
+
+test('catchUpDebtAfterGrant: a pure ahead-direction grant credits its full magnitude',()=>{
+  const debt=catchUpDebtAfterGrant({x:0,y:0},{x:90,y:0},{dirX:1,dirY:0});
+  assert.ok(Math.abs(debt-90)<1e-9);
+});
+
+test('catchUpDebtAfterGrant: server moving BEHIND predicted along the intent direction credits zero, never a negative debt',()=>{
+  const debt=catchUpDebtAfterGrant({x:90,y:0},{x:0,y:0},{dirX:1,dirY:0});
+  assert.equal(debt,0);
+});
+
+test('catchUpDebtAfterGrant: only the ahead-projected component is credited, never the lateral one — concrete counter-example proving Euclidean debt would self-mask an unrelated lateral divergence',()=>{
+  const predicted={x:0,y:0},intentDirection={dirX:1,dirY:0},newServerPosition={x:80,y:40}; // 80 ahead, 40 lateral, mixed in one grant
+  const debt=catchUpDebtAfterGrant(predicted,newServerPosition,intentDirection);
+  assert.equal(debt,80,'lateral component must never be credited into catchUpDebt');
+  const euclidean=Math.hypot(80,40),oldBudget=MAX_PREDICTION_LEAD+euclidean,newBudget=MAX_PREDICTION_LEAD+debt;
+  assert.ok(120<oldBudget,'sanity: the old (Euclidean) design would have masked a 120px unrelated lateral divergence');
+  assert.ok(120>newBudget,'the new (ahead-only) design correctly still flags a 120px unrelated lateral divergence as dangerous');
+});
+
+// --- nextCatchUpDebt: clearing rules ---
+
+test('nextCatchUpDebt: caught back up (distance<=maxLead) clears to 0',()=>{
+  assert.equal(nextCatchUpDebt(90,20,36,false),0);
+  assert.equal(nextCatchUpDebt(90,36,36,false),0);
+});
+
+test('nextCatchUpDebt: shouldClear forces 0 regardless of distance',()=>{
+  assert.equal(nextCatchUpDebt(90,200,36,true),0);
+});
+
+test('nextCatchUpDebt: otherwise holds steady (no continuous time-based decay — see catchUpDebtAfterGrant header for why)',()=>{
+  assert.equal(nextCatchUpDebt(90,54,36,false),90);
+});
+
+// --- clampEarnedTarget: request target lies on [serverPosition, earnedPosition] ---
+
+test('clampEarnedTarget: within the catch-up cap, the target is earnedPosition itself, unshortened',()=>{
+  const earned={x:20,y:0},server={x:0,y:0};
+  assert.deepEqual(clampEarnedTarget(earned,server,1000,0.1286),earned);
+});
+
+test('clampEarnedTarget: beyond the cap, the target is a point on the segment [server,earned], never beyond earned',()=>{
+  const earned={x:1000,y:0},server={x:0,y:0},cap=1000,velocity=0.1286;
+  const target=clampEarnedTarget(earned,server,cap,velocity);
+  const maxDist=velocity*cap;
+  const dist=Math.hypot(target.x-server.x,target.y-server.y);
+  assert.ok(Math.abs(dist-maxDist)<1e-6,`expected target distance ~${maxDist}, got ${dist}`);
+  assert.ok(target.x<earned.x,'target must be shortened toward server, never extrapolated beyond earnedPosition');
+});
+
+// --- nextEarnedPosition: IN_CITY bootstrap (v4.2 Blocker 1) + press-rebase ---
+
+test('nextEarnedPosition: shouldReset snaps to serverPosition',()=>{
+  assert.deepEqual(nextEarnedPosition({x:99,y:99},{x:0,y:0},{active:true,dirX:1,dirY:0,magnitude:1},true,16,0.1286,true),{x:0,y:0});
+});
+
+test('nextEarnedPosition: inactive input leaves earnedPosition unchanged',()=>{
+  const earned={x:5,y:5};
+  assert.deepEqual(nextEarnedPosition(earned,{x:0,y:0},{active:false,dirX:0,dirY:0,magnitude:0},false,16,0.1286,false),earned);
+});
+
+test('nextEarnedPosition: a fresh press (wasActiveLastFrame=false) rebases from serverPosition before integrating, discarding any stale earnedPosition',()=>{
+  const staleEarned={x:500,y:500},server={x:0,y:0},input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=nextEarnedPosition(staleEarned,server,input,false,16,0.1286,false);
+  const expectedDelta=0.1286*16;
+  assert.ok(Math.abs(result.x-expectedDelta)<1e-6,`expected a fresh-press small step from server truth (~${expectedDelta}), got ${result.x} (stale earnedPosition must have been discarded)`);
+});
+
+test('nextEarnedPosition: state-independent — a genuinely IN_CITY position (the function takes no state argument at all) still accumulates a non-zero first target, proving the IN_CITY→IN_WORLD bootstrap deadlock (v4.2 Blocker 1) cannot recur',()=>{
+  const serverPos={x:100,y:100}; // this position could equally represent IN_CITY or IN_WORLD — the
+                                   // function has no way to distinguish, which is exactly the fix
+  const input={active:true,dirX:1,dirY:0,magnitude:1};
+  const first=nextEarnedPosition(serverPos,serverPos,input,false,140,MOVE_SPEED_RATE,false);
+  assert.ok(Math.abs(first.x-serverPos.x)>0,'expected a non-zero first accumulated target');
+  const target=clampEarnedTarget(first,serverPos,MOVE_CATCHUP_CAP_MS,MOVE_SPEED_RATE);
+  assert.notDeepEqual(target,serverPos,'the request target actually sent must not equal serverPosition — a target equal to serverPosition is exactly the zero-displacement deadlock this fix prevents');
+});
+
+test('nextEarnedPosition: sustained hold (wasActiveLastFrame=true) keeps accumulating from the current earnedPosition, not rebasing to server truth every frame',()=>{
+  const earned={x:20,y:0},server={x:0,y:0},input={active:true,dirX:1,dirY:0,magnitude:1};
+  const result=nextEarnedPosition(earned,server,input,true,16,0.1286,false);
+  const expected=20+0.1286*16;
+  assert.ok(Math.abs(result.x-expected)<1e-6);
+});
+
+// --- idleSettlePosition: idle/release presentation reconciliation (v4.2 Blocker 3) ---
+
+test('idleSettlePosition: within epsilon, snaps exactly to server truth (negligible, imperceptible remainder)',()=>{
+  assert.deepEqual(idleSettlePosition({x:0.01,y:0},{x:0,y:0},16),{x:0,y:0});
+});
+
+test('idleSettlePosition: 5/20/35px release gaps all converge to the server truth within a bounded number of frames, never getting stuck',()=>{
+  for(const gap of [5,20,35]){
+    let predicted={x:gap,y:0},server={x:0,y:0};
+    for(let i=0;i<500;i++)predicted=idleSettlePosition(predicted,server,16);
+    const remaining=Math.hypot(predicted.x,predicted.y);
+    assert.ok(remaining<=IDLE_SETTLE_EPSILON_PX,`gap ${gap}px did not converge within 500 frames, remaining=${remaining}`);
+  }
+});
+
+test('idleSettlePosition: never hard-resets even far beyond RECONCILE_HARD_RESET_DISTANCE — a stale-accepted grant landing after release glides, it never snaps',()=>{
+  const predicted={x:80,y:0},server={x:0,y:0}; // 80 > RECONCILE_HARD_RESET_DISTANCE (54)
+  const next=idleSettlePosition(predicted,server,16);
+  assert.notDeepEqual(next,server,'expected a smooth ease step, not an immediate snap to server truth');
+  assert.ok(next.x<predicted.x&&next.x>server.x,'expected genuine but partial progress toward truth');
+});
+
+// --- nextGenerationAnchor: anchor-relative direction+magnitude drift detection (v4.3/v4.4) ---
+
+test('nextGenerationAnchor: press/release always bump regardless of angle or magnitude',()=>{
+  assert.equal(nextGenerationAnchor(null,{active:true,dirX:1,dirY:0,magnitude:1}).bump,true);
+  assert.equal(nextGenerationAnchor({active:true,dirX:1,dirY:0,magnitude:1},{active:false}).bump,true);
+});
+
+test('nextGenerationAnchor: 0→2→-2→3° stays within tolerance of the same anchor, never bumps',()=>{
+  let anchor={active:true,dirX:1,dirY:0,magnitude:1};
+  for(const deg of [2,-2,3]){
+    const rad=deg*Math.PI/180,next={active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1};
+    const result=nextGenerationAnchor(anchor,next);
+    assert.equal(result.bump,false,`${deg}° should not bump`);
+    anchor=result.anchor;
+  }
+});
+
+test('nextGenerationAnchor: 0→5→10→14° stays within tolerance of the ORIGINAL 0° anchor (anchor unchanged while not bumping)',()=>{
+  let anchor={active:true,dirX:1,dirY:0,magnitude:1};
+  for(const deg of [5,10,14]){
+    const rad=deg*Math.PI/180,next={active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1};
+    const result=nextGenerationAnchor(anchor,next);
+    assert.equal(result.bump,false,`${deg}° (vs fixed 0° anchor) should not bump`);
+    anchor=result.anchor;
+  }
+});
+
+test('nextGenerationAnchor: 0→5→10→16° bumps at 16°, still measured against the original 0° anchor — proves anchor-relative (not previous-frame) comparison catches gradual drift',()=>{
+  let anchor={active:true,dirX:1,dirY:0,magnitude:1};
+  for(const deg of [5,10]){
+    const rad=deg*Math.PI/180;
+    anchor=nextGenerationAnchor(anchor,{active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1}).anchor;
+  }
+  const rad16=16*Math.PI/180,next16={active:true,dirX:Math.cos(rad16),dirY:Math.sin(rad16),magnitude:1};
+  const result=nextGenerationAnchor(anchor,next16);
+  assert.equal(result.bump,true,'16° cumulative drift from the original anchor must bump');
+  assert.ok(Math.abs(result.anchor.dirX-next16.dirX)<1e-9,'anchor must reset to the 16° direction after bumping');
+});
+
+test('nextGenerationAnchor: after bumping at 16°, 16→25→31° stays within tolerance of the NEW 16° anchor',()=>{
+  let anchor={active:true,dirX:Math.cos(16*Math.PI/180),dirY:Math.sin(16*Math.PI/180),magnitude:1};
+  for(const deg of [25,31]){
+    const rad=deg*Math.PI/180,next={active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1};
+    const result=nextGenerationAnchor(anchor,next);
+    assert.equal(result.bump,false,`${deg}° (within 15° of the 16° anchor) should not bump`);
+    anchor=result.anchor;
+  }
+});
+
+test('nextGenerationAnchor: 16→32° bumps (16° drift from the 16° anchor)',()=>{
+  const anchor={active:true,dirX:Math.cos(16*Math.PI/180),dirY:Math.sin(16*Math.PI/180),magnitude:1};
+  const rad32=32*Math.PI/180,next={active:true,dirX:Math.cos(rad32),dirY:Math.sin(rad32),magnitude:1};
+  assert.equal(nextGenerationAnchor(anchor,next).bump,true);
+});
+
+test('nextGenerationAnchor: a gradual 0°→90° sweep (10°/step) produces multiple bumps, never zero — cannot evade detection via small per-frame steps',()=>{
+  let anchor={active:true,dirX:1,dirY:0,magnitude:1},bumps=0;
+  for(let deg=10;deg<=90;deg+=10){
+    const rad=deg*Math.PI/180,next={active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1};
+    const result=nextGenerationAnchor(anchor,next);
+    if(result.bump)bumps++;
+    anchor=result.anchor;
+  }
+  // At a 15° threshold sampled every 10°, a bump recurs roughly every other sample (20° of actual
+  // drift) — the required guarantee is "multiple, not just one", not an exact count.
+  assert.ok(bumps>=3,`expected multiple bumps across a 90° gradual sweep, got ${bumps}`);
+});
+
+test('nextGenerationAnchor: magnitude 1.00→0.95 does not bump (Δ=0.05, tremor)',()=>{
+  const anchor={active:true,dirX:1,dirY:0,magnitude:1.00};
+  assert.equal(nextGenerationAnchor(anchor,{active:true,dirX:1,dirY:0,magnitude:0.95}).bump,false);
+});
+
+test('nextGenerationAnchor: magnitude 1.00→0.80 bumps (Δ=0.20 exceeds the 0.15 threshold)',()=>{
+  const anchor={active:true,dirX:1,dirY:0,magnitude:1.00};
+  assert.equal(nextGenerationAnchor(anchor,{active:true,dirX:1,dirY:0,magnitude:0.80}).bump,true);
+});
+
+test('nextGenerationAnchor: magnitude 1.00→0.50 bumps',()=>{
+  const anchor={active:true,dirX:1,dirY:0,magnitude:1.00};
+  assert.equal(nextGenerationAnchor(anchor,{active:true,dirX:1,dirY:0,magnitude:0.50}).bump,true);
+});
+
+test('nextGenerationAnchor: magnitude 0.30→0.35 does not bump (same Δ=0.05 as the tremor case, regardless of base level — proves the threshold is an absolute delta, not relative)',()=>{
+  const anchor={active:true,dirX:1,dirY:0,magnitude:0.30};
+  assert.equal(nextGenerationAnchor(anchor,{active:true,dirX:1,dirY:0,magnitude:0.35}).bump,false);
+});
+
+test('nextGenerationAnchor: gradual magnitude drift accumulates against a fixed anchor, eventually bumping — cannot evade detection via small per-frame steps',()=>{
+  let anchor={active:true,dirX:1,dirY:0,magnitude:1.00},bumps=0;
+  for(let m=0.90;m>=0.10;m-=0.10){
+    const next={active:true,dirX:1,dirY:0,magnitude:Number(m.toFixed(2))};
+    const result=nextGenerationAnchor(anchor,next);
+    if(result.bump)bumps++;
+    anchor=result.anchor;
+  }
+  assert.ok(bumps>=1,'a gradual 1.00→0.10 magnitude drift must bump at least once');
+});
+
+test('nextGenerationAnchor: direction unchanged but a major magnitude drop still bumps — an in-flight response bound to the old (high-magnitude) generation must be treated as stale',()=>{
+  const anchor={active:true,dirX:1,dirY:0,magnitude:1.0};
+  const result=nextGenerationAnchor(anchor,{active:true,dirX:1,dirY:0,magnitude:0.2});
+  assert.equal(result.bump,true);
+});
+
+// --- v4.4 §6.1 simulation table: 0°/45°/90°/180° × debt(D)=20/36/54/90px, reconstructed against
+// the ACTUAL exported gate primitives (movementDivergence + the same dangerousAhead/dangerousLateral
+// formulas app.js uses), not just asserted as prose ---
+
+test('simulation table: at every angle 0/45/90°, catchUpDebt=D always keeps the reprojected divergence safe (dangerousAhead=false, dangerousLateral=false) for D=20/36/54/90',()=>{
+  for(const D of [20,36,54,90]){
+    for(const deg of [0,45,90]){
+      const rad=deg*Math.PI/180;
+      // offset purely along the OLD (0°) direction, magnitude D, now viewed via a NEW direction `deg` away
+      const predicted={x:-D,y:0},server={x:0,y:0}; // ahead_old=-D relative to 0° direction
+      const input={active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1};
+      const divergence=movementDivergence(predicted,server,input);
+      const dangerousAhead=divergence.ahead>MAX_PREDICTION_LEAD;
+      const dangerousLateral=divergence.lateral>MAX_PREDICTION_LEAD+D;
+      assert.equal(dangerousAhead,false,`angle ${deg}° D=${D}: expected ahead safe, got ahead=${divergence.ahead}`);
+      assert.equal(dangerousLateral,false,`angle ${deg}° D=${D}: expected lateral safe, got lateral=${divergence.lateral} budget=${MAX_PREDICTION_LEAD+D}`);
+    }
+  }
+});
+
+test('simulation table: at 180°, dangerousAhead triggers once D>MAX_PREDICTION_LEAD (D=54,90), stays safe for D=20/36',()=>{
+  for(const D of [20,36]){
+    const predicted={x:-D,y:0},server={x:0,y:0};
+    const input={active:true,dirX:-1,dirY:0,magnitude:1}; // 180° reversal
+    const divergence=movementDivergence(predicted,server,input);
+    assert.equal(divergence.ahead>MAX_PREDICTION_LEAD,false,`D=${D}: expected safe at 180°, got ahead=${divergence.ahead}`);
+  }
+  for(const D of [54,90]){
+    const predicted={x:-D,y:0},server={x:0,y:0};
+    const input={active:true,dirX:-1,dirY:0,magnitude:1};
+    const divergence=movementDivergence(predicted,server,input);
+    assert.equal(divergence.ahead>MAX_PREDICTION_LEAD,true,`D=${D}: expected dangerous at 180°, got ahead=${divergence.ahead}`);
+  }
+});
+
+test('simulation table: non-suspended reconciliation (dangerousAhead-triggered) never hard-resets even at D=90/180° — reconciliationSmoothingMs with hardResetDistance=Infinity always returns a finite smoothing value',()=>{
+  const smoothingMs=reconciliationSmoothingMs(90,MAX_PREDICTION_LEAD,Infinity);
+  assert.notEqual(smoothingMs,null);
+  assert.equal(smoothingMs,RECONCILE_STRONG_SMOOTHING_MS);
+});
+
+// --- guardStaleGeneration: production-shaped sender tests using the REAL, unmodified
+// createCoalescingSender — proves actual network-call side effects, not just a comparison of two
+// numbers (v4.3/v4.4 Test Requirement) ---
+
+test('guardStaleGeneration: B queued while A is in-flight, generation bumps before A resolves → B is dropped before ever reaching the network call',async()=>{
+  let currentGeneration=1,callCount=0,resolveA;
+  const slowNetworkCall=async({x,y})=>{
+    callCount++;
+    return new Promise(resolve=>{resolveA=()=>resolve({status:'ACCEPTED',data:{worldPosition:{x,y}}})});
+  };
+  const guardedMoveCall=guardStaleGeneration(slowNetworkCall,()=>currentGeneration);
+  // Same shape as app.js's production sendWorldMove: createCoalescingSender wraps a callback that
+  // awaits guardedMoveCall and inspects `.dropped` — not a hand-duplicated check.
+  const sender=createCoalescingSender(async(target)=>{await guardedMoveCall(target)});
+
+  sender({generation:1,x:1,y:1});   // A: dequeues immediately, slowNetworkCall runs synchronously up
+                                      // to its own pending-Promise return — callCount is already 1 here
+  sender({generation:1,x:2,y:2});   // B: in-flight, queued as `pending`, still bound to generation 1
+                                      // (fresh at THIS moment — matches the exact case: B queued
+                                      // before generation changes)
+  currentGeneration=2;               // generation bumps only AFTER B was queued
+  resolveA();                        // A resolves → asyncqueue's finally block auto-dequeues B → run(B)
+  await new Promise(r=>setTimeout(r,0)); // let all pending microtasks/continuations settle
+  assert.equal(callCount,1,'B must be dropped before ever reaching slowNetworkCall — only A should have counted');
+});
+
+test('guardStaleGeneration: B queued while A is in-flight, generation UNCHANGED when A resolves → B sends normally',async()=>{
+  let currentGeneration=1,callCount=0,resolveA;
+  const slowNetworkCall=async({x,y})=>{
+    callCount++;
+    return new Promise(resolve=>{resolveA=()=>resolve({status:'ACCEPTED',data:{worldPosition:{x,y}}})});
+  };
+  const guardedMoveCall=guardStaleGeneration(slowNetworkCall,()=>currentGeneration);
+  const sender=createCoalescingSender(async(target)=>{await guardedMoveCall(target)});
+
+  sender({generation:1,x:1,y:1});   // A
+  sender({generation:1,x:2,y:2});   // B queued, generation never changes
+  resolveA();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(callCount,2,'B must proceed to the network call since its generation still matches at dequeue time');
+});
+
+test('guardStaleGeneration: a generation mismatch detected before any network call means the network function is never invoked, and resolves to {dropped:true}',async()=>{
+  let callCount=0;
+  const networkCall=async()=>{callCount++;return{status:'ACCEPTED',data:{}}};
+  const guarded=guardStaleGeneration(networkCall,()=>2); // live generation is 2
+  const outcome=await guarded({generation:1,x:0,y:0}); // bound to stale generation 1
+  assert.deepEqual(outcome,{dropped:true});
+  assert.equal(callCount,0);
+});
+
+test('guardStaleGeneration: a matching generation invokes the network function and returns {dropped:false,result}',async()=>{
+  const networkCall=async(payload)=>({status:'ACCEPTED',data:{worldPosition:payload}});
+  const guarded=guardStaleGeneration(networkCall,()=>1);
+  const outcome=await guarded({generation:1,x:5,y:6});
+  assert.deepEqual(outcome,{dropped:false,result:{status:'ACCEPTED',data:{worldPosition:{x:5,y:6}}}});
+});
+
+// --- applyMovementIntent: the single synchronous state transition (Merge Gate review — closes the
+// input-event-to-next-RAF race) ---
+
+test('applyMovementIntent: a meaningful direction change bumps generation and updates the anchor, synchronously, from pure input/output (no module-level state)',()=>{
+  const state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:5,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  const nextInput={active:true,dirX:0,dirY:1,magnitude:1}; // 90°
+  const next=applyMovementIntent(state,nextInput);
+  assert.equal(next.movementGeneration,6);
+  assert.deepEqual(next.joystickInput,nextInput);
+  assert.deepEqual(next.generationAnchorInput,nextInput);
+});
+
+test('applyMovementIntent: a micro tremor does not bump generation, and leaves the anchor unchanged',()=>{
+  const anchor={active:true,dirX:1,dirY:0,magnitude:1};
+  const state={joystickInput:anchor,movementGeneration:5,generationAnchorInput:anchor};
+  const rad=2*Math.PI/180,nextInput={active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1};
+  const next=applyMovementIntent(state,nextInput);
+  assert.equal(next.movementGeneration,5);
+  assert.deepEqual(next.generationAnchorInput,anchor);
+  assert.deepEqual(next.joystickInput,nextInput,'joystickInput itself always updates, regardless of whether generation bumped');
+});
+
+test('applyMovementIntent: release (active->inactive) always bumps',()=>{
+  const state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:5,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  const next=applyMovementIntent(state,{active:false,dirX:0,dirY:0,magnitude:0});
+  assert.equal(next.movementGeneration,6);
+});
+
+// --- P1-07D Merge Gate review — race regression: movementGeneration must already be current the
+// INSTANT the input changes, not just by the next animation frame. These tests deliberately never
+// simulate a "tick"/RAF at all — they apply the intent change synchronously, in the same turn as
+// queuing the pending request, exactly reproducing the race window an animation-frame-deferred bump
+// would miss. Each uses the REAL, unmodified createCoalescingSender and the REAL guardStaleGeneration
+// (imported from movement.js, never a re-implemented mock), wrapped the same way app.js's
+// sendWorldMove wraps them, so the network-call count is genuine production behavior, not a
+// comparison of two numbers. ---
+
+function raceHarness(){
+  let state={joystickInput:{active:true,dirX:1,dirY:0,magnitude:1},movementGeneration:5,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}};
+  let callCount=0,resolveA;
+  const slowNetworkCall=async({x,y})=>{
+    callCount++;
+    return new Promise(resolve=>{resolveA=()=>resolve({status:'ACCEPTED',data:{worldPosition:{x,y}}})});
+  };
+  const guardedMoveCall=guardStaleGeneration(slowNetworkCall,()=>state.movementGeneration);
+  // Same shape as app.js's production sendWorldMove.
+  const sender=createCoalescingSender(async(target)=>{await guardedMoveCall(target)});
+  return{get state(){return state},set state(next){state=next},get callCount(){return callCount},sender,resolveA:()=>resolveA()};
+}
+
+test('Race Case A — release race: B must be dropped even though the release happens synchronously, with NO animation-frame tick between the release and A resolving',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1}); // A: dequeues immediately, in-flight at generation 5
+  h.sender({generation:h.state.movementGeneration,x:2,y:2}); // B: queued, still generation 5 at THIS moment
+  h.state=applyMovementIntent(h.state,{active:false,dirX:0,dirY:0,magnitude:0}); // synchronous release, no tick simulated
+  assert.equal(h.state.movementGeneration,6,'release must have already bumped generation before A resolves');
+  h.resolveA(); // A resolves -> asyncqueue's finally auto-dequeues B -> run(B), which reads the NOW-current generation
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,1,'B must be dropped — release already bumped generation before A resolved, with no RAF in between');
+});
+
+test('Race Case B — direction-change race: 0°->90° mid-flight, A resolving before any tick, B must never reach the network',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1});
+  h.sender({generation:h.state.movementGeneration,x:2,y:2});
+  h.state=applyMovementIntent(h.state,{active:true,dirX:0,dirY:1,magnitude:1}); // 90° turn, synchronous
+  assert.equal(h.state.movementGeneration,6);
+  h.resolveA();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,1,'B must be dropped — a 90° direction change already bumped generation before A resolved');
+});
+
+test('Race Case C — magnitude-change race: 1.0->0.2 mid-flight, A resolving before any tick, B must never reach the network',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1});
+  h.sender({generation:h.state.movementGeneration,x:2,y:2});
+  h.state=applyMovementIntent(h.state,{active:true,dirX:1,dirY:0,magnitude:0.2}); // major magnitude drop, synchronous
+  assert.equal(h.state.movementGeneration,6);
+  h.resolveA();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,1,'B must be dropped — a major magnitude drop already bumped generation before A resolved');
+});
+
+test('Race Case D — micro tremor: a 2° change (below threshold) leaves generation unchanged, so B sends normally',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1});
+  h.sender({generation:h.state.movementGeneration,x:2,y:2});
+  const rad=2*Math.PI/180;
+  h.state=applyMovementIntent(h.state,{active:true,dirX:Math.cos(rad),dirY:Math.sin(rad),magnitude:1}); // tremor
+  assert.equal(h.state.movementGeneration,5,'a tremor must not bump generation');
+  h.resolveA();
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,2,'B must send normally — its generation still matches, exactly as production would behave for a genuine still-current pending target');
+});
+
+// --- invalidateMovementGeneration: the hard-resync counterpart to applyMovementIntent ---
+
+test('invalidateMovementGeneration: unconditionally bumps generation and clears the anchor, regardless of what it currently is',()=>{
+  const result=invalidateMovementGeneration({movementGeneration:5,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}});
+  assert.equal(result.movementGeneration,6);
+  assert.equal(result.generationAnchorInput,null);
+});
+
+test('Race Case E — resync-before-await race: production actually calls invalidateMovementGeneration BEFORE its first await (see app.js refresh()) — B must be dropped even while the resync\'s own async work (e.g. the snapshot request) is still unresolved, with A resolving in that same window',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1}); // A: in-flight at generation 5
+  h.sender({generation:h.state.movementGeneration,x:2,y:2}); // B: queued, still generation 5
+
+  // Mirrors app.js's actual refresh(): invalidate SYNCHRONOUSLY, as the very first thing, before
+  // the resync's own snapshot request is awaited — the snapshot promise is deliberately left
+  // unresolved here (production would be mid-`await req(...)` at exactly this point).
+  let resolveSnapshot;
+  const snapshotPromise=new Promise(resolve=>{resolveSnapshot=resolve});
+  h.state=invalidateMovementGeneration(h.state); // the exact production path/helper, not a manual currentGeneration++
+  assert.equal(h.state.movementGeneration,6,'generation must already be invalidated before the resync\'s own network request has resolved');
+
+  h.resolveA(); // A resolves WHILE the resync's snapshot request is still pending
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,1,'B must be dropped — invalidation already happened before A resolved, even though the resync itself has not finished');
+
+  resolveSnapshot(); // let the simulated resync's own async work finish, for harness cleanliness
+  await snapshotPromise;
 });

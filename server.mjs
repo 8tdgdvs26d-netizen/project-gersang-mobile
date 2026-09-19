@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { WORLD_BOUNDS, PLAYER_COLLISION_RADIUS, OBSTACLES, inflateRect, segmentIntersectsRect, pointInRect } from "./public/worldgeometry.js";
+import { MOVE_SPEED_RATE, MOVE_CATCHUP_CAP_MS } from "./public/movement.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
@@ -293,9 +294,50 @@ function resolveArrival(env){const e=check(env);if(e)return e;return idem(env.id
 function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot(),p=env.payload;if(s.state!=='IN_CITY'||s.cityId!==p.cityId)return{status:'REJECTED',errorCode:'ERR_PHYSICAL_PRESENCE_REQUIRED'};if(p.quantity<=0)return{status:'REJECTED',errorCode:'ERR_INVALID_QUANTITY'};const cur=db.prepare(`SELECT quantity FROM storage WHERE character_id='char-demo' AND city_id=? AND good_id=?`).get(s.cityId,p.goodTypeId)?.quantity??0;if(p.direction==='CARGO_TO_STORAGE'){changeCargo(p.goodTypeId,-p.quantity);db.prepare(`INSERT INTO storage VALUES('char-demo',?,?,?) ON CONFLICT(character_id,city_id,good_id) DO UPDATE SET quantity=quantity+excluded.quantity`).run(s.cityId,p.goodTypeId,p.quantity)}else if(p.direction==='STORAGE_TO_CARGO'){if(cur<p.quantity)throw new Error('ERR_INSUFFICIENT_STORAGE');db.prepare(`UPDATE storage SET quantity=quantity-? WHERE character_id='char-demo' AND city_id=? AND good_id=?`).run(p.quantity,s.cityId,p.goodTypeId);changeCargo(p.goodTypeId,p.quantity)}else return{status:'REJECTED',errorCode:'ERR_INVALID_DIRECTION'};return{status:'ACCEPTED',data:{quantity:p.quantity}}})}
 
 // Movement Prototype Parameters (P1-02/P1-04) — not final balance/UX specs, subject to Playtest.
-const MAX_WORLD_STEP=60;
 const MOVEMENT_MIN_INTERVAL_MS=120;
 let lastWorldMoveAt=0;
+// P1-07D — Latency-Decoupled Movement (Issue #23). MAX_WORLD_STEP's flat per-call cap is retired in
+// favor of an elapsed-time-scaled catch-up allowance (see moveWorld() below) — the same protective
+// role, just no longer bound to a fixed cadence, so a single delayed response over a slow connection
+// can still be granted a displacement proportional to that delay instead of always being clamped to
+// a fast-RTT-sized step. This allowance is scaled by elapsed wall-clock time alone — see the
+// invariant below for exactly what that does and does not establish.
+//
+// ACCURATE INVARIANT (do not restate more strongly than this — see Architecture Plan v4.3/v4.4):
+// for every non-throttled command, `displacement <= MOVE_SPEED_RATE * min(elapsedSinceLastNonThrottledAttempt, MOVE_CATCHUP_CAP_MS)`.
+// This bound is about a SINGLE command's maximum displacement only. It does NOT prove, and must
+// never be described as proving:
+//   - actual joystick-held duration (this server has no signal for that at all — the API payload is
+//     just {targetX,targetY}, nothing else);
+//   - a character's average speed over an arbitrary wall-clock window;
+//   - that idle time has not been converted into a burst of "credit" — `lastWorldMoveAt` only
+//     records the timestamp of the last non-throttled attempt, so a request arriving after a long
+//     idle gap (whether from a genuine re-press or a scripted/modified client) is granted the same
+//     allowance as one that reflects truly continuous holding. This is a real, accepted Prototype
+//     trade-off, not an oversight: in the absence of any server-verifiable continuous-presence
+//     signal (which would require a persistent-connection transport or a persisted intent/session
+//     model — both explicitly out of scope for this phase), "latency catch-up", "no idle credit",
+//     and "server-only proof of actual held time" cannot all be achieved simultaneously against this
+//     absolute-target, single-in-flight, unchanged-payload API. MOVE_CATCHUP_CAP_MS therefore plays
+//     a dual role: it bounds both the legitimate high-RTT catch-up this feature exists to allow, and
+//     the worst-case single-command burst such a non-honest client could obtain. That single-command
+//     burst bound is the ONLY guarantee in force here — there is no long-run-average-speed guarantee
+//     of any kind: a modified/scripted client issuing repeated commands each separated by roughly
+//     MOVE_CATCHUP_CAP_MS of idle time can draw the full single-command allowance on every one of
+//     them, and this file makes no claim about, and does not bound, what that adds up to over an
+//     arbitrary wall-clock window. For this single-character Prototype (no multiplayer economy at
+//     stake yet — see the per-character movement-timing note below), that residual gap is accepted
+//     as-is, not because it is proven bounded.
+//
+// MOVE_CATCHUP_CAP_MS=1000ms (see public/movement.js) is a Prototype Parameter, not a Canonical
+// balance number — chosen against P1-07C real-device telemetry showing observed RTT roughly
+// 389-716ms (~40% margin above the observed maximum), pending further real-device sampling before
+// being tuned or locked.
+//
+// TECHNICAL DEBT — `lastWorldMoveAt` (below) is process-global, not per-character. Acceptable for
+// this single-`char-demo` Prototype; before multi-character/multiplayer, this MUST become
+// per-character (e.g. keyed by characterId), or players would interfere with each other's
+// throttle/allowance timing.
 // Obstacles inflated once by the Prototype player-collision radius (P1-04); collision checks
 // always run against these, never against the raw OBSTACLES rectangles.
 const INFLATED_OBSTACLES=OBSTACLES.map(r=>inflateRect(r,PLAYER_COLLISION_RADIUS));
@@ -317,7 +359,8 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
   const now=Date.now(),throttled=now-lastWorldMoveAt<MOVEMENT_MIN_INTERVAL_MS;
   let nextX=current.x,nextY=current.y,collided=false;
   if(!throttled){
-    const dx=targetX-current.x,dy=targetY-current.y,distance=Math.hypot(dx,dy),ratio=distance>0?Math.min(distance,MAX_WORLD_STEP)/distance:0;
+    const elapsedMs=now-lastWorldMoveAt,allowance=MOVE_SPEED_RATE*Math.min(elapsedMs,MOVE_CATCHUP_CAP_MS);
+    const dx=targetX-current.x,dy=targetY-current.y,distance=Math.hypot(dx,dy),ratio=distance>0?Math.min(distance,allowance)/distance:0;
     const boundedX=Math.max(WORLD_BOUNDS.min,Math.min(WORLD_BOUNDS.max,current.x+dx*ratio));
     const boundedY=Math.max(WORLD_BOUNDS.min,Math.min(WORLD_BOUNDS.max,current.y+dy*ratio));
     lastWorldMoveAt=now;

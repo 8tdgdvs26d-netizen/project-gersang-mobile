@@ -1,7 +1,7 @@
 import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS,OBSTACLES} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
 import {PLAYER_COLLISION_RADIUS,inflateRect} from './worldgeometry.js';
-import {computeJoystickInput,clampJoystickKnob,computeJoystickTarget,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_STEP_DISTANCE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD} from './movement.js';
+import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD,movementDivergence,catchUpDebtAfterGrant,nextCatchUpDebt,clampEarnedTarget,nextEarnedPosition,idleSettlePosition,applyMovementIntent as computeNextMovementIntent,invalidateMovementGeneration as computeInvalidatedMovementGeneration,guardStaleGeneration,MOVE_CATCHUP_CAP_MS} from './movement.js';
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
 // the existing movement path above; nothing in this import or the code that uses it changes any
 // movement/joystick/prediction/reconciliation/camera behavior.
@@ -23,12 +23,25 @@ const coord=(row,col)=>`R${row+1} C${col+1}`;
 const deploymentPresets={balanced:{hero:[2,3],archer:[1,1],guard:[3,2]},forward:{hero:[2,5],archer:[1,3],guard:[3,4]},rear:{hero:[2,1],archer:[1,0],guard:[3,1]}};
 function ensureDeployment(){const team=S.deploymentUnitIds||[],used=new Set();for(const id of team){let p=S.deploymentPositions[id],key=p&&`${p.row}:${p.col}`;if(!p||p.row<0||p.row>=5||p.col<0||p.col>=6||used.has(key)){const preset=deploymentPresets.balanced[id]||[2,2],open=[];for(let row=0;row<5;row++)for(let col=0;col<6;col++)if(!used.has(`${row}:${col}`))open.push({row,col});p=open.sort((a,b)=>Math.max(Math.abs(a.row-preset[0]),Math.abs(a.col-preset[1]))-Math.max(Math.abs(b.row-preset[0]),Math.abs(b.col-preset[1])))[0];S.deploymentPositions[id]=p;key=`${p.row}:${p.col}`}used.add(key)}for(const id of Object.keys(S.deploymentPositions))if(!team.includes(id))delete S.deploymentPositions[id];if(!team.includes(S.deploymentSelectedUnitId))S.deploymentSelectedUnitId=team[0]||null}
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),1500)}
+function invalidateMovementGeneration(){
+  const next=computeInvalidatedMovementGeneration({movementGeneration,generationAnchorInput});
+  movementGeneration=next.movementGeneration;
+  generationAnchorInput=next.generationAnchorInput;
+}
 async function refresh(){
+  // P1-07D Merge Gate review: invalidate BEFORE the first await below, not after the snapshot
+  // response returns — a refresh() is itself a hard resync (S.snap is about to be replaced
+  // wholesale), so any movement request already pending under the pre-refresh generation must
+  // already be stale the INSTANT refresh() starts, not once its own snapshot request happens to
+  // resolve. Invalidating only after that first await would leave the exact same race window
+  // applyMovementIntent was built to close for joystick input — a pending target could dequeue and
+  // reach the network while this snapshot request is itself still in flight.
+  predictionResetPending=true;
+  invalidateMovementGeneration();
   S.snap=await req('/api/character/char-demo/snapshot');
   // P1-07B: a full refresh() replaces S.snap wholesale (e.g. after travel/arrival/settlement) —
   // whatever the client was predicting before this is no longer trustworthy, so force a hard
   // reset of the predicted position to the fresh authoritative one on the next animation frame.
-  predictionResetPending=true;
   const [market,storageList,tx,battle,roster,equipment]=await Promise.all([req(`/api/cities/${S.snap.cityId}/market`),req('/api/character/char-demo/storage'),req('/api/character/char-demo/transactions'),req('/api/character/char-demo/battle'),req('/api/character/char-demo/roster'),req('/api/character/char-demo/equipment')]);
   S.market=market;S.storages=Object.fromEntries(storageList.map(x=>[x.cityId,x.goods]));S.storage=S.storages[S.snap.cityId]||[];S.tx=tx;S.roster=roster;S.equipment=equipment;if(S.deploymentUnitIds===null)S.deploymentUnitIds=roster.map(x=>x.id);ensureDeployment();setBattle(battle);if(battle?.status==='ACTIVE'||battle?.reward?.settlementRequired)S.tab='battle';
   render();
@@ -115,7 +128,7 @@ function qty(g){return Math.max(1,Number(document.querySelector(`[data-q="${g}"]
 function wire(){
   document.querySelectorAll('[data-market-mode]').forEach(b=>b.onclick=()=>{S.marketMode=b.dataset.marketMode;render()});document.querySelectorAll('[data-buy]').forEach(b=>b.onclick=()=>openQuote(b.dataset.buy,'BUY',qty(b.dataset.buy)));document.querySelectorAll('[data-sell]').forEach(b=>b.onclick=()=>openQuote(b.dataset.sell,'SELL',qty(b.dataset.sell)));document.querySelectorAll('[data-equipment-sell]').forEach(b=>b.onclick=()=>openEquipmentQuote(b.dataset.equipmentSell));document.querySelectorAll('[data-store]').forEach(b=>b.onclick=()=>move('CARGO_TO_STORAGE',b.dataset.store));document.querySelectorAll('[data-withdraw]').forEach(b=>b.onclick=()=>move('STORAGE_TO_CARGO',b.dataset.withdraw));document.querySelectorAll('[data-store-equipment]').forEach(b=>b.onclick=()=>storeEquipment(b.dataset.storeEquipment));document.querySelectorAll('[data-withdraw-equipment]').forEach(b=>b.onclick=()=>withdrawEquipment(b.dataset.withdrawEquipment,b.dataset.withdrawUnit));document.querySelectorAll('[data-transfer-item]').forEach(b=>b.onclick=()=>transferEquipment(b.dataset.transferItem,b.dataset.transferUnit));document.querySelectorAll('[data-city]').forEach(el=>el.onclick=()=>handleCityTap(el.dataset.city,{snap:S.snap,travel,reroute}));document.querySelector('#arrive')?.addEventListener('click',arrival);document.querySelector('[data-enter-hub]')?.addEventListener('click',()=>{S.tab='hub';render()});document.querySelectorAll('[data-hub-enter]').forEach(b=>b.onclick=()=>{S.tab=b.dataset.hubEnter;render()});document.querySelector('[data-hub-leave]')?.addEventListener('click',()=>{S.tab=leaveCityHub().tab;render()});document.querySelectorAll('[data-back-hub]').forEach(b=>b.onclick=()=>{S.tab='hub';render()});document.querySelectorAll('[data-settle-loot]').forEach(b=>b.onclick=()=>settleLoot(b.dataset.settleLoot,b.dataset.ownerUnit));document.querySelectorAll('[data-equip-item]').forEach(b=>b.onclick=()=>equip(b.dataset.equipItem,b.dataset.equipUnit));document.querySelectorAll('[data-unequip-item]').forEach(b=>b.onclick=()=>unequip(b.dataset.unequipItem,b.dataset.equipUnit));document.querySelectorAll('[data-deploy-unit]').forEach(b=>b.onclick=()=>toggleDeploymentUnit(b.dataset.deployUnit));document.querySelectorAll('[data-deployment-row]').forEach(b=>b.onclick=()=>deploymentTap(Number(b.dataset.deploymentRow),Number(b.dataset.deploymentCol),b.dataset.deploymentUnit));document.querySelectorAll('[data-deployment-preset]').forEach(b=>b.onclick=()=>setDeploymentPreset(b.dataset.deploymentPreset));document.querySelectorAll('[data-start-encounter]').forEach(b=>b.onclick=()=>startBattle(b.dataset.startEncounter));document.querySelector('#retreat')?.addEventListener('click',retreatBattle);document.querySelector('#select-all')?.addEventListener('click',selectAllUnits);document.querySelector('#hold-position')?.addEventListener('click',holdPosition);document.querySelector('#clear-selection')?.addEventListener('click',clearSelection);document.querySelectorAll('.battle-cell').forEach(c=>c.onclick=()=>battleTap(c));document.querySelectorAll('[data-target-unit]').forEach(b=>b.onclick=()=>targetEnemy(b.dataset.targetUnit));document.querySelectorAll('[data-skill-unit]').forEach(b=>b.onclick=()=>useSkill(b.dataset.skillUnit,b.dataset.skillId));document.querySelector('#battle-pan')?.addEventListener('input',panBattle);document.querySelector('#map-view-toggle')?.addEventListener('click',toggleMapView);
 }
-function toggleMapView(){S.mapView=S.mapView==='follow'?'full':'follow';if(S.mapView==='full'){joystickActive=false;joystickInput={active:false,dirX:0,dirY:0,magnitude:0}}render()}
+function toggleMapView(){S.mapView=S.mapView==='follow'?'full':'follow';if(S.mapView==='full'){joystickActive=false;applyMovementIntent({active:false,dirX:0,dirY:0,magnitude:0})}render()}
 async function settleLoot(decision,ownerUnitId){const battleId=S.battle?.id;if(!battleId)return;const r=await command('/api/commands/battle/settle-loot',{battleId,decision,...(ownerUnitId?{ownerUnitId}:{})});if(r.status==='REJECTED')return toast(r.errorCode);const owner=S.roster.find(x=>x.id===ownerUnitId)?.name;toast(decision==='KEEP'?`戰利品已放入${owner}背包`:'已放棄戰利品');await refresh()}
 async function equip(itemId,unitId){const r=await command('/api/commands/equipment/equip',{itemId,unitId});if(r.status==='REJECTED')return toast('裝備失敗');toast('裝備完成，能力已更新');await refresh()}
 async function unequip(itemId,unitId){const r=await command('/api/commands/equipment/unequip',{itemId,unitId});if(r.status==='REJECTED')return toast('卸下失敗');toast('裝備已放回角色背包');await refresh()}
@@ -247,33 +260,66 @@ function patchTelemetryOverlay(now,leadPx){
 // obstacle these two sweeps can briefly disagree, so once the server has actually said collided,
 // prediction must stop advancing (not just cap its lead) until reconciliation — driven by the
 // same collided:true — has pulled it back in line, exactly like the REJECTED/exception case.
-const sendWorldMove=createCoalescingSender(async({x,y})=>{
+// P1-07D — Latency-Decoupled Movement (Issue #23). `generation` travels alongside the target as
+// pure client-side metadata (never part of the actual /world/move payload below — the API shape is
+// unchanged) so a pending, coalesced target that only gets dequeued after its movement intent has
+// gone stale (release, or a meaningful direction/magnitude change — see nextGenerationAnchor) is
+// dropped by guardStaleGeneration BEFORE ever reaching the network. Production and the test suite
+// call this exact same guardStaleGeneration export — never a hand-duplicated copy of the same check.
+const networkMoveCall=({x,y})=>command('/api/commands/world/move',{targetX:x,targetY:y});
+const guardedMoveCall=guardStaleGeneration(networkMoveCall,()=>movementGeneration);
+const sendWorldMove=createCoalescingSender(async(target)=>{
+  const{generation}=target;
   // P1-07C: startedAt is taken at the true start of the network command (this callback only ever
   // runs once createCoalescingSender actually dequeues it — see Plan §2), never at enqueue time.
   const startedAt=performance.now();
   telemetryMoveInFlight=true;
-  let r;
+  let outcome;
   try{
-    r=await command('/api/commands/world/move',{targetX:x,targetY:y});
+    outcome=await guardedMoveCall(target); // pre-send staleness check lives entirely inside this call
   }catch(err){
     console.error('sendWorldMove: command() threw (network or server exception)',err);
-    toast(`移動指令失敗：${err?.message||'網絡或伺服器錯誤'}`);
-    predictionSuspended=true;
+    // This request DID reach the network (guardedMoveCall only throws from inside networkMoveCall);
+    // it may still have gone stale WHILE genuinely in flight — a different check from
+    // guardStaleGeneration's pre-send one, deciding whether THIS error should drive UI feedback.
+    const stale=generation!==movementGeneration;
+    if(!stale){
+      toast(`移動指令失敗：${err?.message||'網絡或伺服器錯誤'}`);
+      predictionSuspended=true;
+    }
     recordMoveTelemetry({status:'ERROR',errorCode:err?.message||null,throttled:null,collided:null,startedAt});
     telemetryMoveInFlight=false;
     return;
   }
+  if(outcome.dropped){
+    // Never reached the network — no RTT occurred, so telemetry is deliberately left untouched
+    // rather than fabricating a completed-request data point.
+    telemetryMoveInFlight=false;
+    return;
+  }
+  const r=outcome.result;
+  const stale=generation!==movementGeneration;
   if(r.status==='REJECTED'){
-    console.warn('sendWorldMove: REJECTED',r.errorCode);
-    toast(describeWorldMoveError(r.errorCode));
-    predictionSuspended=true;
+    if(!stale){
+      console.warn('sendWorldMove: REJECTED',r.errorCode);
+      toast(describeWorldMoveError(r.errorCode));
+      predictionSuspended=true;
+    }
+    // Stale REJECTED: REJECTED never changes worldPosition, so there is no truth to accept, and a
+    // toast about an already-abandoned direction would only confuse the player.
     recordMoveTelemetry({status:'REJECTED',errorCode:r.errorCode,throttled:null,collided:null,startedAt});
     telemetryMoveInFlight=false;
     return;
   }
-  S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state;
-  predictionSuspended=shouldSuspendAfterAccepted(r.data);
-  if(r.data.collided)toast('撞到障礙物');
+  S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state; // always accepted as truth,
+                                                                         // stale or not (P1-07D v4.1)
+  if(r.data.collided&&!stale)toast('撞到障礙物'); // a stale collision toast would describe a
+                                                    // direction the player has already left
+  if(!stale){
+    predictionSuspended=shouldSuspendAfterAccepted(r.data);
+    if(!predictionSuspended)catchUpDebt=catchUpDebtAfterGrant(predictedPosition,r.data.worldPosition,joystickInput.active?joystickInput:null);
+    // stale: predictionSuspended and catchUpDebt are both left completely untouched by this response
+  }
   recordMoveTelemetry({status:'ACCEPTED',errorCode:null,throttled:r.data.throttled,collided:r.data.collided,startedAt});
   telemetryMoveInFlight=false;
 });
@@ -282,16 +328,28 @@ const sendWorldMove=createCoalescingSender(async({x,y})=>{
 // Only one movement input mechanism is ever active: the joystick is the sole driver of free
 // world movement now.
 let joystickActive=false,joystickPointerId=null,joystickInput={active:false,dirX:0,dirY:0,magnitude:0};
+// P1-07D Merge Gate review — the SINGLE synchronous path every joystickInput-changing event must go
+// through (pointerdown/pointermove/pointerup/pointercancel/lostpointercapture, plus toggleMapView's
+// forced release above). Applies movement.js's pure computeNextMovementIntent (exported as
+// applyMovementIntent) and writes its result straight into module state, atomically, at the moment
+// the input itself changes — never deferred to the next tickMovementFrame/RAF. See that function's
+// own comment for the exact race this closes.
+function applyMovementIntent(nextInput){
+  const next=computeNextMovementIntent({joystickInput,movementGeneration,generationAnchorInput},nextInput);
+  joystickInput=next.joystickInput;
+  movementGeneration=next.movementGeneration;
+  generationAnchorInput=next.generationAnchorInput;
+}
 function updateJoystickFromEvent(event,centerX,centerY,knob){
   const dx=event.clientX-centerX,dy=event.clientY-centerY;
   const knobOffset=clampJoystickKnob(dx,dy,JOYSTICK_RADIUS);
   if(knob)knob.style.transform=`translate(${knobOffset.x}px,${knobOffset.y}px)`;
-  joystickInput=computeJoystickInput(dx,dy,JOYSTICK_RADIUS,JOYSTICK_DEADZONE);
+  applyMovementIntent(computeJoystickInput(dx,dy,JOYSTICK_RADIUS,JOYSTICK_DEADZONE));
 }
 function setupJoystick(){
   const base=document.querySelector('#joystick-base');
   const knob=document.querySelector('#joystick-knob');
-  const reset=()=>{joystickActive=false;joystickPointerId=null;joystickInput={active:false,dirX:0,dirY:0,magnitude:0};if(knob)knob.style.transform='translate(0px,0px)'};
+  const reset=()=>{joystickActive=false;joystickPointerId=null;applyMovementIntent({active:false,dirX:0,dirY:0,magnitude:0});if(knob)knob.style.transform='translate(0px,0px)'};
   reset();
   if(!base||base.classList.contains('joystick-disabled'))return;
   base.onpointerdown=event=>{
@@ -306,22 +364,32 @@ function setupJoystick(){
   };
 }
 
-// P1-07B — Continuous Visual Movement + Server Reconciliation. Replaces P1-07A's discrete
-// serverPosition-snapshot + exponential-easing model (which produced visible "velocity pulsing" —
-// see movement.js's file header for the root-cause math). `predictedPosition` now advances
+// P1-07B — Continuous Visual Movement + Server Reconciliation. `predictedPosition` advances
 // continuously every frame while the joystick is held, capped at MAX_PREDICTION_LEAD ahead of the
-// last confirmed serverPosition (normal expected lead, never actively pulled back for this alone —
-// see sendWorldMove's ACCEPTED/collided:false path, which does nothing extra). Both the hero
-// marker and the camera render from this single continuous position — no more separate camera
-// easing chasing its own discrete target, which was the "second layer" of pulsing.
+// last confirmed serverPosition along the current input direction (normal expected lead). Both the
+// hero marker and the camera render from this single continuous position.
 //
-// Active reconciliation (easing back toward serverPosition, or an immediate hard reset) only runs
-// when predictionSuspended is set (REJECTED / network exception — see sendWorldMove) or when
-// divergence has grown past MAX_PREDICTION_LEAD on its own; a normal, healthy, non-colliding
-// response never triggers it. Collision/boundary cases are handled by clampPredictedStep already
-// keeping the prediction from advancing past what the server would reject in the first place, so
-// they normally never produce a large enough gap to need active correction at all.
-let predictedPosition=null,predictionSuspended=false,predictionResetPending=false,lastFrameTime=0,lastJoystickSendAt=0;
+// P1-07D — Latency-Decoupled Movement (Issue #23) extends the reconciliation gate to a three-way
+// split (see the tickMovementFrame body below): `predictionSuspended` (collision/rejected/error —
+// the predicted path is known wrong, strong/hard-reset rules unchanged from P1-07B); idle/no active
+// input (any leftover divergence, however it arose, eases smoothly toward truth — see
+// idleSettlePosition, never a hard reset); active hold (signed ahead/lateral divergence — see
+// movementDivergence — with `catchUpDebt` giving a temporary, direction-anchor-persistent lateral
+// allowance after a legitimate large elapsed-time-scaled server grant, so a direction change right
+// after such a grant is never mistaken for dangerous lateral drift). A non-suspended trigger (too
+// far ahead, or lateral divergence beyond its budget) always eases, never hard-resets — only a
+// genuinely known-wrong predicted path (predictionSuspended) may still snap.
+//
+// `earnedPosition` is a SEPARATE, parallel accumulator (see nextEarnedPosition) driving what gets
+// *requested* from the server — deliberately independent of predictedPosition/character-state, so
+// it can accumulate a genuine first non-zero target even while still IN_CITY (P1-07D v4.2 Blocker
+// 1). `movementGeneration`/`generationAnchorInput` track movement intent epochs (press/release/a
+// meaningful direction-or-magnitude change, measured against a persisted anchor so gradual drift is
+// still eventually detected — see nextGenerationAnchor) so a request that goes stale before its
+// response lands is handled without corrupting reconciliation for the CURRENT intent (see
+// sendWorldMove above).
+let predictedPosition=null,predictionSuspended=false,predictionResetPending=false,lastFrameTime=0,lastJoystickSendAt=0,
+    earnedPosition=null,wasJoystickActiveLastFrame=false,catchUpDebt=0,movementGeneration=0,generationAnchorInput=null;
 function tickMovementFrame(now){
   requestAnimationFrame(tickMovementFrame);
   const dt=lastFrameTime?Math.min(now-lastFrameTime,100):16;
@@ -329,23 +397,46 @@ function tickMovementFrame(now){
   if(!S.snap||S.snap.state==='TRAVELING')return;
   const serverPos=S.snap.worldPosition;
   if(!serverPos)return;
-  if(S.snap.state!=='IN_WORLD'||predictionResetPending){
+  const notYetInWorld=S.snap.state!=='IN_WORLD',resetPending=predictionResetPending;
+  // P1-07D Merge Gate review: movementGeneration/generationAnchorInput are NOT bumped here anymore
+  // — they're already up to date by the time this runs, updated synchronously at the moment
+  // joystickInput itself changed (applyMovementIntent) or a resync was requested (refresh(), right
+  // where predictionResetPending is set). Bumping again from a per-frame snapshot here would either
+  // double-bump an already-applied change or, worse, be the very race this fix closes (see
+  // applyMovementIntent's comment in movement.js).
+
+  if(!predictedPosition)predictedPosition={...serverPos};
+  if(notYetInWorld||resetPending){
     predictedPosition={...serverPos};
-    predictionResetPending=false;
     predictionSuspended=false;
+  }else if(predictionSuspended){
+    const d=Math.hypot(predictedPosition.x-serverPos.x,predictedPosition.y-serverPos.y);
+    const smoothingMs=reconciliationSmoothingMs(d);
+    predictedPosition=smoothingMs===null?{...serverPos}:{x:easeTowards(predictedPosition.x,serverPos.x,dt,smoothingMs),y:easeTowards(predictedPosition.y,serverPos.y,dt,smoothingMs)};
+  }else if(!joystickInput.active){
+    predictedPosition=idleSettlePosition(predictedPosition,serverPos,dt);
   }else{
-    if(!predictedPosition)predictedPosition={...serverPos};
-    const distance=Math.hypot(predictedPosition.x-serverPos.x,predictedPosition.y-serverPos.y);
-    const smoothingMs=(predictionSuspended||distance>MAX_PREDICTION_LEAD)?reconciliationSmoothingMs(distance):undefined;
-    if(smoothingMs===null){
-      predictedPosition={...serverPos};
-    }else if(smoothingMs!==undefined){
+    const divergence=movementDivergence(predictedPosition,serverPos,joystickInput);
+    const dangerousAhead=divergence.ahead>MAX_PREDICTION_LEAD;
+    const dangerousLateral=divergence.lateral>MAX_PREDICTION_LEAD+catchUpDebt;
+    if(dangerousAhead||dangerousLateral){
+      const bandDistance=dangerousAhead?Math.hypot(predictedPosition.x-serverPos.x,predictedPosition.y-serverPos.y):divergence.lateral;
+      const smoothingMs=reconciliationSmoothingMs(bandDistance,MAX_PREDICTION_LEAD,Infinity);
       predictedPosition={x:easeTowards(predictedPosition.x,serverPos.x,dt,smoothingMs),y:easeTowards(predictedPosition.y,serverPos.y,dt,smoothingMs)};
     }else if(joystickActive&&shouldSendJoystickMove(S.mapView,joystickInput.active)){
       const candidate=advancePredictedPosition(predictedPosition,serverPos,joystickInput,dt,PREDICTION_VELOCITY,MAX_PREDICTION_LEAD);
       predictedPosition=clampPredictedStep(predictedPosition,candidate,WORLD_BOUNDS,INFLATED_OBSTACLES);
     }
   }
+  const distanceForDebt=Math.hypot(predictedPosition.x-serverPos.x,predictedPosition.y-serverPos.y);
+  catchUpDebt=nextCatchUpDebt(catchUpDebt,distanceForDebt,MAX_PREDICTION_LEAD,predictionSuspended||!joystickInput.active||notYetInWorld||resetPending);
+
+  if(!earnedPosition)earnedPosition={...serverPos};
+  earnedPosition=nextEarnedPosition(earnedPosition,serverPos,joystickInput,wasJoystickActiveLastFrame,dt,PREDICTION_VELOCITY,resetPending||predictionSuspended);
+  wasJoystickActiveLastFrame=joystickInput.active;
+
+  if(resetPending)predictionResetPending=false;
+
   const hero=document.querySelector('.hero-marker');
   if(hero){hero.setAttribute('cx',predictedPosition.x);hero.setAttribute('cy',predictedPosition.y)}
   const stateLabel=document.querySelector('#state-label');
@@ -355,8 +446,8 @@ function tickMovementFrame(now){
   if(svg)svg.setAttribute('viewBox',viewBoxAttr(camera));
   if(joystickActive&&shouldSendJoystickMove(S.mapView,joystickInput.active)&&now-lastJoystickSendAt>=JOYSTICK_SEND_INTERVAL_MS){
     lastJoystickSendAt=now;
-    const target=computeJoystickTarget(serverPos,joystickInput,JOYSTICK_STEP_DISTANCE);
-    if(target)sendWorldMove(target);
+    const target=clampEarnedTarget(earnedPosition,serverPos,MOVE_CATCHUP_CAP_MS,PREDICTION_VELOCITY);
+    if(target)sendWorldMove({...target,generation:movementGeneration});
   }
   // P1-07C — diagnostic-only tail: reads predictedPosition/serverPos that the movement logic
   // above already settled this frame, never writes back to them. FPS/lead are computed every
