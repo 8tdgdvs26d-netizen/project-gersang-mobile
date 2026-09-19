@@ -1,5 +1,4 @@
 import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS,OBSTACLES} from './worldmap.js';
-import {createCoalescingSender} from './asyncqueue.js'; // retained for regression coverage; movement diagnostic below bypasses RTT serialization
 import {PLAYER_COLLISION_RADIUS,inflateRect} from './worldgeometry.js';
 import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD,movementDivergence,catchUpDebtAfterGrant,nextCatchUpDebt,clampEarnedTarget,nextEarnedPosition,idleSettlePosition,applyMovementIntent as computeNextMovementIntent,invalidateMovementGeneration as computeInvalidatedMovementGeneration,guardStaleGeneration,MOVE_CATCHUP_CAP_MS} from './movement.js';
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
@@ -209,7 +208,7 @@ function updateTravelProgress(){
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21) state. Read-only observation of
 // the existing movement path: nothing here is ever fed back into movement/prediction/
 // reconciliation/camera — see telemetry.js for the pure math/formatting.
-let telemetryFpsEma=null,telemetryLastFrameTimestamp=null,telemetryLastOverlayPatchAt=0,telemetryMoveInFlight=false,telemetryLastCompletedAt=null,telemetryLastRttMs=null,telemetryLastResponseGapMs=null,telemetryLastStatus=null,telemetryLastErrorCode=null,telemetryLastThrottled=null,telemetryLastCollided=null;
+let telemetryFpsEma=null,telemetryLastFrameTimestamp=null,telemetryLastOverlayPatchAt=0,telemetryMoveInFlightCount=0,telemetryLastCompletedAt=null,telemetryLastRttMs=null,telemetryLastResponseGapMs=null,telemetryLastStatus=null,telemetryLastErrorCode=null,telemetryLastThrottled=null,telemetryLastCollided=null;
 // P1-07 Root Cause Measurement Test — additional read-only observation state (Issue #23 follow-up).
 // Same rule as the P1-07C state above: nothing here is ever read back by movement/prediction/
 // reconciliation/network code — only patchTelemetryOverlay and the tail of tickMovementFrame below
@@ -235,7 +234,7 @@ function patchTelemetryOverlay(now,leadPx){
   set('#telemetry-rtt',formatMs(telemetryLastRttMs));
   set('#telemetry-gap',formatMs(telemetryLastResponseGapMs));
   set('#telemetry-lead',formatLeadReadout(leadPx,MAX_PREDICTION_LEAD));
-  set('#telemetry-inflight',formatFlag(telemetryMoveInFlight));
+  set('#telemetry-inflight',formatFlag(telemetryMoveInFlightCount>0));
   set('#telemetry-throttled',formatFlag(telemetryLastThrottled));
   set('#telemetry-collided',formatFlag(telemetryLastCollided));
   set('#telemetry-suspended',formatFlag(predictionSuspended));
@@ -281,7 +280,7 @@ function patchTelemetryOverlay(now,leadPx){
 // gone stale (release, or a meaningful direction/magnitude change — see nextGenerationAnchor) is
 // dropped by guardStaleGeneration BEFORE ever reaching the network. Production and the test suite
 // call this exact same guardStaleGeneration export — never a hand-duplicated copy of the same check.
-const networkMoveCall=({x,y})=>command('/api/commands/world/move',{targetX:x,targetY:y});
+const networkMoveCall=({x,y,moveSequence})=>command('/api/commands/world/move',{targetX:x,targetY:y,moveSequence});
 const guardedMoveCall=guardStaleGeneration(networkMoveCall,()=>movementGeneration);
 let movementRequestSequence=0,latestCompletedMovementSequence=0;
 const sendWorldMove=async(target)=>{
@@ -290,10 +289,10 @@ const sendWorldMove=async(target)=>{
   // P1-07C: startedAt is taken at the true start of the network command (this callback only ever
   // runs once createCoalescingSender actually dequeues it — see Plan §2), never at enqueue time.
   const startedAt=performance.now();
-  telemetryMoveInFlight=true;
+  telemetryMoveInFlightCount++;
   let outcome;
   try{
-    outcome=await guardedMoveCall(target); // pre-send staleness check lives entirely inside this call
+    outcome=await guardedMoveCall({...target,moveSequence:requestSequence}); // server also orders parallel commands by this sequence
   }catch(err){
     console.error('sendWorldMove: command() threw (network or server exception)',err);
     // This request DID reach the network (guardedMoveCall only throws from inside networkMoveCall);
@@ -305,18 +304,18 @@ const sendWorldMove=async(target)=>{
       predictionSuspended=true;
     }
     recordMoveTelemetry({status:'ERROR',errorCode:err?.message||null,throttled:null,collided:null,startedAt});
-    telemetryMoveInFlight=false;
+    telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);
     return;
   }
   if(outcome.dropped){
     // Never reached the network — no RTT occurred, so telemetry is deliberately left untouched
     // rather than fabricating a completed-request data point.
-    telemetryMoveInFlight=false;
+    telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);
     return;
   }
-  // Diagnostic transport: multiple movement requests may be in flight. If a newer request has
-  // already completed, this older completion must not roll client truth backwards.
-  if(requestSequence<latestCompletedMovementSequence){telemetryMoveInFlight=false;return}
+  // Parallel transport: server rejects stale arrival order using moveSequence, while this completion
+  // guard prevents an older HTTP completion from rolling client presentation truth backwards.
+  if(requestSequence<latestCompletedMovementSequence){telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);return}
   latestCompletedMovementSequence=requestSequence;
   const r=outcome.result;
   const stale=generation!==movementGeneration;
@@ -329,7 +328,7 @@ const sendWorldMove=async(target)=>{
     // Stale REJECTED: REJECTED never changes worldPosition, so there is no truth to accept, and a
     // toast about an already-abandoned direction would only confuse the player.
     recordMoveTelemetry({status:'REJECTED',errorCode:r.errorCode,throttled:null,collided:null,startedAt});
-    telemetryMoveInFlight=false;
+    telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);
     return;
   }
   // P1-07 Root Cause Measurement Test — correctionDistance: the gap between what the client was
@@ -346,7 +345,7 @@ const sendWorldMove=async(target)=>{
     // stale: predictionSuspended and catchUpDebt are both left completely untouched by this response
   }
   recordMoveTelemetry({status:'ACCEPTED',errorCode:null,throttled:r.data.throttled,collided:r.data.collided,startedAt});
-  telemetryMoveInFlight=false;
+  telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);
 };
 
 // Virtual joystick (P1-07A) — fixed bottom-left, replaces the old SVG direct-drag-to-move input.
