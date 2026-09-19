@@ -325,10 +325,10 @@ export function nextGenerationAnchor(anchorInput,nextInput,cosThreshold=DIRECTIO
   const anchorActive=!!anchorInput?.active,nextActive=!!nextInput?.active;
   if(anchorActive!==nextActive)return{bump:true,anchor:nextActive?{...nextInput}:null};
   if(!nextActive)return{bump:false,anchor:null};
-  // Final P1-07 transport: a held joystick is one continuous intent. Direction and magnitude
-  // changes are steering updates, not new network generations. Bumping on every accumulated 15°
-  // turn made curved/diagonal input repeatedly invalidate in-flight work and re-project prediction.
-  // Press/release (handled above) and explicit hard resyncs remain the generation boundaries.
+  const dot=anchorInput.dirX*nextInput.dirX+anchorInput.dirY*nextInput.dirY;
+  const directionChanged=dot<cosThreshold;
+  const magnitudeChanged=Math.abs(nextInput.magnitude-anchorInput.magnitude)>magnitudeThreshold;
+  if(directionChanged||magnitudeChanged)return{bump:true,anchor:{...nextInput}};
   return{bump:false,anchor:anchorInput};
 }
 
@@ -350,6 +350,19 @@ export function applyMovementIntent(state,nextInput){
     joystickInput:nextInput,
     movementGeneration:bump?state.movementGeneration+1:state.movementGeneration,
     generationAnchorInput:anchor
+  };
+}
+
+// P1-07 Final: with ordered parallel transport, steering while the joystick remains held is one
+// continuous intent. Only press/release changes generation; ordinary turns and magnitude drift
+// update the live input without invalidating in-flight movement on every accumulated angle change.
+export function applyContinuousMovementIntent(state,nextInput){
+  const wasActive=!!state.joystickInput?.active,nextActive=!!nextInput?.active;
+  const boundary=wasActive!==nextActive;
+  return{
+    joystickInput:nextInput,
+    movementGeneration:boundary?state.movementGeneration+1:state.movementGeneration,
+    generationAnchorInput:nextActive?(boundary?{...nextInput}:state.generationAnchorInput||{...nextInput}):null
   };
 }
 
