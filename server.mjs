@@ -297,10 +297,11 @@ function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idemp
 const MOVEMENT_MIN_INTERVAL_MS=120;
 let lastWorldMoveAt=0;
 // P1-07D — Latency-Decoupled Movement (Issue #23). MAX_WORLD_STEP's flat per-call cap is retired in
-// favor of an elapsed-time-scaled allowance (see moveWorld() below) — the same protective role, just
-// no longer bound to a fixed cadence, so a single delayed response over a slow connection can still
-// reflect the distance genuinely earned during that delay instead of always being clamped to a
-// fast-RTT-sized step.
+// favor of an elapsed-time-scaled catch-up allowance (see moveWorld() below) — the same protective
+// role, just no longer bound to a fixed cadence, so a single delayed response over a slow connection
+// can still be granted a displacement proportional to that delay instead of always being clamped to
+// a fast-RTT-sized step. This allowance is scaled by elapsed wall-clock time alone — see the
+// invariant below for exactly what that does and does not establish.
 //
 // ACCURATE INVARIANT (do not restate more strongly than this — see Architecture Plan v4.3/v4.4):
 // for every non-throttled command, `displacement <= MOVE_SPEED_RATE * min(elapsedSinceLastNonThrottledAttempt, MOVE_CATCHUP_CAP_MS)`.

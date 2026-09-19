@@ -353,6 +353,20 @@ export function applyMovementIntent(state,nextInput){
   };
 }
 
+// P1-07D Merge Gate review — the hard-resync counterpart to applyMovementIntent above: an
+// unconditional generation bump (no anchor comparison, since a resync invalidates ANY prior intent
+// outright), for use whenever a hard resync is about to happen (e.g. app.js's refresh(), which
+// replaces S.snap wholesale after travel/arrival/settlement/reload). Must be called at the very
+// first synchronous opportunity — before the resync's own first `await` — never after: a pending
+// movement request bound to the pre-resync generation could otherwise dequeue and reach the network
+// during the window while the resync's own request is still in flight, which is exactly the same
+// race applyMovementIntent closes for ordinary joystick input changes, just triggered by a resync
+// instead of an input event. Pure input/output, directly testable, and the exact function app.js's
+// synchronous wrapper calls.
+export function invalidateMovementGeneration(state){
+  return{movementGeneration:state.movementGeneration+1,generationAnchorInput:null};
+}
+
 // P1-07D — wraps a network-call function so it is skipped entirely (never invoked) when the
 // generation bound to this call no longer matches the live one at the moment of actual invocation.
 // Used by app.js's sendWorldMove so a pending target that was queued (coalesced) under one

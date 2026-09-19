@@ -1,7 +1,7 @@
 import {canEnterCityHub,leaveCityHub,handleCityTap,renderWorldMapHtml,renderCityHubHtml,computeTravelPosition,indexById,resolveEffectiveViewBox,viewBoxAttr,CAMERA_VIEWPORT_SIZE,WORLD_BOUNDS,OBSTACLES} from './worldmap.js';
 import {createCoalescingSender} from './asyncqueue.js';
 import {PLAYER_COLLISION_RADIUS,inflateRect} from './worldgeometry.js';
-import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD,movementDivergence,catchUpDebtAfterGrant,nextCatchUpDebt,clampEarnedTarget,nextEarnedPosition,idleSettlePosition,applyMovementIntent as computeNextMovementIntent,guardStaleGeneration,MOVE_CATCHUP_CAP_MS} from './movement.js';
+import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMove,describeWorldMoveError,predictionVelocity,advancePredictedPosition,clampPredictedStep,reconciliationSmoothingMs,shouldSuspendAfterAccepted,JOYSTICK_RADIUS,JOYSTICK_DEADZONE,JOYSTICK_SEND_INTERVAL_MS,MAX_PREDICTION_LEAD,movementDivergence,catchUpDebtAfterGrant,nextCatchUpDebt,clampEarnedTarget,nextEarnedPosition,idleSettlePosition,applyMovementIntent as computeNextMovementIntent,invalidateMovementGeneration as computeInvalidatedMovementGeneration,guardStaleGeneration,MOVE_CATCHUP_CAP_MS} from './movement.js';
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
 // the existing movement path above; nothing in this import or the code that uses it changes any
 // movement/joystick/prediction/reconciliation/camera behavior.
@@ -23,17 +23,25 @@ const coord=(row,col)=>`R${row+1} C${col+1}`;
 const deploymentPresets={balanced:{hero:[2,3],archer:[1,1],guard:[3,2]},forward:{hero:[2,5],archer:[1,3],guard:[3,4]},rear:{hero:[2,1],archer:[1,0],guard:[3,1]}};
 function ensureDeployment(){const team=S.deploymentUnitIds||[],used=new Set();for(const id of team){let p=S.deploymentPositions[id],key=p&&`${p.row}:${p.col}`;if(!p||p.row<0||p.row>=5||p.col<0||p.col>=6||used.has(key)){const preset=deploymentPresets.balanced[id]||[2,2],open=[];for(let row=0;row<5;row++)for(let col=0;col<6;col++)if(!used.has(`${row}:${col}`))open.push({row,col});p=open.sort((a,b)=>Math.max(Math.abs(a.row-preset[0]),Math.abs(a.col-preset[1]))-Math.max(Math.abs(b.row-preset[0]),Math.abs(b.col-preset[1])))[0];S.deploymentPositions[id]=p;key=`${p.row}:${p.col}`}used.add(key)}for(const id of Object.keys(S.deploymentPositions))if(!team.includes(id))delete S.deploymentPositions[id];if(!team.includes(S.deploymentSelectedUnitId))S.deploymentSelectedUnitId=team[0]||null}
 function toast(t){const d=document.createElement('div');d.className='toast';d.textContent=t;document.body.append(d);setTimeout(()=>d.remove(),1500)}
+function invalidateMovementGeneration(){
+  const next=computeInvalidatedMovementGeneration({movementGeneration,generationAnchorInput});
+  movementGeneration=next.movementGeneration;
+  generationAnchorInput=next.generationAnchorInput;
+}
 async function refresh(){
+  // P1-07D Merge Gate review: invalidate BEFORE the first await below, not after the snapshot
+  // response returns — a refresh() is itself a hard resync (S.snap is about to be replaced
+  // wholesale), so any movement request already pending under the pre-refresh generation must
+  // already be stale the INSTANT refresh() starts, not once its own snapshot request happens to
+  // resolve. Invalidating only after that first await would leave the exact same race window
+  // applyMovementIntent was built to close for joystick input — a pending target could dequeue and
+  // reach the network while this snapshot request is itself still in flight.
+  predictionResetPending=true;
+  invalidateMovementGeneration();
   S.snap=await req('/api/character/char-demo/snapshot');
   // P1-07B: a full refresh() replaces S.snap wholesale (e.g. after travel/arrival/settlement) —
   // whatever the client was predicting before this is no longer trustworthy, so force a hard
   // reset of the predicted position to the fresh authoritative one on the next animation frame.
-  predictionResetPending=true;
-  // P1-07D Merge Gate review: bump movementGeneration SYNCHRONOUSLY, right here — not deferred to
-  // the next tickMovementFrame — so any pending target still queued under the old generation is
-  // already stale by the time asyncqueue.js might dequeue it, closing the same race window
-  // applyMovementIntent exists to close for ordinary joystick input changes (see its own comment).
-  movementGeneration++;generationAnchorInput=null;
   const [market,storageList,tx,battle,roster,equipment]=await Promise.all([req(`/api/cities/${S.snap.cityId}/market`),req('/api/character/char-demo/storage'),req('/api/character/char-demo/transactions'),req('/api/character/char-demo/battle'),req('/api/character/char-demo/roster'),req('/api/character/char-demo/equipment')]);
   S.market=market;S.storages=Object.fromEntries(storageList.map(x=>[x.cityId,x.goods]));S.storage=S.storages[S.snap.cityId]||[];S.tx=tx;S.roster=roster;S.equipment=equipment;if(S.deploymentUnitIds===null)S.deploymentUnitIds=roster.map(x=>x.id);ensureDeployment();setBattle(battle);if(battle?.status==='ACTIVE'||battle?.reward?.settlementRequired)S.tab='battle';
   render();

@@ -36,7 +36,8 @@ import {
   idleSettlePosition,
   nextGenerationAnchor,
   guardStaleGeneration,
-  applyMovementIntent
+  applyMovementIntent,
+  invalidateMovementGeneration
 } from '../public/movement.js';
 import {createCoalescingSender} from '../public/asyncqueue.js';
 import {WORLD_BOUNDS,PLAYER_COLLISION_RADIUS,OBSTACLES,inflateRect,pointInRect} from '../public/worldgeometry.js';
@@ -886,4 +887,33 @@ test('Race Case D — micro tremor: a 2° change (below threshold) leaves genera
   h.resolveA();
   await new Promise(r=>setTimeout(r,0));
   assert.equal(h.callCount,2,'B must send normally — its generation still matches, exactly as production would behave for a genuine still-current pending target');
+});
+
+// --- invalidateMovementGeneration: the hard-resync counterpart to applyMovementIntent ---
+
+test('invalidateMovementGeneration: unconditionally bumps generation and clears the anchor, regardless of what it currently is',()=>{
+  const result=invalidateMovementGeneration({movementGeneration:5,generationAnchorInput:{active:true,dirX:1,dirY:0,magnitude:1}});
+  assert.equal(result.movementGeneration,6);
+  assert.equal(result.generationAnchorInput,null);
+});
+
+test('Race Case E — resync-before-await race: production actually calls invalidateMovementGeneration BEFORE its first await (see app.js refresh()) — B must be dropped even while the resync\'s own async work (e.g. the snapshot request) is still unresolved, with A resolving in that same window',async()=>{
+  const h=raceHarness();
+  h.sender({generation:h.state.movementGeneration,x:1,y:1}); // A: in-flight at generation 5
+  h.sender({generation:h.state.movementGeneration,x:2,y:2}); // B: queued, still generation 5
+
+  // Mirrors app.js's actual refresh(): invalidate SYNCHRONOUSLY, as the very first thing, before
+  // the resync's own snapshot request is awaited — the snapshot promise is deliberately left
+  // unresolved here (production would be mid-`await req(...)` at exactly this point).
+  let resolveSnapshot;
+  const snapshotPromise=new Promise(resolve=>{resolveSnapshot=resolve});
+  h.state=invalidateMovementGeneration(h.state); // the exact production path/helper, not a manual currentGeneration++
+  assert.equal(h.state.movementGeneration,6,'generation must already be invalidated before the resync\'s own network request has resolved');
+
+  h.resolveA(); // A resolves WHILE the resync's snapshot request is still pending
+  await new Promise(r=>setTimeout(r,0));
+  assert.equal(h.callCount,1,'B must be dropped — invalidation already happened before A resolved, even though the resync itself has not finished');
+
+  resolveSnapshot(); // let the simulated resync's own async work finish, for harness cleanliness
+  await snapshotPromise;
 });
