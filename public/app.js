@@ -5,7 +5,7 @@ import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMov
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
 // the existing movement path above; nothing in this import or the code that uses it changes any
 // movement/joystick/prediction/reconciliation/camera behavior.
-import {nextFpsEma,nextTelemetryFrameDelta,predictionLeadDistance,nextMoveTiming,formatMs,formatFlag,formatLeadReadout,TELEMETRY_OVERLAY_PATCH_INTERVAL_MS} from './telemetry.js';
+import {nextFpsEma,nextTelemetryFrameDelta,predictionLeadDistance,nextMoveTiming,formatMs,formatFlag,formatLeadReadout,TELEMETRY_OVERLAY_PATCH_INTERVAL_MS,isNearLeadCap,isCapFrozenFrame,nextCapFrozenStreakMs,capFrozenRatio,formatPercent,formatPx,formatCount} from './telemetry.js';
 // P1-07B: same INFLATED_OBSTACLES construction as server.mjs's own (OBSTACLES.map(inflateRect)) —
 // used only as a presentation-only prediction clamp (see clampPredictedStep), never as the real
 // collision authority, which remains server.mjs's own segmentBlocked() over the same primitives.
@@ -210,6 +210,11 @@ function updateTravelProgress(){
 // the existing movement path: nothing here is ever fed back into movement/prediction/
 // reconciliation/camera — see telemetry.js for the pure math/formatting.
 let telemetryFpsEma=null,telemetryLastFrameTimestamp=null,telemetryLastOverlayPatchAt=0,telemetryMoveInFlight=false,telemetryLastCompletedAt=null,telemetryLastRttMs=null,telemetryLastResponseGapMs=null,telemetryLastStatus=null,telemetryLastErrorCode=null,telemetryLastThrottled=null,telemetryLastCollided=null;
+// P1-07 Root Cause Measurement Test — additional read-only observation state (Issue #23 follow-up).
+// Same rule as the P1-07C state above: nothing here is ever read back by movement/prediction/
+// reconciliation/network code — only patchTelemetryOverlay and the tail of tickMovementFrame below
+// read/write these.
+let telemetryCapFrozenCurrentMs=0,telemetryCapFrozenTotalMs=0,telemetryActiveMovementTotalMs=0,telemetryHardResetCount=0,telemetryLastCorrectionDistance=null,telemetryLastCapFrozen=false;
 // Single call site for all three /world/move completion paths (ACCEPTED, REJECTED, a thrown
 // network/command exception) so RTT/response-gap timing is computed identically every time — see
 // P1-07C Merge Gate direction. throttled/collided are explicitly nulled on REJECTED/ERROR so the
@@ -236,6 +241,16 @@ function patchTelemetryOverlay(now,leadPx){
   set('#telemetry-suspended',formatFlag(predictionSuspended));
   set('#telemetry-status',telemetryLastStatus||'…');
   set('#telemetry-errorcode',telemetryLastErrorCode||'–');
+  // P1-07 Root Cause Measurement Test — same throttled-DOM-write pattern as the P1-07C fields
+  // above; the underlying counters are still updated every frame/response (see tickMovementFrame
+  // and sendWorldMove), only this overlay write is throttled.
+  set('#telemetry-leadcaphit',formatFlag(isNearLeadCap(leadPx,MAX_PREDICTION_LEAD)));
+  set('#telemetry-capfrozen',formatFlag(telemetryLastCapFrozen));
+  set('#telemetry-frozen-current',formatMs(telemetryCapFrozenCurrentMs));
+  set('#telemetry-frozen-total',formatMs(telemetryCapFrozenTotalMs));
+  set('#telemetry-frozen-ratio',formatPercent(capFrozenRatio(telemetryCapFrozenTotalMs,telemetryActiveMovementTotalMs)));
+  set('#telemetry-correction',formatPx(telemetryLastCorrectionDistance));
+  set('#telemetry-hardresets',formatCount(telemetryHardResetCount));
 }
 // P1-07A: sendWorldMove is data-only — it updates the authoritative S.snap and nothing else.
 // All on-screen presentation (hero marker position, camera viewBox) is owned exclusively by
@@ -311,6 +326,10 @@ const sendWorldMove=createCoalescingSender(async(target)=>{
     telemetryMoveInFlight=false;
     return;
   }
+  // P1-07 Root Cause Measurement Test — correctionDistance: the gap between what the client was
+  // showing (predictedPosition) and the truth that just arrived, captured at the exact moment truth
+  // updates (read-only; does not affect the assignment on the next line or anything after it).
+  telemetryLastCorrectionDistance=Math.hypot(predictedPosition.x-r.data.worldPosition.x,predictedPosition.y-r.data.worldPosition.y);
   S.snap.worldPosition=r.data.worldPosition;S.snap.state=r.data.state; // always accepted as truth,
                                                                          // stale or not (P1-07D v4.1)
   if(r.data.collided&&!stale)toast('撞到障礙物'); // a stale collision toast would describe a
@@ -406,12 +425,22 @@ function tickMovementFrame(now){
   // applyMovementIntent's comment in movement.js).
 
   if(!predictedPosition)predictedPosition={...serverPos};
+  // P1-07 Root Cause Measurement Test — captured BEFORE the branch tree below runs/mutates
+  // predictedPosition, against the SAME serverPos it will still be compared to after: read-only,
+  // reuses movement.js's own movementDivergence (never a hand-duplicated formula). null when there
+  // is no active input to project an "ahead" direction onto (movementDivergence's own fallback).
+  const telemetryAheadBefore=joystickInput.active?movementDivergence(predictedPosition,serverPos,joystickInput).ahead:null;
+  const telemetryActiveThisFrame=joystickInput.active&&!notYetInWorld&&!resetPending&&!predictionSuspended;
   if(notYetInWorld||resetPending){
     predictedPosition={...serverPos};
     predictionSuspended=false;
   }else if(predictionSuspended){
     const d=Math.hypot(predictedPosition.x-serverPos.x,predictedPosition.y-serverPos.y);
     const smoothingMs=reconciliationSmoothingMs(d);
+    // P1-07 Root Cause Measurement Test — hardResetCount: counts this exact, unmodified condition
+    // (smoothingMs===null, i.e. distance>RECONCILE_HARD_RESET_DISTANCE) firing; the branch below is
+    // untouched, still does exactly what it did before this counter existed.
+    if(smoothingMs===null)telemetryHardResetCount++;
     predictedPosition=smoothingMs===null?{...serverPos}:{x:easeTowards(predictedPosition.x,serverPos.x,dt,smoothingMs),y:easeTowards(predictedPosition.y,serverPos.y,dt,smoothingMs)};
   }else if(!joystickInput.active){
     predictedPosition=idleSettlePosition(predictedPosition,serverPos,dt);
@@ -428,6 +457,17 @@ function tickMovementFrame(now){
       predictedPosition=clampPredictedStep(predictedPosition,candidate,WORLD_BOUNDS,INFLATED_OBSTACLES);
     }
   }
+  // P1-07 Root Cause Measurement Test — captured AFTER the branch tree above has fully settled
+  // predictedPosition for this frame, against the SAME serverPos as telemetryAheadBefore, so the
+  // difference is purely "how much forward progress happened this frame" — an outcome measurement,
+  // never a proxy from proximity alone. Read-only: isCapFrozenFrame only classifies; it changes
+  // nothing above.
+  const telemetryAheadAfter=joystickInput.active?movementDivergence(predictedPosition,serverPos,joystickInput).ahead:null;
+  const telemetryCapFrozenThisFrame=isCapFrozenFrame({active:telemetryActiveThisFrame,aheadBefore:telemetryAheadBefore,aheadAfter:telemetryAheadAfter,maxLead:MAX_PREDICTION_LEAD});
+  telemetryCapFrozenCurrentMs=nextCapFrozenStreakMs(telemetryCapFrozenCurrentMs,telemetryCapFrozenThisFrame,dt);
+  if(telemetryCapFrozenThisFrame)telemetryCapFrozenTotalMs+=dt;
+  if(telemetryActiveThisFrame)telemetryActiveMovementTotalMs+=dt;
+  telemetryLastCapFrozen=telemetryCapFrozenThisFrame;
   const distanceForDebt=Math.hypot(predictedPosition.x-serverPos.x,predictedPosition.y-serverPos.y);
   catchUpDebt=nextCatchUpDebt(catchUpDebt,distanceForDebt,MAX_PREDICTION_LEAD,predictionSuspended||!joystickInput.active||notYetInWorld||resetPending);
 
