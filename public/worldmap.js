@@ -34,11 +34,23 @@ export function cityHubEntries(facilities){
     {id:'mercenary',label:'傭兵店',available:false},
     {id:'equipment',label:'裝備店',available:false},
     {id:'factory',label:'工廠',available:false},
+    // P2-07 City Hub Navigation: optional, client-only inspection of the World Map while IN_CITY.
+    // Never enters/exits the city — see travelStatusHtml's IN_CITY branch and shouldShowCityHubOnStateChange.
+    {id:'view-map',label:'查看地圖',available:true,action:'view-map'},
     {id:'leave',label:'離開城市',available:true,action:'leave'}
   ];
 }
 
 export function leaveCityHub(){return {tab:'map'}}
+
+// P2-07 City Hub Navigation: IN_CITY is a physical-presence server state, so City Hub is the
+// primary client screen for it — a client that JUST transitioned into IN_CITY (from any other
+// state, or from no prior snapshot at all, e.g. initial load) must land on Hub directly. A client
+// that was ALREADY IN_CITY and merely re-fetches (buying, selling, storage move, etc.) must NOT be
+// forced back to Hub — that would kick a player out of Market/Storage/Bus on every ordinary refresh.
+export function shouldShowCityHubOnStateChange(previousState,nextState){
+  return previousState!=='IN_CITY'&&nextState==='IN_CITY';
+}
 
 export function chooseTravelAction(snapshot,targetCityId,cities){
   // P2-05: paid transport still never starts from a map-node tap — 'start'/'reroute' are never
@@ -108,9 +120,13 @@ function travelStatusHtml(state){
     const a=new Date(t.startedAt).getTime(),e=new Date(t.estimatedArrivalAt).getTime(),p=Math.max(0,Math.min(1,(Date.now()-a)/(e-a)));
     return `<div class="map-travel-status"><p>🚌 巴士：${cityDisplayName(state.cities,t.fromCityId)} → ${cityDisplayName(state.cities,t.toCityId)}</p><div class="track"><div id="travel-fill" class="fill" data-start="${a}" data-end="${e}" style="width:${p*100}%"></div></div><div class="travel-progress"><span id="travel-progress-pct">${Math.round(p*100)}%</span><span>ETA ${new Date(t.estimatedArrivalAt).toLocaleTimeString()}</span></div><button class="btn" id="arrive">檢查到埗</button><div class="small">車費已支付；行程中不可自由移動或改道。</div></div>`;
   }
+  // P2-07 City Hub Navigation: IN_CITY no longer shows the World Map by default (Hub does — see
+  // shouldShowCityHubOnStateChange), so this branch is now reached only via the explicit "查看地圖"
+  // inspection action from City Hub. No "進入城市" — the player is already inside; this is a
+  // read-only look at the map, not an unfinished entry.
   if(state.snap.state==='IN_CITY'){
     const city=state.cities.find(c=>c.id===state.snap.cityId);
-    return `<div class="map-travel-status"><p>目前所在：${city?.name||state.snap.cityId}</p><button class="btn" data-enter-hub="${state.snap.cityId}">進入城市</button></div>`;
+    return `<div class="map-travel-status"><p>${city?.name||state.snap.cityId} · 地圖查看中</p><button class="btn" data-back-hub="1">返回City Hub</button></div>`;
   }
   // P2-07 Decision 2 — the separate "已抵達：XX城 / 進入XX城" control is intentionally removed.
   // The city marker itself (yellow circle + name, see renderWorldMapHtml's [data-city] node) is now
@@ -208,6 +224,7 @@ export function renderCityHubHtml(state){
   const city=state.cities.find(c=>c.id===state.snap.cityId);
   const tiles=cityHubEntries(city?.facilities).map(e=>{
     if(e.action==='leave')return `<button class="hub-tile hub-leave" data-hub-leave="1">🚪 ${e.label}</button>`;
+    if(e.action==='view-map')return `<button class="hub-tile" data-view-map="1">🗺️ ${e.label}</button>`;
     if(!e.available)return `<button class="hub-tile hub-disabled" disabled>${e.label}<small>尚未開放</small></button>`;
     return `<button class="hub-tile" data-hub-enter="${e.id}">${e.label}</button>`;
   }).join('');

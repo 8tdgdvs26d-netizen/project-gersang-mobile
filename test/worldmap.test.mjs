@@ -1,19 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {
   canEnterCityHub,
   cityHubEntries,
   leaveCityHub,
+  shouldShowCityHubOnStateChange,
   chooseTravelAction,
   handleCityTap,
   computeTravelPosition,
   indexById,
   regionMeta,
   renderWorldMapHtml,
+  renderCityHubHtml,
   resolveWorldPosition,
   computeCameraViewBox,
   resolveMapViewBox,
@@ -153,14 +155,18 @@ test('computeTravelPosition reproduces the same position for a later "now" witho
   assert.deepEqual(reloadedAtT1500,{x:100,y:50});
 });
 
-test('cityHubEntries returns two city services, a universal bus stop, four unavailable tiles, and leave',async()=>{
+// P2-07 City Hub Navigation added the always-available 查看地圖 (view-map) tile — entries.length and
+// the available&&action!=='leave' count both grow by exactly one; the unavailable-tile and leave
+// counts are untouched, so this deliberately updates (not weakens) the pre-existing assertions.
+test('cityHubEntries returns two city services, a universal bus stop, a view-map tile, four unavailable tiles, and leave',async()=>{
   const cities=await request('/api/cities');
   const city=cities.find(c=>c.id==='starter-village');
   const entries=cityHubEntries(city?.facilities);
-  assert.equal(entries.length,8);
-  assert.equal(entries.filter(e=>e.available&&e.action!=='leave').length,3);
+  assert.equal(entries.length,9);
+  assert.equal(entries.filter(e=>e.available&&e.action!=='leave').length,4);
   assert.equal(entries.filter(e=>!e.available).length,4);
   assert.equal(entries.filter(e=>e.action==='leave').length,1);
+  assert.equal(entries.filter(e=>e.action==='view-map').length,1);
 });
 
 test("cityHubEntries derives available services from the selected city's facilities metadata",()=>{
@@ -556,4 +562,94 @@ test('renderWorldMapHtml renders the P1-07 Root Cause Measurement Test overlay i
     assert.ok(html.includes(`id="${id}"`),`expected the overlay shell to include #${id}`);
     assert.ok(html.indexOf(`id="${id}"`)>html.indexOf('id="telemetry-errorcode"'),`expected #${id} to be appended after the existing P1-07C ids, never inserted between them`);
   }
+});
+
+// =====================================================================================
+// P2-07 City Hub Navigation — IN_CITY must default directly to City Hub, never require a
+// separate "進入城市" step from the World Map. See CHANGELOG.md P2-07 City Hub Navigation entry
+// and the approved "P2-07 City Hub / World Navigation Architecture Audit" for full rationale.
+// =====================================================================================
+
+test('shouldShowCityHubOnStateChange requirement 1/4: a client with no prior snapshot (fresh/reloaded) whose authoritative state is already IN_CITY must land on Hub',()=>{
+  assert.equal(shouldShowCityHubOnStateChange(undefined,'IN_CITY'),true);
+  assert.equal(shouldShowCityHubOnStateChange(null,'IN_CITY'),true);
+});
+
+test('shouldShowCityHubOnStateChange requirement 2: a transition from IN_WORLD into IN_CITY (marker entry) must land on Hub',()=>{
+  assert.equal(shouldShowCityHubOnStateChange('IN_WORLD','IN_CITY'),true);
+});
+
+test('shouldShowCityHubOnStateChange requirement 3: a transition from TRAVELING into IN_CITY (bus arrival) must land on Hub',()=>{
+  assert.equal(shouldShowCityHubOnStateChange('TRAVELING','IN_CITY'),true);
+});
+
+test('shouldShowCityHubOnStateChange requirements 5/6/7: an ordinary IN_CITY-to-IN_CITY refresh (buying, selling, storage, bus quote, etc. while already inside) must NOT force the player back to Hub — that would eject them from Market/Storage/Bus on every unrelated refresh',()=>{
+  assert.equal(shouldShowCityHubOnStateChange('IN_CITY','IN_CITY'),false);
+});
+
+test('shouldShowCityHubOnStateChange requirement 18: a transition out of IN_CITY (city exit) must not (re)force Hub — exitCity\'s own leaveCityHub() already drives the tab to the World Map',()=>{
+  assert.equal(shouldShowCityHubOnStateChange('IN_CITY','IN_WORLD'),false);
+});
+
+test('shouldShowCityHubOnStateChange never fires while remaining IN_WORLD or TRAVELING across an unrelated refresh',()=>{
+  assert.equal(shouldShowCityHubOnStateChange('IN_WORLD','IN_WORLD'),false);
+  assert.equal(shouldShowCityHubOnStateChange('TRAVELING','TRAVELING'),false);
+});
+
+test('requirement 8: cityHubEntries includes a 查看地圖 (view map) entry, always available, distinct from the leave action',()=>{
+  const entries=cityHubEntries(['MARKET','STORAGE']);
+  const viewMap=entries.find(e=>e.action==='view-map');
+  assert.ok(viewMap,'expected a view-map entry in cityHubEntries');
+  assert.equal(viewMap.label,'查看地圖');
+  assert.equal(viewMap.available,true);
+  assert.notEqual(viewMap.id,'leave');
+});
+
+test('requirement 8: renderCityHubHtml renders a 查看地圖 tile with a dedicated data-view-map hook, separate from data-hub-leave',()=>{
+  const state={snap:{cityId:'starter-village'},cities:[{id:'starter-village',name:'新手村',facilities:['MARKET','STORAGE']}]};
+  const html=renderCityHubHtml(state);
+  assert.ok(html.includes('data-view-map="1"'),'expected a data-view-map hook in the City Hub tile grid');
+  assert.ok(html.includes('查看地圖'));
+  assert.ok(html.includes('data-hub-leave="1"'),'the existing leave-city tile must still be present, unaffected');
+});
+
+test('requirement 9/13: while IN_CITY, renderWorldMapHtml no longer renders the old "進入城市"/data-enter-hub control at all',()=>{
+  const cities=[{id:'starter-village',name:'新手村',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_CITY',cityId:'starter-village',worldPosition:{x:220,y:150}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(!html.includes('data-enter-hub'),'the old client-only "進入城市" tab-switch control must be fully removed');
+  assert.ok(!html.includes('進入城市'),'no copy anywhere should still imply the player needs to "enter" a city they are already inside');
+});
+
+test('requirement 11: while IN_CITY, the World Map inspection screen offers a 返回City Hub control (data-back-hub) — the same client-only mechanism Market/Storage/Bus already use to return to Hub',()=>{
+  const cities=[{id:'starter-village',name:'新手村',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_CITY',cityId:'starter-village',worldPosition:{x:220,y:150}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(html.includes('data-back-hub="1"'));
+  assert.ok(html.includes('返回City Hub'));
+  assert.ok(html.includes('新手村'),'the inspection screen may show the current city name for context');
+});
+
+test('requirement 10: the joystick stays disabled on the IN_CITY inspection map, identical to the pre-existing IN_CITY behavior (renderWorldMapHtml disables the joystick whenever state!==IN_WORLD, unchanged by this feature)',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_CITY',cityId:'a',worldPosition:{x:220,y:150}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(html.includes('joystick-disabled'));
+});
+
+test('requirement 17: public/app.js wires [data-hub-leave] to exactly ONE click handler — the real server-authoritative exitCity() — never a second client-only listener that would double-fire on a single tap',async()=>{
+  const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
+  const occurrences=source.split(`'[data-hub-leave]'`).length-1;
+  assert.equal(occurrences,1,`expected exactly one [data-hub-leave] selector in app.js (one wiring), found ${occurrences}`);
+  assert.ok(source.includes(`document.querySelectorAll('[data-hub-leave]').forEach(b=>b.onclick=exitCity)`),'expected the sole handler to be the real exitCity() server command');
+});
+
+test('requirement 9: public/app.js wires [data-view-map] as a pure client-side tab switch — no server command, no fetch/post/await — while [data-enter-hub] no longer exists anywhere in the file',async()=>{
+  const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
+  assert.ok(!source.includes('data-enter-hub'),'the removed old IN_CITY entry control must leave no trace in app.js');
+  const match=source.match(/document\.querySelector\('\[data-view-map\]'\)\?\.addEventListener\('click',\(\)=>\{([^}]*)\}\);/);
+  assert.ok(match,'expected a single data-view-map click handler wired via addEventListener');
+  const body=match[1];
+  assert.ok(body.includes(`S.tab='map'`));
+  assert.ok(!/command\(|post\(|fetch\(|await /.test(body),`expected a pure client-only tab switch, found a network/async call in: ${body}`);
 });
