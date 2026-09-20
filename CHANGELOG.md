@@ -447,3 +447,21 @@
 - 測試結果：277（round前）+ 2（新增）= **279 tests passed, 0 failed**（連續run兩次確認冇flaky）。
 - Changed files：`public/movement.js`、`public/app.js`、`server.mjs`、`test/movement.test.mjs`、`CHANGELOG.md`——冇碰其他file。
 - Rollback基準：同上。
+
+## P2-06 — 2026-09-20 — Bus Persistence / Retry / Reconnect Hardening
+
+- 分類：《萬行誌：白手》Phase 2（GitHub repo `8tdgdvs26d-netizen/project-gersang-mobile`）。目的唔係新增玩法，係證明就算reload、斷線重連、request timeout、重送command、server restart，或者arrival resolution重複執行，巴士旅程都唔會重複扣錢、重複建立旅程、留低stale travel，或者被exploit車費/位置。先經Read-only Audit（列出`server.mjs`嘅`idem()`/`startBus()`/`resolveArrival()`/`snapshot()`實際行為，搵出2個genuine gap）交俾Charlie/ChatGPT review，批准連兩項clarification先至Coding。
+- 起點：`main` @ `902773e7c70116e8ef7d41415f1597d3ee13f799`（P2-05 merge之後）。Baseline測試：**322 tests passed, 0 failed**（checkout main後親自跑，同Charlie已知CI結果一致，唔係假設）。
+- **Charlie Clarification 1 — activeTravel 唔delete DB row**：`travel`表持久history（`ARRIVED` row永久保留作debug evidence），但`snapshot()`向client回傳嘅`activeTravel`而家**只有`travel.status==='TRAVELING'`先返non-null**，否則`null`——persistent DB history同active client journey分開。
+- **Charlie Clarification 2 — test baseline**：Coding前實際`npm test`記錄baseline（322/0），唔假設任何數字。
+- **`server.mjs`改動（4項，Charlie逐項批准嘅最小實作）**：
+  1. `resolveArrival()`加`t.status!=='TRAVELING'`guard——已ARRIVED嘅journey唔會再被resolve，回傳`ERR_NO_TRAVEL`，唔會產生第二次side effect（之前純粹靠「重複寫入相同數值」嘅巧合安全，而家改做明確state guard）。
+  2. `snapshot()`嘅auto-arrival（`resolveDueArrival()`）用SQLite `SAVEPOINT`（`arrival_resolution`）包住travel/characters兩個UPDATE，令TRAVELING→ARRIVED同character TRAVELING→IN_CITY/city_id/world position變成atomic。用SAVEPOINT而唔係`BEGIN IMMEDIATE`，係因為呢個function亦會喺已經開咗`idem()`自己transaction嘅internal caller（`buy`/`sell`/`startBus`/`moveWorld`/`enterCity`/`exitCity`/`moveStorage`）入面被call到——SAVEPOINT可以安全nest入`idem()`嘅transaction（merge埋一齊commit/rollback），亦可以喺top-level GET snapshot（冇外層transaction）獨立運作，滿足「唔可以同`idem()`起nested transaction」嘅要求。
+  3. `snapshot()`嘅`activeTravel`改做`t&&t.status==='TRAVELING'?{...}:null`——實現Clarification 1。DB schema／travel table結構完全冇改。
+  4. `public/app.js`嘅`updateTravelProgress()`：hero marker更新加`S.snap.state==='TRAVELING'&&S.snap.activeTravel`guard（雙層保護：server唔再暴露completed journey做activeTravel，client亦唔會俾stale/inconsistent data透過travel animation郁到hero position）——修正咗一個已確認bug：舊code冇呢個guard，任何行過至少一程巴士嘅角色，之後每次喺World Map tab都會俾`updateTravelProgress`（每250ms）將hero marker強制拉返去上一程目的地，同`tickMovementFrame`嘅正常render打架。
+- **舊test更新（1個，因為Clarification 1令舊assertion過時，唔係weaken）**：`test/battle.test.mjs`「travel blocks challenges and snapshot automatically completes an overdue journey」原本斷言`snap.activeTravel.status==='ARRIVED'`，改做`snap.activeTravel===null`——同一個test仍然驗證緊「arrival自動完成」，只係依照新spec更新返個assertion本身。
+- **新增`test/bus-persistence.test.mjs`（16個test）**：涵蓋Charlie要求嘅A-N全部項目——同key重試N次淨扣一次（A）、lost-response retry模擬（B）、已TRAVELING時唔同key攞唔到第二程（C）、旅途中reload journey/ETA/wallet保持一致（D）、reading snapshot多次resolve arrival淨一次、冇duplicate transaction（G）、explicit resolveArrival喺已auto-resolve之後rejected/no-op（H）、arrival後`activeTravel===null`（I）、DB travel row保留status ARRIVED（J）、pending battle settlement擋巴士、0 debit（K）、TRAVELING期間world movement被拒（L）、new session令舊session retry唔到（M）、insufficient funds 0 debit（N），加埋兩個race test（snapshot→explicit / explicit→snapshot兩種次序都收斂去同一個最終state：IN_CITY、正確城市、wallet不變、BUS_FARE count=1、`activeTravel:null`、DB `status='ARRIVED'`），同兩個真正OS-level server restart test（E：旅途中restart journey survive；F：ETA已過但未resolve就restart，第一次post-restart snapshot安全resolve一次），restart pattern直接重用`test/world-persistence.test.mjs`已驗證嘅`spawnServer`/`killAndWaitForRealExit`寫法。
+- **不涉及**：城市座標／正方形四角地圖layout（P2-08先處理）、`safeExit`重整、巴士票價、70%時間比例、reroute（依然鎖死）、movement feel（`MAX_PREDICTION_LEAD=50`/prediction/reconciliation/collision/camera，一個字冇改）、economy expansion、DB schema（0改動）、Phase 3。
+- 測試結果：322（baseline，內容除上面明確列出嘅1句assertion更新外完全不變）+ 16（新增）= **338 tests passed, 0 failed**。
+- 存檔影響：無schema變動；`travel`表既有row結構不變，只係`resolveArrival`/`snapshot`嘅讀寫邏輯更嚴謹。
+- Rollback基準：`main` @ `902773e7c70116e8ef7d41415f1597d3ee13f799`。

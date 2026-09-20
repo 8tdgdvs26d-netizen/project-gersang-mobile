@@ -214,8 +214,16 @@ let travelArrivalRefreshing=false;
 function updateTravelProgress(){
   const fill=document.querySelector('#travel-fill');
   if(fill){const start=Number(fill.dataset.start),end=Number(fill.dataset.end),span=end-start,p=span>0?Math.max(0,Math.min(1,(Date.now()-start)/span)):1;fill.style.width=`${p*100}%`;const label=document.querySelector('#travel-progress-pct');if(label)label.textContent=`${Math.round(p*100)}%`;if(p>=1&&!travelArrivalRefreshing){travelArrivalRefreshing=true;refresh().finally(()=>{travelArrivalRefreshing=false})}}
-  const hero=document.querySelector('.hero-marker'),segments=S.snap?.activeTravel?.segments;
-  if(hero&&segments){const pos=computeTravelPosition(segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y)}}
+  // P2-06 — Charlie Clarification 1: client-side defense in depth. Even though the server now nulls
+  // activeTravel once a journey is ARRIVED, travel animation must never be able to drive the hero
+  // marker unless the snapshot itself says the player is currently TRAVELING — a non-TRAVELING state
+  // (stale/inconsistent data, a race during reload) must never let a leftover/old activeTravel move
+  // the marker.
+  const hero=document.querySelector('.hero-marker');
+  if(hero&&S.snap?.state==='TRAVELING'&&S.snap.activeTravel){
+    const pos=computeTravelPosition(S.snap.activeTravel.segments,indexById(S.cities),indexById(S.roads),S.snap.activeTravel.startedAt,Date.now());
+    if(pos){hero.setAttribute('cx',pos.x);hero.setAttribute('cy',pos.y)}
+  }
 }
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21) state. Read-only observation of
 // the existing movement path: nothing here is ever fed back into movement/prediction/
