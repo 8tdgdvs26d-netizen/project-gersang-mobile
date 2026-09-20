@@ -484,3 +484,25 @@
 - 測試結果：338（baseline，內容除上面明確列出嘅2個既有test更新外完全不變）+ 8（新增，7個喺worldmap.test.mjs＋1個喺city-entry.test.mjs因拆分test淨增加嘅一個）= **346 tests passed, 0 failed**。
 - 存檔影響：無。
 - Rollback基準：`main` @ `67f091f3cd95ab2dc6a889010c146f1712b942c5`。
+
+## P2-07 City Hub Navigation — 2026-09-20 — City Hub 成為 IN_CITY 嘅預設畫面
+
+- 分類：Charlie真機驗收P2-07 marker entry之後發現嘅更闊UX問題修正。P2-07（上一節）只解決咗「點樣入城」（marker取代舊button），但入城之後嘅畫面仍然係World Map+獨立、client-only嘅「進入城市」button（`data-enter-hub`），要再撳多一步先睇到City Hub——同marker取代嘅嗰個button係完全唔同嘅code path，P2-07嗰次審批冇涵蓋。先做read-only「P2-07 City Hub / World Navigation Architecture Audit」（逐一trace `S.tab`／server `state`／`refresh()`／`enterCity`／`exitCity`／`travelStatusHtml`／`canEnterCityHub`嘅實際行為），確認根本原因：`S.tab`（client-only導航變數，預設`'map'`）同server嘅`state`完全冇綁定，冇任何自動路徑會喺轉入`IN_CITY`嗰刻將`S.tab`設做`'hub'`。交俾Charlie/ChatGPT review，批准落實。
+- 起點：`main` @ `fe552e2e96ef150570119c1d02eb80f89dc08ec1`（P2-07 marker entry merge之後）。Baseline測試：**346 tests passed, 0 failed**（checkout main後親自跑，唔假設數字）。
+- **權威UX規則**：`IN_CITY`代表角色已經physically喺城入面，所以**City Hub係IN_CITY嘅預設／主要畫面**，唔應該再存在「IN_CITY → World Map →「進入城市」→ City Hub」呢條多餘流程。
+- **`public/worldmap.js`改動**：
+  - 新增純function `shouldShowCityHubOnStateChange(previousState,nextState)`——`previousState!=='IN_CITY'&&nextState==='IN_CITY'`先至`true`。淨係喺「啱啱轉入IN_CITY」嗰個edge先觸發，`IN_CITY→IN_CITY`嘅普通refresh（買賣、入倉、睇巴士報價）唔會被強制拉返去hub。
+  - `travelStatusHtml()`嘅IN_CITY分支由「目前所在：XX城」+`data-enter-hub`「進入城市」button，改做「XX城 · 地圖查看中」+`data-back-hub`「返回City Hub」button——冇晒「進入城市」字眼／`data-enter-hub`；由於呢個分支而家淨係經由City Hub主動撳「查看地圖」先會睇到（唔再係IN_CITY嘅預設畫面），語意上係「已經喺城入面，睇緊地圖」，唔係「未入到城」。
+  - `cityHubEntries()`／`renderCityHubHtml()`加多一粒常駐tile「查看地圖」（`action:'view-map'`，`data-view-map`），純client-side，同「離開城市」tile分開，一定`available:true`。
+- **`public/app.js`改動**：
+  - `refresh()`喺attach新snapshot之前，用`const previousState=S.snap?.state`記低轉變前個值；攞到新snapshot之後，`if(shouldShowCityHubOnStateChange(previousState,S.snap.state))S.tab='hub'`——涵蓋初始load（`S.snap`起始為`null`）、marker入城（IN_WORLD→IN_CITY）、巴士到埗（TRAVELING→IN_CITY，包括`resolveDueArrival()`喺reload嗰刻先自動resolve嘅情況）、reload時authoritative snapshot已經係IN_CITY，四種情況都會直接落hub；已有嘅`battle`auto-tab-switch邏輯喺呢句之後執行，優先權不變。
+  - `wire()`移除咗已經冇對應button嘅`[data-enter-hub]`wiring（dead code，跟住`travelStatusHtml`個button被移除嘅結果）；加`[data-view-map]`wiring（`S.tab='map';render()`，純client tab flip，冇任何server call）。
+  - **清理`data-hub-leave`嘅雙重綁定**：Audit發現咗一個pre-existing、同今次主要問題獨立嘅code smell——`wire()`同一個`[data-hub-leave]`element綁咗兩次click handler（一個`addEventListener`純tab flip、一個`.onclick=exitCity`真正server exit call），撳一下會觸發兩個handler（功能上冇壞，但多咗一次冗餘中途render）。而家移除咗嗰個冗餘`addEventListener`，`data-hub-leave`淨低`.onclick=exitCity`一個handler。
+- **點解World Map可以留低做IN_CITY嘅optional inspection，而唔會變返Charlie明確拒絕嘅「World Map係去City Hub必經之路」（Option B）**：`resolveMapViewBox`／`resolveEffectiveViewBox`（`worldmap.js`，一個字冇改）早已令IN_CITY睇地圖鎖定full-world viewBox（唔follow camera）；joystick亦早已因為`state!=='IN_WORLD'`而disabled（`worldmap.js`，一個字冇改）——「淨睇唔可以郁」呢個特性本身已經現成、已有test覆蓋，今次淨係加咗「點樣入去嗰個畫面」（由City Hub主動撳「查看地圖」）同「點樣返去」（`data-back-hub`，同market/storage/bus用緊嗰個機制一致）嘅client-only路徑，冇新增任何假裝已經離開城市嘅邏輯，state全程維持`IN_CITY`。
+- **不涉及**：`server.mjs`（一個字冇改，`enterCity`/`exitCity`/`snapshot`/`resolveDueArrival`嘅server-side驗證同語意完全不變）、DB schema、`movement.js`、`MAX_PREDICTION_LEAD`、`moveSequence`、prediction/reconciliation、collision、camera數學、城市座標、`entryRadius`、`safeExit`、巴士票價/車程/persistence/reroute lock、地圖layout（P2-08）。
+- **既有test更新（1個，因為新tile令舊assertion過時，唔係weaken）**：`test/worldmap.test.mjs`「cityHubEntries returns two city services, a universal bus stop, four unavailable tiles, and leave」原本斷言`entries.length===8`／`available&&action!=='leave'`嘅數量`===3`，因為新加咗常駐`view-map`tile，改做`entries.length===9`／`===4`，並加多一句斷言`view-map`tile存在剛好一次；`unavailable`／`leave`數量嘅斷言完全不變。
+- **新增test（13個，全部喺`test/worldmap.test.mjs`）**：`shouldShowCityHubOnStateChange`純function覆蓋要求1-7、18（未有snapshot／IN_WORLD／TRAVELING轉入IN_CITY一律`true`；IN_CITY→IN_CITY、IN_CITY→IN_WORLD、IN_WORLD→IN_WORLD、TRAVELING→TRAVELING一律`false`）；`cityHubEntries`／`renderCityHubHtml`包含`查看地圖`tile同`data-view-map`hook；IN_CITY嘅`renderWorldMapHtml`確認`data-enter-hub`／「進入城市」完全冇再出現、確認`data-back-hub`／「返回City Hub」存在、joystick依然disabled（沿用已有斷言模式）；兩個source-level regression test直接讀`public/app.js`源碼——確認`[data-hub-leave]`selector淨係出現一次（鎖住雙重綁定嘅fix，防止回歸）、確認`data-view-map`嘅handler係純client tab switch（冇`command(`/`post(`/`fetch(`/`await`）而且`data-enter-hub`完全冇留低任何痕跡。
+- **Marker entry／remote entry／bus persistence全部保持不變**：`handleCityTap`／`chooseTravelAction`／`enterCity`／`exitCity`／`server.mjs`一個字冇改，`test/city-entry.test.mjs`同`test/bus-persistence.test.mjs`原封不動，全部繼續喺完整suite入面green。
+- 測試結果：346（baseline，內容除上面明確列出嘅1句assertion更新外完全不變）+ 13（新增）= **359 tests passed, 0 failed**。
+- 存檔影響：無。
+- Rollback基準：`main` @ `fe552e2e96ef150570119c1d02eb80f89dc08ec1`。
