@@ -47,3 +47,11 @@ export const CITY_DEFINITIONS=Object.freeze([
     theme:'growth'
   })
 ]);
+
+// P2-03 shares the same pure proximity rule between map presentation and server validation.
+// The server remains authoritative; the client only uses this to offer an explicit action.
+export function isWithinCityEntry(position,city){
+  if(!position||!city?.coordinates||!Number.isFinite(city.entryRadius))return false;
+  if(!Number.isFinite(position.x)||!Number.isFinite(position.y))return false;
+  return Math.hypot(position.x-city.coordinates.x,position.y-city.coordinates.y)<=city.entryRadius;
+}
