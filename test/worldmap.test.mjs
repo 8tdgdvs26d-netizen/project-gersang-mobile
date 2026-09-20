@@ -82,13 +82,15 @@ test('server city payload is sourced from the shared city contract without mutat
   assert.ok(CITY_DEFINITIONS.every(city=>Object.isFrozen(city)&&Object.isFrozen(city.coordinates)&&Object.isFrozen(city.exitPoint)&&Object.isFrozen(city.facilities)));
 });
 
-test('GET /api/roads matches the roads table used by travel routing',async()=>{
+test('legacy travel endpoint delegates to the paid bus service instead of free road routing',async()=>{
   const roads=await request('/api/roads');
   const direct=roads.find(r=>r.fromCityId==='starter-village'&&r.toCityId==='harbour-city');
   assert.ok(direct,'expected a direct road from starter-village to harbour-city');
   const started=await post('/api/commands/travel/start',envelope('worldmap-roads-check',{destinationCityId:'harbour-city'}));
   assert.equal(started.status,'ACCEPTED');
-  assert.equal(started.data.totalTravelMs,direct.durationMs);
+  assert.equal(started.data.transportMode,'BUS');
+  assert.ok(started.data.fareGold>0);
+  assert.notEqual(started.data.totalTravelMs,direct.durationMs);
 });
 
 test("canEnterCityHub rejects while TRAVELING regardless of city id",()=>{
@@ -151,12 +153,12 @@ test('computeTravelPosition reproduces the same position for a later "now" witho
   assert.deepEqual(reloadedAtT1500,{x:100,y:50});
 });
 
-test('cityHubEntries returns exactly 2 available, 4 unavailable, and 1 leave entry',async()=>{
+test('cityHubEntries returns two city services, a universal bus stop, four unavailable tiles, and leave',async()=>{
   const cities=await request('/api/cities');
   const city=cities.find(c=>c.id==='starter-village');
   const entries=cityHubEntries(city?.facilities);
-  assert.equal(entries.length,7);
-  assert.equal(entries.filter(e=>e.available&&e.action!=='leave').length,2);
+  assert.equal(entries.length,8);
+  assert.equal(entries.filter(e=>e.available&&e.action!=='leave').length,3);
   assert.equal(entries.filter(e=>!e.available).length,4);
   assert.equal(entries.filter(e=>e.action==='leave').length,1);
 });
@@ -226,21 +228,21 @@ test('renderWorldMapHtml performs no client-side collision logic: obstacles rend
   assert.ok(html.includes('class="map-obstacle"'));
 });
 
-test('selecting a map city calls the existing travel/start command',()=>{
+test('selecting a map city never starts paid transport outside City Hub',()=>{
   const calls={start:[],reroute:[]};
   const travel=id=>calls.start.push(id);
   const reroute=id=>calls.reroute.push(id);
   handleCityTap('harbour-city',{snap:{state:'IN_CITY',cityId:'starter-village'},travel,reroute});
-  assert.deepEqual(calls.start,['harbour-city']);
+  assert.deepEqual(calls.start,[]);
   assert.deepEqual(calls.reroute,[]);
 });
 
-test('selecting a different city mid-journey calls the existing travel/reroute command',()=>{
+test('selecting a map city mid-journey never reroutes a paid bus',()=>{
   const calls={start:[],reroute:[]};
   const travel=id=>calls.start.push(id);
   const reroute=id=>calls.reroute.push(id);
   handleCityTap('hill-market',{snap:{state:'TRAVELING',cityId:'starter-village',activeTravel:{toCityId:'harbour-city'}},travel,reroute});
-  assert.deepEqual(calls.reroute,['hill-market']);
+  assert.deepEqual(calls.reroute,[]);
   assert.deepEqual(calls.start,[]);
 });
 
