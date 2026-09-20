@@ -465,3 +465,22 @@
 - 測試結果：322（baseline，內容除上面明確列出嘅1句assertion更新外完全不變）+ 16（新增）= **338 tests passed, 0 failed**。
 - 存檔影響：無schema變動；`travel`表既有row結構不變，只係`resolveArrival`/`snapshot`嘅讀寫邏輯更嚴謹。
 - Rollback基準：`main` @ `902773e7c70116e8ef7d41415f1597d3ee13f799`。
+
+## P2-07 — 2026-09-20 — City Marker Entry Interaction
+
+- 分類：《萬行誌：白手》Phase 2 physical-device acceptance（P2-07）發現嘅UX問題修正。目的：將「撳城市黃色圓形／城市名」變成正式嘅入城interaction，取代原本喺地圖下面獨立嘅「已抵達：XX城／進入XX城」按鈕；同時修正Follow Screen行路時城市資訊stale嘅問題。
+- 起點：`main` @ `67f091f3cd95ab2dc6a889010c146f1712b942c5`（P2-06 merge之後）。Baseline測試：**338 tests passed, 0 failed**（checkout main後親自跑，唔假設數字）。
+- 先做Read-only Audit先批准coding：追蹤到stale-city bug嘅精確root cause——`travelStatusHtml()`（獨立按鈕嘅來源）淨係喺`render()`重建成個`#app` innerHTML嗰陣先重新計算，但玩家行路時`sendWorldMove`嘅ACCEPTED response（`app.js`）淨係update`S.snap.worldPosition`，從來冇call`render()`；`tickMovementFrame`每幀都跑,但淨係直接patch hero marker/camera/telemetry嘅DOM attribute,冇touch過`travelStatusHtml`所在嗰嚿DOM。切去Full Map「睇落work」純粹係`toggleMapView()`尾段啱啱好call咗一次`render()`嘅side effect,唔係Full Map有咩專門嘅live-refresh機制。
+- **`public/worldmap.js`改動**：
+  - `chooseTravelAction(snapshot,targetCityId,cities)`加返一個新分支——`snapshot.state==='IN_WORLD'`且`isWithinCityEntry(snapshot.worldPosition,cities.find(c=>c.id===targetCityId))`（同server.mjs嘅`enterCity()`一模一樣嘅公式，`public/cities.js`shared primitive）為true時，return`'enter'`；`'start'`/`'reroute'`繼續永遠唔會被return（P2-05鎖死原封不動）。
+  - `handleCityTap(cityId,{snap,cities,travel,reroute,enter})`加`action==='enter'`分支，call`enter(cityId)`。
+  - `travelStatusHtml()`移除咗IN_WORLD-near-city嗰個分支（「已抵達：XX城」+`data-enter-city`按鈕），冇replacement text/button——city marker本身（SVG入面嘅`<g data-city>`）就係新嘅入城interaction。`cityEntryCandidate()`保留export（仲有自己嘅pure-function test），只係唔再喺呢度被call。
+- **`public/app.js`改動**：`wire()`嗰句`[data-city]`嘅handler改傳`cities:S.cities`同`enter:enterCity`落去`handleCityTap`；移除咗依家已經冇對應button嘅`[data-enter-city]`wiring（dead code cleanup，唔屬於獨立重構——係直接跟住`travelStatusHtml`嗰個button被移除嘅結果）。
+- **點解可以喺唔加`render()`嘅情況下解決stale-city問題**：`wire()`嘅`el.onclick=()=>handleCityTap(el.dataset.city,{snap:S.snap,...})`係一個arrow function,`S.snap`喺**撳落去嗰一刻**先讀,唔係喺`wire()`執行嗰刻捕獲——`S.snap.worldPosition`本身一直都俾`sendWorldMove`嘅response keep住即時更新,所以撳marker嗰一刻攞到嘅一定係最新資料,完全唔需要為咗呢個interaction而喺movement loop（`tickMovementFrame`/`sendWorldMove`）加任何`render()`或者periodic full DOM rebuild。
+- **不涉及**：`server.mjs`嘅`enterCity()`邏輯（一個字冇改，繼續係authoritative嘅唯一驗證來源）、DB schema、城市座標、`entryRadius`、`safeExit`、巴士票價/時長/persistence邏輯、reroute lock、movement speed/`MAX_PREDICTION_LEAD`/prediction/reconciliation/`moveSequence`/collision/camera/joystick行為、地圖layout（正方形四角redesign留返P2-08）。
+- **Tests**：
+  - `test/worldmap.test.mjs`：更新原有兩個`handleCityTap`test（IN_CITY／TRAVELING撳城市marker）多加`enter`callback嘅斷言；新增7個P2-07 requirement test——IN_WORLD入radius內撳中該城市準確入城一次、圓形同城市名共用同一個`[data-city]`節點、撳隔籬城唔會入錯城、離晒所有城市撳邊個都冇反應、Follow/Full Map兩邊用**同一個**唔理`mapView`嘅pure function（結構上證明咗規則一致，唔使分開實作）、**stale-city regression test**（唔render、純粹update`snap.worldPosition`模擬「行咗去City B」,再撳City B marker,證明入到——直接對應真機見到嗰個bug嘅scenario）、確認`data-enter-city`／「已抵達」呢啲字眼完全冇再出現。
+  - `test/city-entry.test.mjs`：原本斷言`data-enter-city`一定要存在嗰個test拆做兩個——`cityEntryCandidate`純function嘅行為（保留，佢依然有效，只係冇再駁落button）；同一個新test明確斷言`data-enter-city`喺近/遠任何情況下都唔再出現。其餘全部server-side test（enter/exit/idempotency/pending-loot/remote-entry-rejection）**完全冇改**，因為`server.mjs`一個字都冇動過。
+- 測試結果：338（baseline，內容除上面明確列出嘅2個既有test更新外完全不變）+ 8（新增，7個喺worldmap.test.mjs＋1個喺city-entry.test.mjs因拆分test淨增加嘅一個）= **346 tests passed, 0 failed**。
+- 存檔影響：無。
+- Rollback基準：`main` @ `67f091f3cd95ab2dc6a889010c146f1712b942c5`。

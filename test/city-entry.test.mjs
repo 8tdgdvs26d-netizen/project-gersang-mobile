@@ -23,15 +23,27 @@ test.before(async()=>{
 });
 test.after(async()=>{child?.kill();await rm(dir,{recursive:true,force:true})});
 
-test('map offers an explicit entry action only while IN_WORLD within a city entry radius',()=>{
+test('cityEntryCandidate identifies the nearby city only while IN_WORLD within its entry radius (pure primitive — kept as general-purpose, no longer wired to any button)',()=>{
   const city=CITY_DEFINITIONS[0];
   const nearby={state:'IN_WORLD',cityId:'growth-city',worldPosition:{...city.coordinates}};
   assert.equal(cityEntryCandidate(nearby,CITY_DEFINITIONS)?.id,city.id);
-  assert.ok(renderWorldMapHtml({snap:nearby,cities:CITY_DEFINITIONS,roads:[]}).includes(`data-enter-city="${city.id}"`));
   const remote={state:'IN_WORLD',cityId:'growth-city',worldPosition:{x:0,y:0}};
   assert.equal(cityEntryCandidate(remote,CITY_DEFINITIONS),null);
-  assert.ok(!renderWorldMapHtml({snap:remote,cities:CITY_DEFINITIONS,roads:[]}).includes('data-enter-city='));
   assert.equal(cityEntryCandidate({...nearby,state:'IN_CITY'},CITY_DEFINITIONS),null);
+});
+
+// P2-07 Decision 2: the separate "已抵達：XX城 / 進入XX城" [data-enter-city] control is
+// intentionally removed — the city marker itself ([data-city] on the map, see
+// test/worldmap.test.mjs's P2-07 requirement tests) is now the only entry interaction. This is a
+// deliberate UX replacement, not an accidental loss of coverage: the removal itself is asserted
+// below, and the full marker-tap behaviour (near/remote/wrong-city/IN_CITY/TRAVELING/Follow/Full
+// Map/stale-position) is covered in test/worldmap.test.mjs.
+test('P2-07: no [data-enter-city] control is rendered anywhere on the World Map, near or far from any city',()=>{
+  const city=CITY_DEFINITIONS[0];
+  const nearby={state:'IN_WORLD',cityId:'growth-city',worldPosition:{...city.coordinates}};
+  assert.ok(!renderWorldMapHtml({snap:nearby,cities:CITY_DEFINITIONS,roads:[]}).includes('data-enter-city'));
+  const remote={state:'IN_WORLD',cityId:'growth-city',worldPosition:{x:0,y:0}};
+  assert.ok(!renderWorldMapHtml({snap:remote,cities:CITY_DEFINITIONS,roads:[]}).includes('data-enter-city'));
 });
 
 test('every canonical city accepts an explicit server-validated entry at its configured radius',async()=>{

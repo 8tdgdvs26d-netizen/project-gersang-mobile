@@ -40,15 +40,28 @@ export function cityHubEntries(facilities){
 
 export function leaveCityHub(){return {tab:'map'}}
 
-export function chooseTravelAction(snapshot,targetCityId){
-  // P2-05: paid transport starts from City Hub, never from a map-node tap.
-  return null;
+export function chooseTravelAction(snapshot,targetCityId,cities){
+  // P2-05: paid transport still never starts from a map-node tap — 'start'/'reroute' are never
+  // returned here, so handleCityTap's travel()/reroute() branches below stay permanently
+  // unreachable from a marker tap (kept only so callers that still pass travel/reroute continue
+  // to behave exactly as before: never invoked).
+  //
+  // P2-07: the ONLY action a city marker tap can trigger is physical entry — and only into the
+  // EXACT city that was tapped, evaluated fresh against the CURRENT snapshot at tap time (never a
+  // stale render). This deliberately re-checks isWithinCityEntry against targetCityId itself
+  // (not "whichever city happens to be nearest") so tapping a distant city's marker while standing
+  // in a different city's radius can never enter the wrong (or any) city.
+  if(snapshot?.state!=='IN_WORLD'||!snapshot.worldPosition)return null;
+  const city=(cities||[]).find(c=>c.id===targetCityId);
+  if(!city||!isWithinCityEntry(snapshot.worldPosition,city))return null;
+  return 'enter';
 }
 
-export function handleCityTap(cityId,{snap,travel,reroute}){
-  const action=chooseTravelAction(snap,cityId);
+export function handleCityTap(cityId,{snap,cities,travel,reroute,enter}){
+  const action=chooseTravelAction(snap,cityId,cities);
   if(action==='start')return travel(cityId);
   if(action==='reroute')return reroute(cityId);
+  if(action==='enter')return enter?.(cityId);
   return null;
 }
 
@@ -99,8 +112,12 @@ function travelStatusHtml(state){
     const city=state.cities.find(c=>c.id===state.snap.cityId);
     return `<div class="map-travel-status"><p>目前所在：${city?.name||state.snap.cityId}</p><button class="btn" data-enter-hub="${state.snap.cityId}">進入城市</button></div>`;
   }
-  const nearbyCity=cityEntryCandidate(state.snap,state.cities);
-  if(nearbyCity)return `<div class="map-travel-status"><p>已抵達：${nearbyCity.name}</p><button class="btn" data-enter-city="${nearbyCity.id}">進入${nearbyCity.name}</button></div>`;
+  // P2-07 Decision 2 — the separate "已抵達：XX城 / 進入XX城" control is intentionally removed.
+  // The city marker itself (yellow circle + name, see renderWorldMapHtml's [data-city] node) is now
+  // the official entry interaction — see chooseTravelAction/handleCityTap above. No replacement
+  // text/button is rendered here for the IN_WORLD-near-a-city case; cityEntryCandidate() remains
+  // exported (and still directly tested) as a general-purpose pure primitive, it is just no longer
+  // called from here.
   return '';
 }
 

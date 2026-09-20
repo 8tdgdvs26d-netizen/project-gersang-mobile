@@ -228,22 +228,102 @@ test('renderWorldMapHtml performs no client-side collision logic: obstacles rend
   assert.ok(html.includes('class="map-obstacle"'));
 });
 
-test('selecting a map city never starts paid transport outside City Hub',()=>{
-  const calls={start:[],reroute:[]};
+test('selecting a map city never starts paid transport outside City Hub (P2-07 requirement 10)',()=>{
+  const calls={start:[],reroute:[],enter:[]};
   const travel=id=>calls.start.push(id);
   const reroute=id=>calls.reroute.push(id);
-  handleCityTap('harbour-city',{snap:{state:'IN_CITY',cityId:'starter-village'},travel,reroute});
+  const enter=id=>calls.enter.push(id);
+  handleCityTap('harbour-city',{snap:{state:'IN_CITY',cityId:'starter-village'},cities:CITY_DEFINITIONS,travel,reroute,enter});
   assert.deepEqual(calls.start,[]);
   assert.deepEqual(calls.reroute,[]);
+  assert.deepEqual(calls.enter,[],'P2-07 requirement 5: IN_CITY + tap a city marker must never enter — only City Hub\'s own leave/enter controls change city state while IN_CITY');
 });
 
-test('selecting a map city mid-journey never reroutes a paid bus',()=>{
-  const calls={start:[],reroute:[]};
+test('selecting a map city mid-journey never reroutes a paid bus (P2-07 requirement 11)',()=>{
+  const calls={start:[],reroute:[],enter:[]};
   const travel=id=>calls.start.push(id);
   const reroute=id=>calls.reroute.push(id);
-  handleCityTap('hill-market',{snap:{state:'TRAVELING',cityId:'starter-village',activeTravel:{toCityId:'harbour-city'}},travel,reroute});
+  const enter=id=>calls.enter.push(id);
+  handleCityTap('hill-market',{snap:{state:'TRAVELING',cityId:'starter-village',activeTravel:{toCityId:'harbour-city'}},cities:CITY_DEFINITIONS,travel,reroute,enter});
   assert.deepEqual(calls.reroute,[]);
   assert.deepEqual(calls.start,[]);
+  assert.deepEqual(calls.enter,[],'P2-07 requirement 6: TRAVELING + tap a city marker must never enter');
+});
+
+// --- P2-07: city marker is the official entry interaction (Decisions 1 & 2) ---
+// All pure, DOM-free tests of chooseTravelAction/handleCityTap — the exact function app.js's
+// [data-city] click handler calls, reading whatever snapshot/cities it is given at call time.
+
+test('P2-07 requirement 1: IN_WORLD inside a city\'s own entry radius, tapping that city\'s marker, enters exactly once',()=>{
+  const city=CITY_DEFINITIONS.find(c=>c.id==='starter-village');
+  const calls=[];
+  handleCityTap(city.id,{snap:{state:'IN_WORLD',worldPosition:{...city.coordinates}},cities:CITY_DEFINITIONS,enter:id=>calls.push(id)});
+  assert.deepEqual(calls,[city.id]);
+});
+
+test('P2-07 requirement 2: the yellow circle and the city name are the same interaction target — both live inside one [data-city] node, not separate elements',()=>{
+  const html=renderWorldMapHtml({snap:{state:'IN_WORLD',worldPosition:{x:0,y:0}},cities:CITY_DEFINITIONS,roads:[],mapView:'follow'});
+  for(const city of CITY_DEFINITIONS){
+    const match=html.match(new RegExp(`<g class="map-city" data-city="${city.id}"><circle[^>]*></circle><text[^>]*>${city.name}</text></g>`));
+    assert.ok(match,`expected one [data-city="${city.id}"] <g> containing both the circle and the "${city.name}" text`);
+  }
+});
+
+test('P2-07 requirement 3: standing in City A\'s radius but tapping City B\'s marker never enters any city',()=>{
+  const cityA=CITY_DEFINITIONS.find(c=>c.id==='starter-village'),cityB=CITY_DEFINITIONS.find(c=>c.id==='harbour-city');
+  const calls=[];
+  handleCityTap(cityB.id,{snap:{state:'IN_WORLD',worldPosition:{...cityA.coordinates}},cities:CITY_DEFINITIONS,enter:id=>calls.push(id)});
+  assert.deepEqual(calls,[],'tapping a distant city\'s marker while inside a different city\'s radius must never enter it');
+});
+
+test('P2-07 requirement 4: far from every city, tapping any city marker never enters',()=>{
+  const calls=[];
+  for(const city of CITY_DEFINITIONS)handleCityTap(city.id,{snap:{state:'IN_WORLD',worldPosition:{x:0,y:0}},cities:CITY_DEFINITIONS,enter:id=>calls.push(id)});
+  assert.deepEqual(calls,[]);
+});
+
+test('P2-07 requirements 7 & 8: the entry rule is identical regardless of Follow Map or Full Map — chooseTravelAction/handleCityTap never take mapView as an input at all',()=>{
+  const city=CITY_DEFINITIONS.find(c=>c.id==='hill-market');
+  const followCalls=[],fullCalls=[];
+  handleCityTap(city.id,{snap:{state:'IN_WORLD',worldPosition:{...city.coordinates}},cities:CITY_DEFINITIONS,enter:id=>followCalls.push(id)});
+  handleCityTap(city.id,{snap:{state:'IN_WORLD',worldPosition:{...city.coordinates}},cities:CITY_DEFINITIONS,enter:id=>fullCalls.push(id)});
+  assert.deepEqual(followCalls,[city.id]);
+  assert.deepEqual(fullCalls,[city.id]);
+  // Structural confirmation: renderWorldMapHtml renders the same [data-city] nodes in both map
+  // views — the joystick is gated by mapView (joystickDisabled), city markers are not.
+  const nearby={state:'IN_WORLD',worldPosition:{...city.coordinates}};
+  const followHtml=renderWorldMapHtml({snap:nearby,cities:CITY_DEFINITIONS,roads:[],mapView:'follow'});
+  const fullHtml=renderWorldMapHtml({snap:nearby,cities:CITY_DEFINITIONS,roads:[],mapView:'full'});
+  for(const c of CITY_DEFINITIONS){
+    assert.ok(followHtml.includes(`data-city="${c.id}"`),`follow map missing marker for ${c.id}`);
+    assert.ok(fullHtml.includes(`data-city="${c.id}"`),`full map missing marker for ${c.id}`);
+  }
+});
+
+test('P2-07 requirement 9 (stale-city regression): moving the snapshot from City A\'s vicinity to City B\'s vicinity — with no re-render in between — and then tapping City B\'s marker enters City B',()=>{
+  // Mirrors production exactly: app.js's [data-city] onclick handler reads S.snap fresh at call
+  // time (see wire()'s handleCityTap(...,{snap:S.snap,...})); sendWorldMove's ACCEPTED path
+  // updates S.snap.worldPosition directly without ever calling render(). So a pure call here with
+  // an already-updated snapshot object *is* the correct simulation of "walked to City B without
+  // switching Follow/Full Map" — no DOM/render() involvement needed or introduced.
+  const cityA=CITY_DEFINITIONS.find(c=>c.id==='starter-village'),cityB=CITY_DEFINITIONS.find(c=>c.id==='harbour-city');
+  const snap={state:'IN_WORLD',worldPosition:{...cityA.coordinates}};
+  const callsAtA=[];
+  handleCityTap(cityB.id,{snap,cities:CITY_DEFINITIONS,enter:id=>callsAtA.push(id)});
+  assert.deepEqual(callsAtA,[],'sanity: not yet near City B, tapping it must not enter');
+  snap.worldPosition={...cityB.coordinates}; // simulates sendWorldMove's direct S.snap.worldPosition update
+  const callsAtB=[];
+  handleCityTap(cityB.id,{snap,cities:CITY_DEFINITIONS,enter:id=>callsAtB.push(id)});
+  assert.deepEqual(callsAtB,[cityB.id],'after walking to City B (data updated, no render()), tapping City B\'s marker must enter it');
+});
+
+test('P2-07 requirement 13: the old separate "已抵達 / 進入XX城" [data-enter-city] control is no longer rendered anywhere',()=>{
+  for(const city of CITY_DEFINITIONS){
+    const nearby={state:'IN_WORLD',worldPosition:{...city.coordinates}};
+    const html=renderWorldMapHtml({snap:nearby,cities:CITY_DEFINITIONS,roads:[],mapView:'follow'});
+    assert.ok(!html.includes('data-enter-city'),`expected no data-enter-city control while near ${city.id}`);
+    assert.ok(!html.includes('已抵達'),'expected the removed "已抵達" copy to be gone entirely');
+  }
 });
 
 test("leaving City Hub only changes local screen state, makes no network request, and leaves the passed-in snapshot's city_id and state untouched",()=>{
