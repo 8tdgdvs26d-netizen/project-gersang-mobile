@@ -1,4 +1,5 @@
 import {WORLD_BOUNDS,OBSTACLES} from './worldgeometry.js';
+import {isWithinCityEntry} from './cities.js';
 
 const REGION_META=[
   {id:'NT_WEST',name:'新界西',x:0,y:0,w:500,h:330,open:true},
@@ -16,6 +17,11 @@ export function canEnterCityHub(snapshot,targetCityId){
   if(!snapshot)return false;
   if(snapshot.state!=='IN_CITY')return false;
   return snapshot.cityId===targetCityId;
+}
+
+export function cityEntryCandidate(snapshot,cities){
+  if(snapshot?.state!=='IN_WORLD'||!snapshot.worldPosition)return null;
+  return (cities||[]).find(city=>isWithinCityEntry(snapshot.worldPosition,city))??null;
 }
 
 export function cityHubEntries(facilities){
@@ -100,6 +106,8 @@ function travelStatusHtml(state){
     const city=state.cities.find(c=>c.id===state.snap.cityId);
     return `<div class="map-travel-status"><p>目前所在：${city?.name||state.snap.cityId}</p><button class="btn" data-enter-hub="${state.snap.cityId}">進入城市</button></div>`;
   }
+  const nearbyCity=cityEntryCandidate(state.snap,state.cities);
+  if(nearbyCity)return `<div class="map-travel-status"><p>已抵達：${nearbyCity.name}</p><button class="btn" data-enter-city="${nearbyCity.id}">進入${nearbyCity.name}</button></div>`;
   return '';
 }
 
