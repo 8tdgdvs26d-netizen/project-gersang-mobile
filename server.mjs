@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { WORLD_BOUNDS, PLAYER_COLLISION_RADIUS, OBSTACLES, inflateRect, segmentIntersectsRect, pointInRect } from "./public/worldgeometry.js";
 import { MOVE_SPEED_RATE, MOVE_CATCHUP_CAP_MS } from "./public/movement.js";
+import { CITY_DEFINITIONS } from "./public/cities.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
@@ -66,11 +67,7 @@ db.prepare(`UPDATE equipment_inventory SET owner_unit_id=COALESCE(equipped_unit_
 if(!db.prepare(`PRAGMA table_info(characters)`).all().some(x=>x.name==='world_x'))db.exec(`ALTER TABLE characters ADD COLUMN world_x REAL`);
 if(!db.prepare(`PRAGMA table_info(characters)`).all().some(x=>x.name==='world_y'))db.exec(`ALTER TABLE characters ADD COLUMN world_y REAL`);
 
-const cities=[
-  {id:'starter-village',name:'Starter Village',region:'NT_WEST',coordinates:{x:220,y:150},facilities:['MARKET','STORAGE'],theme:'starter'},
-  {id:'harbour-city',name:'Harbour City',region:'HK_ISLAND',coordinates:{x:500,y:820},facilities:['MARKET','STORAGE'],theme:'harbour'},
-  {id:'hill-market',name:'Hill Market',region:'NT_EAST',coordinates:{x:780,y:150},facilities:['MARKET','STORAGE'],theme:'hill'}
-];
+const cities=CITY_DEFINITIONS;
 
 function seed(){
   db.prepare(`INSERT OR IGNORE INTO accounts(id) VALUES('account-demo')`).run();
