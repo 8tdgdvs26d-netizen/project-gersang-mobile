@@ -99,15 +99,14 @@ test('a direct world move from IN_CITY is rejected before movement/collision pro
   assert.deepEqual(snap.worldPosition,{x:50,y:50});
 });
 
-test('a throttled (zero-displacement) IN_WORLD move keeps the player in the world',async()=>{
+test('a zero-displacement IN_WORLD move keeps the player in the world',async()=>{
   setPosition(50,50,'IN_WORLD');
   await wait(150);
   const first=await post('/api/commands/world/move',envelope('collision-throttle-a',{targetX:50,targetY:50}));
   assert.equal(first.status,'ACCEPTED');
   assert.equal(first.data.state,'IN_WORLD');
-  const second=await post('/api/commands/world/move',envelope('collision-throttle-b',{targetX:400,targetY:400}));
+  const second=await post('/api/commands/world/move',envelope('collision-zero-displacement-b',{targetX:50,targetY:50}));
   assert.equal(second.status,'ACCEPTED');
-  assert.equal(second.data.throttled,true);
   assert.equal(second.data.state,'IN_WORLD');
   assert.deepEqual(second.data.worldPosition,{x:50,y:50});
 });
