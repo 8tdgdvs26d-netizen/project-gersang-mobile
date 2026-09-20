@@ -22,7 +22,8 @@ import {
   OBSTACLES,
   CAMERA_VIEWPORT_SIZE
 } from '../public/worldmap.js';
-import {OBSTACLES as GEOMETRY_OBSTACLES} from '../public/worldgeometry.js';
+import {CITY_DEFINITIONS} from '../public/cities.js';
+import {OBSTACLES as GEOMETRY_OBSTACLES,PLAYER_COLLISION_RADIUS,inflateRect,pointInRect} from '../public/worldgeometry.js';
 
 let child,base,dir,sessionId;
 const request=async(path,options={})=>{const r=await fetch(base+path,{headers:{'content-type':'application/json'},...options});return r.json()};
@@ -47,13 +48,38 @@ test('regions are limited to the four fixed Hong Kong districts, and Kowloon may
   assert.equal(kowloonCities.length,0);
 });
 
-test('existing city ids and display names are unchanged',async()=>{
+test('four-city data contract preserves legacy ids and exposes approved Chinese display names',async()=>{
   const cities=await request('/api/cities');
   const byId=indexById(cities);
-  assert.equal(byId['starter-village']?.name,'Starter Village');
-  assert.equal(byId['harbour-city']?.name,'Harbour City');
-  assert.equal(byId['hill-market']?.name,'Hill Market');
-  assert.equal(cities.length,3);
+  assert.equal(byId['starter-village']?.name,'啟步城');
+  assert.equal(byId['harbour-city']?.name,'商業城');
+  assert.equal(byId['hill-market']?.name,'開拓城');
+  assert.equal(byId['growth-city']?.name,'躍動城');
+  assert.equal(cities.length,4);
+  assert.equal(new Set(cities.map(city=>city.id)).size,4);
+});
+
+test('every city has complete physical-entry metadata and a collision-safe exit point',async()=>{
+  const cities=await request('/api/cities');
+  const inflatedObstacles=GEOMETRY_OBSTACLES.map(obstacle=>inflateRect(obstacle,PLAYER_COLLISION_RADIUS));
+  for(const city of cities){
+    assert.ok(Number.isFinite(city.coordinates?.x)&&Number.isFinite(city.coordinates?.y),`${city.id} needs coordinates`);
+    assert.ok(city.coordinates.x>=WORLD_BOUNDS.min&&city.coordinates.x<=WORLD_BOUNDS.max,`${city.id} x is outside world bounds`);
+    assert.ok(city.coordinates.y>=WORLD_BOUNDS.min&&city.coordinates.y<=WORLD_BOUNDS.max,`${city.id} y is outside world bounds`);
+    assert.ok(Number.isFinite(city.entryRadius)&&city.entryRadius>0,`${city.id} needs a positive entry radius`);
+    assert.ok(Number.isFinite(city.exitPoint?.x)&&Number.isFinite(city.exitPoint?.y),`${city.id} needs an exit point`);
+    assert.ok(city.exitPoint.x>=WORLD_BOUNDS.min&&city.exitPoint.x<=WORLD_BOUNDS.max,`${city.id} exit x is outside world bounds`);
+    assert.ok(city.exitPoint.y>=WORLD_BOUNDS.min&&city.exitPoint.y<=WORLD_BOUNDS.max,`${city.id} exit y is outside world bounds`);
+    assert.ok(Math.hypot(city.exitPoint.x-city.coordinates.x,city.exitPoint.y-city.coordinates.y)>city.entryRadius,`${city.id} exit must be outside its entry radius`);
+    assert.equal(inflatedObstacles.some(obstacle=>pointInRect(city.exitPoint.x,city.exitPoint.y,obstacle)),false,`${city.id} exit overlaps an inflated obstacle`);
+  }
+});
+
+test('server city payload is sourced from the shared city contract without mutating it',async()=>{
+  const cities=await request('/api/cities');
+  assert.deepEqual(cities,CITY_DEFINITIONS);
+  assert.ok(Object.isFrozen(CITY_DEFINITIONS));
+  assert.ok(CITY_DEFINITIONS.every(city=>Object.isFrozen(city)&&Object.isFrozen(city.coordinates)&&Object.isFrozen(city.exitPoint)&&Object.isFrozen(city.facilities)));
 });
 
 test('GET /api/roads matches the roads table used by travel routing',async()=>{
