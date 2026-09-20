@@ -96,14 +96,44 @@ const reply=(res,status,body)=>{res.writeHead(status,{'content-type':'applicatio
 const readBody=req=>new Promise((resolve,reject)=>{let s='';req.on('data',c=>s+=c);req.on('end',()=>{try{resolve(s?JSON.parse(s):{})}catch(e){reject(e)}});req.on('error',reject)});
 
 function arrivalWorldColumns(cityId){const city=cities.find(c=>c.id===cityId);return city?{sql:',world_x=?,world_y=?',params:[city.coordinates.x,city.coordinates.y]}:{sql:'',params:[]}}
+// P2-06 — Bus Persistence/Retry/Reconnect Hardening. The TRAVELING->ARRIVED travel transition and
+// the character's TRAVELING->IN_CITY/city_id/world-position transition must commit or roll back
+// together (Charlie Clarification 1, item 2). A plain BEGIN IMMEDIATE here would collide with
+// idem()'s own transaction: every internal caller (buy/sell/startBus/moveWorld/enterCity/exitCity/
+// moveStorage) calls snapshot() from inside an already-open idem() transaction. SQLite SAVEPOINTs
+// nest safely either way — standalone (the GET /snapshot route calling snapshot() directly) they
+// behave like an ordinary atomic transaction; nested inside idem()'s BEGIN IMMEDIATE they merge
+// into it, so the whole thing still commits/rolls back as one unit under idem()'s own COMMIT/
+// ROLLBACK. This is the "no nested transaction with idem()" requirement, satisfied by nesting the
+// right primitive rather than avoiding nesting altogether.
+function resolveDueArrival(){
+  const due=db.prepare(`SELECT to_city FROM travel WHERE character_id='char-demo' AND status='TRAVELING' AND eta<=?`).get(Date.now());
+  if(!due)return;
+  db.exec('SAVEPOINT arrival_resolution');
+  try{
+    db.prepare(`UPDATE travel SET status='ARRIVED' WHERE character_id='char-demo'`).run();
+    const w=arrivalWorldColumns(due.to_city);
+    db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY'${w.sql} WHERE id='char-demo'`).run(due.to_city,...w.params);
+    db.exec('RELEASE arrival_resolution');
+  }catch(err){
+    db.exec('ROLLBACK TO arrival_resolution');
+    db.exec('RELEASE arrival_resolution');
+    throw err;
+  }
+}
 function snapshot(){
-  const due=db.prepare(`SELECT to_city FROM travel WHERE character_id='char-demo' AND status='TRAVELING' AND eta<=?`).get(Date.now());if(due){db.prepare(`UPDATE travel SET status='ARRIVED' WHERE character_id='char-demo'`).run();const w=arrivalWorldColumns(due.to_city);db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY'${w.sql} WHERE id='char-demo'`).run(due.to_city,...w.params)}
+  resolveDueArrival();
   const c=db.prepare(`SELECT * FROM characters WHERE id='char-demo'`).get();
   const stacks=db.prepare(`SELECT good_id,quantity,cargo_units FROM cargo WHERE character_id='char-demo' AND quantity>0`).all();
   const used=stacks.reduce((n,s)=>n+s.quantity*s.cargo_units,0);
   const t=db.prepare(`SELECT * FROM travel WHERE character_id='char-demo'`).get();
   const worldPosition=c.world_x!=null&&c.world_y!=null?{x:c.world_x,y:c.world_y}:(cities.find(x=>x.id===c.city_id)?.coordinates??null);
-  return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,worldPosition,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),segments:normalizedSegments(t),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null};
+  // P2-06 — Charlie Clarification 1: persistent DB history != active client journey. The travel row
+  // is never deleted (an ARRIVED row stays in the DB as history/debug evidence — no schema change,
+  // no delete), but activeTravel must only ever be exposed to the client while status==='TRAVELING';
+  // once ARRIVED, snapshot returns activeTravel:null so the client can never mistake a completed
+  // journey for an ongoing one.
+  return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,worldPosition,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t&&t.status==='TRAVELING'?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),segments:normalizedSegments(t),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null};
 }
 function marketRow(city,good){return db.prepare(`SELECT * FROM market WHERE city_id=? AND good_id=?`).get(city,good)}
 function market(city){return db.prepare(`SELECT * FROM market WHERE city_id=? ORDER BY good_id`).all(city).map(m=>({cityId:m.city_id,goodTypeId:m.good_id,stock:m.stock,referencePrice:m.ref_price,baseSpread:m.spread,version:m.version,buyPrice:m.ref_price+m.spread,sellPrice:Math.max(1,m.ref_price-m.spread)}))}
@@ -290,7 +320,13 @@ function startBus(env){const e=check(env);if(e)return e;return idem(env.idempote
 function startTravel(env){return startBus(env)}
 function normalizedSegments(t){const raw=JSON.parse(t.route_json);if(raw.every(x=>typeof x==='object'))return raw;return raw.map(id=>{const r=db.prepare(`SELECT * FROM roads WHERE id=?`).get(id);return{edgeId:r.id,roadId:r.id,fromCityId:r.from_city,toCityId:r.to_city,durationMs:r.travel_ms,startOffsetMs:0,endOffsetMs:r.travel_ms}})}
 function reroute(env){const e=check(env);if(e)return e;return{status:'REJECTED',errorCode:'ERR_BUS_REROUTE_UNAVAILABLE'}}
-function resolveArrival(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const t=db.prepare(`SELECT * FROM travel WHERE character_id='char-demo'`).get();if(!t)return{status:'REJECTED',errorCode:'ERR_NO_TRAVEL'};if(Date.now()<t.eta)return{status:'REJECTED',errorCode:'ERR_NOT_ARRIVED'};db.prepare(`UPDATE travel SET status='ARRIVED' WHERE character_id='char-demo'`).run();const w=arrivalWorldColumns(t.to_city);db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY'${w.sql} WHERE id='char-demo'`).run(t.to_city,...w.params);return{status:'ACCEPTED',data:{cityId:t.to_city}}})}
+function resolveArrival(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const t=db.prepare(`SELECT * FROM travel WHERE character_id='char-demo'`).get();if(!t)return{status:'REJECTED',errorCode:'ERR_NO_TRAVEL'};
+  // P2-06 — Charlie Clarification: an already-ARRIVED journey (resolved earlier by snapshot()'s own
+  // auto-arrival, or by a previous resolveArrival call under a different idempotency key) must not
+  // be resolved again — no second UPDATE, no second side effect, even though the values happen to be
+  // identical today. Explicit status guard, not just idempotent-value reliance.
+  if(t.status!=='TRAVELING')return{status:'REJECTED',errorCode:'ERR_NO_TRAVEL'};
+  if(Date.now()<t.eta)return{status:'REJECTED',errorCode:'ERR_NOT_ARRIVED'};db.prepare(`UPDATE travel SET status='ARRIVED' WHERE character_id='char-demo'`).run();const w=arrivalWorldColumns(t.to_city);db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY'${w.sql} WHERE id='char-demo'`).run(t.to_city,...w.params);return{status:'ACCEPTED',data:{cityId:t.to_city}}})}
 function enterCity(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot();if(s.state!=='IN_WORLD')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};const city=cities.find(c=>c.id===env.payload.destinationCityId);if(!city)return{status:'REJECTED',errorCode:'ERR_CITY_NOT_FOUND'};if(!isWithinCityEntry(s.worldPosition,city))return{status:'REJECTED',errorCode:'ERR_CITY_ENTRY_OUT_OF_RANGE'};db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY' WHERE id='char-demo'`).run(city.id);return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_CITY',worldPosition:s.worldPosition}}})}
 function exitCity(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot();if(s.state!=='IN_CITY')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};const city=cities.find(c=>c.id===s.cityId),exitPoint=city?.exitPoint;if(!Number.isFinite(exitPoint?.x)||!Number.isFinite(exitPoint?.y)||exitPoint.x<WORLD_BOUNDS.min||exitPoint.x>WORLD_BOUNDS.max||exitPoint.y<WORLD_BOUNDS.min||exitPoint.y>WORLD_BOUNDS.max||INFLATED_OBSTACLES.some(rect=>pointInRect(exitPoint.x,exitPoint.y,rect)))return{status:'REJECTED',errorCode:'ERR_CITY_EXIT_INVALID'};db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(exitPoint.x,exitPoint.y);return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_WORLD',worldPosition:{x:exitPoint.x,y:exitPoint.y}}}})}
 function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot(),p=env.payload;if(s.state!=='IN_CITY'||s.cityId!==p.cityId)return{status:'REJECTED',errorCode:'ERR_PHYSICAL_PRESENCE_REQUIRED'};if(p.quantity<=0)return{status:'REJECTED',errorCode:'ERR_INVALID_QUANTITY'};const cur=db.prepare(`SELECT quantity FROM storage WHERE character_id='char-demo' AND city_id=? AND good_id=?`).get(s.cityId,p.goodTypeId)?.quantity??0;if(p.direction==='CARGO_TO_STORAGE'){changeCargo(p.goodTypeId,-p.quantity);db.prepare(`INSERT INTO storage VALUES('char-demo',?,?,?) ON CONFLICT(character_id,city_id,good_id) DO UPDATE SET quantity=quantity+excluded.quantity`).run(s.cityId,p.goodTypeId,p.quantity)}else if(p.direction==='STORAGE_TO_CARGO'){if(cur<p.quantity)throw new Error('ERR_INSUFFICIENT_STORAGE');db.prepare(`UPDATE storage SET quantity=quantity-? WHERE character_id='char-demo' AND city_id=? AND good_id=?`).run(p.quantity,s.cityId,p.goodTypeId);changeCargo(p.goodTypeId,p.quantity)}else return{status:'REJECTED',errorCode:'ERR_INVALID_DIRECTION'};return{status:'ACCEPTED',data:{quantity:p.quantity}}})}

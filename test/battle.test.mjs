@@ -438,7 +438,11 @@ test('travel blocks challenges and snapshot automatically completes an overdue j
   const started=await post('/api/commands/travel/start',envelope('travel-auto-arrival',{destinationCityId:'harbour-city'}));assert.equal(started.status,'ACCEPTED');
   const blocked=await post('/api/commands/battle/start',envelope('battle-during-travel',{}));assert.equal(blocked.errorCode,'ERR_INVALID_STATE');
   const overdue=new DatabaseSync(join(dir,'test.sqlite'));overdue.prepare(`UPDATE travel SET eta=? WHERE character_id='char-demo'`).run(Date.now()-1);overdue.close();
-  const snap=await request('/api/character/char-demo/snapshot');assert.equal(snap.state,'IN_CITY');assert.equal(snap.cityId,'harbour-city');assert.equal(snap.activeTravel.status,'ARRIVED');
+  const snap=await request('/api/character/char-demo/snapshot');assert.equal(snap.state,'IN_CITY');assert.equal(snap.cityId,'harbour-city');
+  // P2-06 — Charlie Clarification 1: a completed (ARRIVED) journey must not be exposed to the
+  // client as activeTravel; the DB travel row itself still persists as ARRIVED (see test/bus.test.mjs
+  // for that direct DB-level assertion) but the snapshot payload must show activeTravel:null.
+  assert.equal(snap.activeTravel,null);
 });
 
 test('warehouse overview returns every city while remote stock remains read-only',async()=>{
