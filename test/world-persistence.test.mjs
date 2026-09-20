@@ -141,12 +141,10 @@ test('a genuine OS-level process restart (kill child A, wait for its real exit, 
     const reqA=(path,options={})=>fetch(serverA.base+path,{headers:{'content-type':'application/json'},...options}).then(r=>r.json());
     const postA=(path,body)=>reqA(path,{method:'POST',body:JSON.stringify(body)});
     const sessionIdA=(await postA('/api/session/open',{accountId:'account-demo'})).sessionId;
-    const before=await reqA('/api/character/char-demo/snapshot');
-    const moved=await postA('/api/commands/world/move',{commandId:crypto.randomUUID(),idempotencyKey:'restart-legal-move',sessionId:sessionIdA,characterId:'char-demo',clientSentAt:new Date().toISOString(),payload:{targetX:before.worldPosition.x+40,targetY:before.worldPosition.y}});
-    assert.equal(moved.status,'ACCEPTED');
-    assert.equal(moved.data.collided,false);
-    assert.equal(moved.data.state,'IN_WORLD');
-    const expectedPosition=moved.data.worldPosition;
+    const exited=await postA('/api/commands/city/exit',{commandId:crypto.randomUUID(),idempotencyKey:'restart-legal-exit',sessionId:sessionIdA,characterId:'char-demo',clientSentAt:new Date().toISOString(),payload:{}});
+    assert.equal(exited.status,'ACCEPTED');
+    assert.equal(exited.data.state,'IN_WORLD');
+    const expectedPosition=exited.data.worldPosition;
 
     await killAndWaitForRealExit(serverA.child);
     assert.equal(serverA.child.hasExited,true,'child A must have genuinely exited before child B starts against the same DB file');

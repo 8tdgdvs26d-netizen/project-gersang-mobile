@@ -81,6 +81,36 @@ test('city entry is idempotent and the accepted state survives a fresh snapshot'
   assert.deepEqual(reloaded.worldPosition,city.coordinates);
 });
 
+test('every canonical city exits only through its configured safe world point',async()=>{
+  for(const city of CITY_DEFINITIONS){
+    setCharacter(city.id,city.coordinates,'IN_CITY');
+    const exited=await post('/api/commands/city/exit',envelope(`exit-${city.id}`,{}));
+    assert.equal(exited.status,'ACCEPTED',city.id);
+    assert.deepEqual(exited.data,{cityId:city.id,state:'IN_WORLD',worldPosition:city.exitPoint});
+    const reloaded=await request('/api/character/char-demo/snapshot');
+    assert.equal(reloaded.cityId,city.id);
+    assert.equal(reloaded.state,'IN_WORLD');
+    assert.deepEqual(reloaded.worldPosition,city.exitPoint);
+  }
+});
+
+test('city exit is idempotent and direct world movement cannot bypass it from IN_CITY',async()=>{
+  const city=CITY_DEFINITIONS.find(x=>x.id==='growth-city');
+  setCharacter(city.id,city.coordinates,'IN_CITY');
+  const bypass=await post('/api/commands/world/move',envelope('exit-world-bypass',{targetX:city.coordinates.x+20,targetY:city.coordinates.y}));
+  assert.equal(bypass.errorCode,'ERR_INVALID_STATE');
+  const command=envelope('exit-retry',{});
+  const first=await post('/api/commands/city/exit',command);
+  const retry=await post('/api/commands/city/exit',command);
+  assert.deepEqual(retry,first);
+  const reloaded=await request('/api/character/char-demo/snapshot');
+  assert.equal(reloaded.state,'IN_WORLD');
+  assert.deepEqual(reloaded.worldPosition,city.exitPoint);
+  const repeatExit=await post('/api/commands/city/exit',envelope('exit-invalid-state',{}));
+  assert.equal(repeatExit.errorCode,'ERR_INVALID_STATE');
+  assert.deepEqual((await request('/api/character/char-demo/snapshot')).worldPosition,city.exitPoint);
+});
+
 test('unsettled battle loot blocks city entry without changing the world snapshot',async()=>{
   const city=CITY_DEFINITIONS[0],before={...city.coordinates};
   setCharacter('starter-village',before);
@@ -95,5 +125,12 @@ test('unsettled battle loot blocks city entry without changing the world snapsho
   assert.equal(after.cityId,'starter-village');
   assert.equal(after.state,'IN_WORLD');
   assert.deepEqual(after.worldPosition,before);
+  setCharacter(city.id,city.coordinates,'IN_CITY');
+  const blockedExit=await post('/api/commands/city/exit',envelope('exit-pending-loot',{}));
+  assert.equal(blockedExit.errorCode,'ERR_BATTLE_SETTLEMENT_REQUIRED');
+  const afterExit=await request('/api/character/char-demo/snapshot');
+  assert.equal(afterExit.cityId,city.id);
+  assert.equal(afterExit.state,'IN_CITY');
+  assert.deepEqual(afterExit.worldPosition,city.coordinates);
   const cleanup=new DatabaseSync(join(dir,'test.sqlite'));cleanup.prepare(`DELETE FROM battle_rewards WHERE battle_id='entry-pending-loot'`).run();cleanup.prepare(`DELETE FROM battle_meta WHERE battle_id='entry-pending-loot'`).run();cleanup.prepare(`DELETE FROM battles WHERE id='entry-pending-loot'`).run();cleanup.close();
 });

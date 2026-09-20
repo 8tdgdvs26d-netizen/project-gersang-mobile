@@ -430,6 +430,13 @@ test('renderWorldMapHtml renders the joystick disabled while TRAVELING regardles
   assert.ok(html.includes('joystick-disabled'));
 });
 
+test('renderWorldMapHtml disables the joystick while IN_CITY, so leaving must use City Hub',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_CITY',cityId:'a',worldPosition:{x:220,y:150}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(html.includes('joystick-disabled'));
+});
+
 // --- P1-07C: Mobile Movement Telemetry overlay shell (diagnostic-only, Issue #21) ---
 // The overlay is a static shell here; app.js's tickMovementFrame patches its child span ids every
 // frame (throttled), never rebuilding it via render(). These tests only check the shell exists

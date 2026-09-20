@@ -178,9 +178,9 @@ export function renderWorldMapHtml(state){
   const hero=heroPosition?`<circle class="hero-marker" cx="${heroPosition.x}" cy="${heroPosition.y}" r="14"></circle>`:'';
   // Follow View / Full Map toggle (P1-07A) — client-only presentation state, never sent to the server.
   const mapViewToggle=`<button class="btn map-view-toggle" id="map-view-toggle" type="button">${mapView==='follow'?'🗺️ 全圖':'📍 跟隨'}</button>`;
-  // Fixed bottom-left virtual joystick (P1-07A) — disabled while TRAVELING (movement rejected
-  // server-side anyway) or while inspecting Full Map (movement intent must not drive the character).
-  const joystickDisabled=state.snap.state==='TRAVELING'||mapView==='full';
+  // P2-04: leaving a city is an explicit server command; only IN_WORLD can use free movement.
+  // Full Map remains inspection-only as before.
+  const joystickDisabled=state.snap.state!=='IN_WORLD'||mapView==='full';
   const joystick=`<div class="joystick${joystickDisabled?' joystick-disabled':''}" id="joystick-base"><div class="joystick-knob" id="joystick-knob"></div></div>`;
   // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Static shell only: every
   // value is "…" until app.js's tickMovementFrame patches these fixed ids in place, the same
