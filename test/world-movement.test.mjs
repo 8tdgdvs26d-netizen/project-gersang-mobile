@@ -23,14 +23,14 @@ test.before(async()=>{
 });
 test.after(async()=>{child?.kill();await rm(dir,{recursive:true,force:true})});
 
-test('a legal move is accepted, transitions IN_CITY to IN_WORLD, and updates worldPosition',async()=>{
+test('world/move rejects direct departure while IN_CITY, so the safe city-exit command cannot be bypassed',async()=>{
   const before=await request('/api/character/char-demo/snapshot');
   assert.equal(before.state,'IN_CITY');
   const moved=await post('/api/commands/world/move',envelope('move-legal-1',{targetX:before.worldPosition.x+40,targetY:before.worldPosition.y}));
-  assert.equal(moved.status,'ACCEPTED');
-  assert.equal(moved.data.state,'IN_WORLD');
-  assert.equal(moved.data.throttled,false);
-  assert.deepEqual(moved.data.worldPosition,{x:before.worldPosition.x+40,y:before.worldPosition.y});
+  assert.equal(moved.errorCode,'ERR_INVALID_STATE');
+  const after=await request('/api/character/char-demo/snapshot');
+  assert.equal(after.state,'IN_CITY');
+  assert.deepEqual(after.worldPosition,before.worldPosition);
 });
 
 test('IN_WORLD accepts further legal moves',async()=>{
@@ -38,6 +38,7 @@ test('IN_WORLD accepts further legal moves',async()=>{
   // limiting factor here — this test is about accepting further legal moves, not about the
   // allowance/clamp mechanics themselves (see the teleport-clamp test below for that).
   await wait(MOVE_CATCHUP_CAP_MS+100);
+  setPosition(220,222,'IN_WORLD');
   const before=await request('/api/character/char-demo/snapshot');
   assert.equal(before.state,'IN_WORLD');
   const moved=await post('/api/commands/world/move',envelope('move-legal-2',{targetX:before.worldPosition.x,targetY:before.worldPosition.y+30}));
@@ -137,9 +138,9 @@ test('existing IN_CITY-only city functions (market buy, storage move) remain rej
   const snap=await request('/api/character/char-demo/snapshot');
   assert.equal(snap.state,'IN_CITY');
   await wait(150);
-  const moved=await post('/api/commands/world/move',envelope('move-leave-city',{targetX:snap.worldPosition.x+40,targetY:snap.worldPosition.y}));
-  assert.equal(moved.status,'ACCEPTED');
-  assert.equal(moved.data.state,'IN_WORLD');
+  const exited=await post('/api/commands/city/exit',envelope('move-leave-city',{}));
+  assert.equal(exited.status,'ACCEPTED');
+  assert.equal(exited.data.state,'IN_WORLD');
   const buyAttempt=await post('/api/commands/market/buy',envelope('move-market-blocked',{approvedQuote:{cityId:snap.cityId,goodTypeId:'rice',requestedQuantity:1,unitPrice:9999,total:9999}}));
   assert.equal(buyAttempt.status,'REJECTED');
   assert.equal(buyAttempt.errorCode,'ERR_INVALID_CONTEXT');

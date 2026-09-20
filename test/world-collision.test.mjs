@@ -38,21 +38,21 @@ test('every city coordinate and the spawn point sit outside every inflated obsta
 const ridgeA=OBSTACLES.find(o=>o.id==='ridge-a'),inflatedA=inflateRect(ridgeA,PLAYER_COLLISION_RADIUS);
 const centerA={x:(inflatedA.minX+inflatedA.maxX)/2,y:(inflatedA.minY+inflatedA.maxY)/2};
 
-test('a swept move whose (unclamped) endpoint lands inside an inflated obstacle is blocked: position unchanged, collided:true, and IN_CITY does not flip to IN_WORLD',async()=>{
+test('a swept IN_WORLD move whose endpoint lands inside an inflated obstacle is blocked with position unchanged',async()=>{
   const start={x:inflatedA.minX-30,y:centerA.y};
   assert.equal(pointInRect(start.x,start.y,inflatedA),false,'test setup: start point must be outside the obstacle');
   assert.equal(pointInRect(centerA.x,centerA.y,inflatedA),true,'test setup: target point must land inside the obstacle');
   assert.ok(Math.hypot(centerA.x-start.x,centerA.y-start.y)<=60,'test setup: target must be reachable in one unclamped step');
-  setPosition(start.x,start.y,'IN_CITY');
+  setPosition(start.x,start.y,'IN_WORLD');
   await wait(150);
   const moved=await post('/api/commands/world/move',envelope('collision-endpoint-inside',{targetX:centerA.x,targetY:centerA.y}));
   assert.equal(moved.status,'ACCEPTED');
   assert.equal(moved.data.collided,true);
   assert.equal(moved.data.throttled,false);
   assert.deepEqual(moved.data.worldPosition,start);
-  assert.equal(moved.data.state,'IN_CITY');
+  assert.equal(moved.data.state,'IN_WORLD');
   const snap=await request('/api/character/char-demo/snapshot');
-  assert.equal(snap.state,'IN_CITY');
+  assert.equal(snap.state,'IN_WORLD');
   assert.deepEqual(snap.worldPosition,start);
 });
 
@@ -90,26 +90,25 @@ test('a collision-blocked move consumes the normal movement interval like any ot
   assert.deepEqual(legal.data.worldPosition,legalTarget);
 });
 
-test('a genuinely legal (non-zero, uncollided) move from IN_CITY transitions to IN_WORLD',async()=>{
+test('a direct world move from IN_CITY is rejected before movement/collision processing',async()=>{
   setPosition(50,50,'IN_CITY');
-  await wait(MOVE_CATCHUP_CAP_MS+100);
   const moved=await post('/api/commands/world/move',envelope('collision-legal-transition',{targetX:90,targetY:50}));
-  assert.equal(moved.status,'ACCEPTED');
-  assert.equal(moved.data.collided,false);
-  assert.equal(moved.data.state,'IN_WORLD');
-  assert.deepEqual(moved.data.worldPosition,{x:90,y:50});
+  assert.equal(moved.errorCode,'ERR_INVALID_STATE');
+  const snap=await request('/api/character/char-demo/snapshot');
+  assert.equal(snap.state,'IN_CITY');
+  assert.deepEqual(snap.worldPosition,{x:50,y:50});
 });
 
-test('a throttled (zero-displacement) move does not transition IN_CITY to IN_WORLD',async()=>{
-  setPosition(50,50,'IN_CITY');
+test('a throttled (zero-displacement) IN_WORLD move keeps the player in the world',async()=>{
+  setPosition(50,50,'IN_WORLD');
   await wait(150);
   const first=await post('/api/commands/world/move',envelope('collision-throttle-a',{targetX:50,targetY:50}));
   assert.equal(first.status,'ACCEPTED');
-  assert.equal(first.data.state,'IN_CITY');
+  assert.equal(first.data.state,'IN_WORLD');
   const second=await post('/api/commands/world/move',envelope('collision-throttle-b',{targetX:400,targetY:400}));
   assert.equal(second.status,'ACCEPTED');
   assert.equal(second.data.throttled,true);
-  assert.equal(second.data.state,'IN_CITY');
+  assert.equal(second.data.state,'IN_WORLD');
   assert.deepEqual(second.data.worldPosition,{x:50,y:50});
 });
 
@@ -117,7 +116,7 @@ test('legacy compatibility: a persisted position already inside an inflated obst
   const ridgeB=OBSTACLES.find(o=>o.id==='ridge-b'),inflatedB=inflateRect(ridgeB,PLAYER_COLLISION_RADIUS);
   const center={x:(inflatedB.minX+inflatedB.maxX)/2,y:(inflatedB.minY+inflatedB.maxY)/2};
   assert.equal(pointInRect(center.x,center.y,inflatedB),true,'test setup: legacy position must start inside the obstacle');
-  setPosition(center.x,center.y,'IN_CITY');
+  setPosition(center.x,center.y,'IN_WORLD');
   await wait(MOVE_CATCHUP_CAP_MS+100);
   const escaped=await post('/api/commands/world/move',envelope('collision-legacy-escape',{targetX:center.x,targetY:center.y-135}));
   assert.equal(escaped.status,'ACCEPTED');
@@ -132,12 +131,12 @@ test('legacy compatibility: while still inside the obstacle, a move whose candid
   const stillInside={x:center.x+15,y:center.y};
   assert.equal(pointInRect(center.x,center.y,inflatedB),true,'test setup: legacy position must start inside the obstacle');
   assert.equal(pointInRect(stillInside.x,stillInside.y,inflatedB),true,'test setup: candidate must still land inside the same obstacle');
-  setPosition(center.x,center.y,'IN_CITY');
+  setPosition(center.x,center.y,'IN_WORLD');
   await wait(150);
   const blocked=await post('/api/commands/world/move',envelope('collision-legacy-still-inside',{targetX:stillInside.x,targetY:stillInside.y}));
   assert.equal(blocked.status,'ACCEPTED');
   assert.equal(blocked.data.collided,true);
-  assert.equal(blocked.data.state,'IN_CITY');
+  assert.equal(blocked.data.state,'IN_WORLD');
   assert.deepEqual(blocked.data.worldPosition,center);
 });
 
