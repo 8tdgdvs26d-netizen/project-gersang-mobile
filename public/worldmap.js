@@ -29,6 +29,7 @@ export function cityHubEntries(facilities){
   return [
     {id:'market',label:'市場',available:list.includes('MARKET')},
     {id:'storage',label:'貨倉',available:list.includes('STORAGE')},
+    {id:'bus',label:'巴士站',available:true},
     {id:'bank',label:'銀行',available:false},
     {id:'mercenary',label:'傭兵店',available:false},
     {id:'equipment',label:'裝備店',available:false},
@@ -40,15 +41,7 @@ export function cityHubEntries(facilities){
 export function leaveCityHub(){return {tab:'map'}}
 
 export function chooseTravelAction(snapshot,targetCityId){
-  if(!snapshot)return null;
-  if(snapshot.state==='IN_CITY'){
-    if(snapshot.cityId===targetCityId)return null;
-    return 'start';
-  }
-  if(snapshot.state==='TRAVELING'){
-    if(snapshot.activeTravel?.toCityId===targetCityId)return null;
-    return 'reroute';
-  }
+  // P2-05: paid transport starts from City Hub, never from a map-node tap.
   return null;
 }
 
@@ -100,7 +93,7 @@ function travelStatusHtml(state){
   const t=state.snap.activeTravel;
   if(state.snap.state==='TRAVELING'&&t){
     const a=new Date(t.startedAt).getTime(),e=new Date(t.estimatedArrivalAt).getTime(),p=Math.max(0,Math.min(1,(Date.now()-a)/(e-a)));
-    return `<div class="map-travel-status"><p>${cityDisplayName(state.cities,t.fromCityId)} → ${cityDisplayName(state.cities,t.toCityId)}</p><div class="track"><div id="travel-fill" class="fill" data-start="${a}" data-end="${e}" style="width:${p*100}%"></div></div><div class="travel-progress"><span id="travel-progress-pct">${Math.round(p*100)}%</span><span>ETA ${new Date(t.estimatedArrivalAt).toLocaleTimeString()}</span></div><button class="btn" id="arrive">檢查到埗</button><div class="small">撳地圖上其他城市可以中途改道</div></div>`;
+    return `<div class="map-travel-status"><p>🚌 巴士：${cityDisplayName(state.cities,t.fromCityId)} → ${cityDisplayName(state.cities,t.toCityId)}</p><div class="track"><div id="travel-fill" class="fill" data-start="${a}" data-end="${e}" style="width:${p*100}%"></div></div><div class="travel-progress"><span id="travel-progress-pct">${Math.round(p*100)}%</span><span>ETA ${new Date(t.estimatedArrivalAt).toLocaleTimeString()}</span></div><button class="btn" id="arrive">檢查到埗</button><div class="small">車費已支付；行程中不可自由移動或改道。</div></div>`;
   }
   if(state.snap.state==='IN_CITY'){
     const city=state.cities.find(c=>c.id===state.snap.cityId);

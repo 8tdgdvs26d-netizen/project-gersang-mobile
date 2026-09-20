@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 
 let child,base,dir,sessionId;
 const request=async(path,options={})=>{const r=await fetch(base+path,{headers:{'content-type':'application/json'},...options});return r.json()};
@@ -46,21 +47,17 @@ test('rejected command does not consume its key',async()=>{
   assert.equal(rejected.status,'REJECTED');
   const started=await post('/api/commands/travel/start',envelope('start-trip',{destinationCityId:'harbour-city'}));
   assert.equal(started.status,'ACCEPTED');
-  await new Promise(r=>setTimeout(r,8100));
+  const fixture=new DatabaseSync(join(dir,'test.sqlite'));fixture.prepare(`UPDATE travel SET eta=? WHERE character_id='char-demo'`).run(Date.now()-1);fixture.close();
   const accepted=await post('/api/commands/travel/resolve-arrival',envelope(key,{}));
   assert.equal(accepted.status,'ACCEPTED');
 });
 
-test('reroute starts from a virtual position on the current road',async()=>{
+test('paid bus journeys cannot be rerouted mid-trip',async()=>{
   await post('/api/commands/travel/start',envelope('start-reroute',{destinationCityId:'hill-market'}));
   await new Promise(r=>setTimeout(r,100));
   const rerouted=await post('/api/commands/travel/reroute',envelope('reroute-trip',{destinationCityId:'starter-village'}));
-  assert.equal(rerouted.status,'ACCEPTED');
-  assert.equal(rerouted.data.origin,'VIRTUAL_POSITION');
-  assert.ok(rerouted.data.routeEdgeIds[0].includes(':reverse'));
-  assert.ok(rerouted.data.totalTravelMs<9000);
-  await new Promise(r=>setTimeout(r,50));
-  const again=await post('/api/commands/travel/reroute',envelope('reroute-again',{destinationCityId:'hill-market'}));
-  assert.equal(again.status,'ACCEPTED');
-  assert.equal(again.data.origin,'VIRTUAL_POSITION');
+  assert.equal(rerouted.errorCode,'ERR_BUS_REROUTE_UNAVAILABLE');
+  const active=await request('/api/character/char-demo/snapshot');
+  assert.equal(active.state,'TRAVELING');
+  assert.equal(active.activeTravel.toCityId,'hill-market');
 });
