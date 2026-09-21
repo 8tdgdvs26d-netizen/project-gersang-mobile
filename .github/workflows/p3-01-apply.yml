@@ -36,13 +36,18 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           p=Path('test/market-economy.test.mjs')
-          s=p.read_text()
-          s=s.replace("new Error(`server exited ${code}`)", "new Error('server exited '+code)")
-          bad="base=`http://127.0.0.1:${line.match(/:(d+)/)[1]}`;"
-          good="base='http://127.0.0.1:'+line.match(/:(\\d+)/)[1];"
-          s=s.replace(bad,good)
-          s=s.replace("fetch(base+`/api/cities/${city.id}/market`)", "fetch(base+'/api/cities/'+city.id+'/market')")
-          p.write_text(s)
+          lines=p.read_text().splitlines()
+          out=[]
+          for line in lines:
+              if "base=`http://127.0.0.1:" in line:
+                  indent=line[:len(line)-len(line.lstrip())]
+                  out.append(indent+"base='http://127.0.0.1:'+line.match(/:(\\d+)/)[1];")
+              elif "fetch(base+`/api/cities/" in line and "city.id" in line:
+                  line=line.replace("fetch(base+`/api/cities/${city.id}/market`)", "fetch(base+'/api/cities/'+city.id+'/market')")
+                  out.append(line)
+              else:
+                  out.append(line.replace("new Error(`server exited ${code}`)", "new Error('server exited '+code)"))
+          p.write_text('\n'.join(out)+'\n')
           PY
       - run: npm test
       - name: Commit generated P3-01 implementation
