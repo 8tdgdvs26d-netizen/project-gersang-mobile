@@ -9,9 +9,9 @@ export const CITY_DEFINITIONS=Object.freeze([
     id:'starter-village',
     name:'啟步城',
     region:'NT_WEST',
-    coordinates:Object.freeze({x:220,y:150}),
+    coordinates:Object.freeze({x:220,y:220}),
     entryRadius:48,
-    exitPoint:Object.freeze({x:220,y:222}),
+    exitPoint:Object.freeze({x:220,y:292}),
     facilities:Object.freeze(['MARKET','STORAGE']),
     theme:'starter'
   }),
@@ -19,9 +19,9 @@ export const CITY_DEFINITIONS=Object.freeze([
     id:'harbour-city',
     name:'商業城',
     region:'HK_ISLAND',
-    coordinates:Object.freeze({x:500,y:820}),
+    coordinates:Object.freeze({x:780,y:780}),
     entryRadius:48,
-    exitPoint:Object.freeze({x:500,y:748}),
+    exitPoint:Object.freeze({x:780,y:708}),
     facilities:Object.freeze(['MARKET','STORAGE']),
     theme:'harbour'
   }),
@@ -29,9 +29,9 @@ export const CITY_DEFINITIONS=Object.freeze([
     id:'hill-market',
     name:'開拓城',
     region:'NT_EAST',
-    coordinates:Object.freeze({x:780,y:150}),
+    coordinates:Object.freeze({x:780,y:220}),
     entryRadius:48,
-    exitPoint:Object.freeze({x:780,y:222}),
+    exitPoint:Object.freeze({x:780,y:292}),
     facilities:Object.freeze(['MARKET','STORAGE']),
     theme:'frontier'
   }),
@@ -39,9 +39,9 @@ export const CITY_DEFINITIONS=Object.freeze([
     id:'growth-city',
     name:'躍動城',
     region:'HK_ISLAND',
-    coordinates:Object.freeze({x:220,y:820}),
+    coordinates:Object.freeze({x:220,y:780}),
     entryRadius:48,
-    exitPoint:Object.freeze({x:220,y:748}),
+    exitPoint:Object.freeze({x:220,y:708}),
     // Phase 3 owns market/storage content. Keep the fourth city's economy closed until then.
     facilities:Object.freeze([]),
     theme:'growth'
