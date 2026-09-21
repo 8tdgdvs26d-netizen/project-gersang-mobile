@@ -31,6 +31,19 @@ jobs:
           p.write_text(s)
           PY
       - run: node scripts/p3-01-apply.mjs
+      - name: Repair generated market test harness
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('test/market-economy.test.mjs')
+          s=p.read_text()
+          s=s.replace("new Error(`server exited ${code}`)", "new Error('server exited '+code)")
+          bad="base=`http://127.0.0.1:${line.match(/:(d+)/)[1]}`;"
+          good="base='http://127.0.0.1:'+line.match(/:(\\d+)/)[1];"
+          s=s.replace(bad,good)
+          s=s.replace("fetch(base+`/api/cities/${city.id}/market`)", "fetch(base+'/api/cities/'+city.id+'/market')")
+          p.write_text(s)
+          PY
       - run: npm test
       - name: Commit generated P3-01 implementation
         run: |
