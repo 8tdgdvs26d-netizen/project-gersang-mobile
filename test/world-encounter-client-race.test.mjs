@@ -85,6 +85,51 @@ test('P4-02-N: ERR_BATTLE_ACTIVE alone (no encounterTriggered response ever rece
   assert.ok(/r\.data\?\.throttled/.test(gateBranch)&&/r\.data\?\.collided/.test(gateBranch),'telemetry recording in the resync branch must use optional chaining, since a REJECTED response has no .data');
 });
 
+// P4-02-O: older ordinary completion after battle resync. Closes the residual gap the Final Merge
+// Gate review found: the battle-already-active branch resynced the client correctly, but never
+// advanced the completion-order watermark itself — so an OLDER, ordinary (non-battle-signaled)
+// request C, still in flight when the encounter triggered and merely delayed in transit, could still
+// pass the `requestSequence<latestCompletedMovementSequence` discard below once its own (lower, but
+// possibly still above whatever the watermark happened to be) sequence number is compared against a
+// stale watermark — re-applying C's own pre-encounter worldPosition/predictionSuspended/catchUpDebt
+// over the already-resynced Battle presentation state. This test replicates the exact sequence of
+// completions the review described, using the real exported predicate plus the same discard
+// expression sendWorldMove itself uses (verified structurally below to still be the actual code).
+test('P4-02-O: an older ordinary completion arriving after a battle-signal response is discarded by the advanced completion watermark',()=>{
+  let latestCompletedMovementSequence=0;
+  const seqC=4,seqA=5,seqB=6; // C sent first (oldest, lowest sequence), then A, then B
+
+  // B (newer than C) completes first: bounces off battleIsActive() with ERR_BATTLE_ACTIVE. The fix's
+  // own watermark-advance line (Math.max, verified structurally below) is replicated here exactly.
+  assert.equal(battleAlreadyActiveFromMoveResponse(battleActiveRejectedResponse),true);
+  latestCompletedMovementSequence=Math.max(latestCompletedMovementSequence,seqB);
+  assert.equal(latestCompletedMovementSequence,6);
+
+  // A (the actual trigger, older than B but newer than C) completes second: also battle-signaled —
+  // the watermark must never regress (Math.max keeps it at 6, A's own seqA=5 is lower).
+  assert.equal(battleAlreadyActiveFromMoveResponse(encounterTriggeredResponse),true);
+  latestCompletedMovementSequence=Math.max(latestCompletedMovementSequence,seqA);
+  assert.equal(latestCompletedMovementSequence,6,'the watermark must never move backwards');
+
+  // C — the oldest, ordinary (non-battle-signaled) request — completes LAST, merely delayed in
+  // transit. It must never reach worldPosition/predictionSuspended/catchUpDebt mutation: the SAME
+  // discard check the rest of sendWorldMove already relies on must now correctly identify it as
+  // stale, because the watermark has advanced past it.
+  const responseC=Object.freeze({status:'ACCEPTED',data:{worldPosition:{x:300,y:220},state:'IN_WORLD',throttled:false,collided:false,staleSequence:false}});
+  assert.equal(battleAlreadyActiveFromMoveResponse(responseC),false,'C is an ordinary move, not itself battle-signaled — it must go through the normal discard path, not the resync branch');
+  const cIsDiscarded=seqC<latestCompletedMovementSequence; // the exact expression sendWorldMove uses
+  assert.equal(cIsDiscarded,true,'C must be discarded now — before this fix, an unadvanced watermark could have let it through');
+
+  // Structural proof: the watermark-advance line actually lives inside the battle-already-active
+  // branch (before its own `return`), uses Math.max (never regresses the watermark), and the
+  // completion-order discard expression below is still exactly what this test replicated above.
+  const gateIndex=appSource.indexOf('if(battleAlreadyActiveFromMoveResponse(r)){');
+  const discardIndex=appSource.indexOf('if(requestSequence<latestCompletedMovementSequence){');
+  const gateBranch=appSource.slice(gateIndex,discardIndex);
+  assert.ok(/latestCompletedMovementSequence=Math\.max\(latestCompletedMovementSequence,requestSequence\);/.test(gateBranch),'the battle-already-active branch must advance the watermark via Math.max before its own return');
+  assert.ok(gateBranch.indexOf('Math.max(latestCompletedMovementSequence,requestSequence)')<gateBranch.indexOf('return;'),'the watermark advance must happen before this branch returns');
+});
+
 // Regression guard (requirement #5/#7 of the Merge Gate fix): a genuinely ordinary REJECTED response
 // (not ERR_BATTLE_ACTIVE) must still fall through to the ORIGINAL, unmodified REJECTED handling —
 // still respecting `stale`, still toasting via describeWorldMoveError — completely untouched by this

@@ -372,7 +372,17 @@ const sendWorldMove=async(target)=>{
   // though the server has an ACTIVE battle the whole time. Also deliberately not gated on `stale`
   // (generation): the battle is real server-side either way, same rationale as encounterTriggered
   // already had before this fix.
+  //
+  // P4-02 Final Merge Gate fix — this branch must also advance the completion watermark itself
+  // (never move it backwards, hence Math.max): once ANY response has confirmed the server already
+  // has an ACTIVE battle, an older, ordinary ACCEPTED response for some earlier request C (still
+  // in flight when the encounter triggered, completing only now) must never be allowed to pass the
+  // completion-order discard below and re-apply its own stale worldPosition/predictionSuspended/
+  // catchUpDebt over the just-resynced Battle presentation state. Without this, that discard's
+  // `requestSequence<latestCompletedMovementSequence` check could still let C through if C's own
+  // sequence happens to be higher than whatever the watermark last was.
   if(battleAlreadyActiveFromMoveResponse(r)){
+    latestCompletedMovementSequence=Math.max(latestCompletedMovementSequence,requestSequence);
     predictionSuspended=true;
     await refresh();
     recordMoveTelemetry({status:r.status,errorCode:r.status==='REJECTED'?r.errorCode:null,throttled:r.data?.throttled??null,collided:r.data?.collided??null,startedAt});
