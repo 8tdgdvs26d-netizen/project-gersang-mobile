@@ -150,6 +150,47 @@ test('P4-02-H: retrying the same idempotencyKey and re-sending movement under a 
   assert.equal(encounterRows.length,1);
 });
 
+// P4-02-I: ACTIVE reload/reconnect stability. The real invariant the Coding Order requires here is
+// reload/reconnect stability WHILE the world-triggered battle is still ACTIVE and characters.state
+// is still IN_WORLD (e.g. a player force-quits mid-battle and reopens the app) — not merely stability
+// after a RETREATED battle. Deliberately runs BEFORE P4-02-K's retreat below, so every precondition
+// still holds at the top of this test: IN_WORLD, battle ACTIVE, monster already consumed exactly once.
+test('P4-02-I: repeated snapshot/battle reads are stable while the battle is still ACTIVE and state is still IN_WORLD — no re-trigger, stable battle id, no second battle, no second consumption row, position unchanged',async()=>{
+  const before=await request('/api/character/char-demo/snapshot');
+  assert.equal(before.state,'IN_WORLD');
+  const battleBefore=await request('/api/character/char-demo/battle');
+  assert.equal(battleBefore.status,'ACTIVE');
+  const battleId=battleBefore.id;
+
+  // Simulate the fresh reads a client reload/reconnect depends on — plain GETs, no commands.
+  const snap1=await request('/api/character/char-demo/snapshot');
+  const battle1=await request('/api/character/char-demo/battle');
+  const snap2=await request('/api/character/char-demo/snapshot');
+  const battle2=await request('/api/character/char-demo/battle');
+
+  assert.equal(snap1.state,'IN_WORLD');
+  assert.equal(snap2.state,'IN_WORLD');
+  assert.equal(battle1.status,'ACTIVE');
+  assert.equal(battle2.status,'ACTIVE');
+  assert.equal(battle1.id,battleId);
+  assert.equal(battle2.id,battleId);
+  assert.deepEqual(snap1.worldMonsters,snap2.worldMonsters);
+  assert.ok(!snap1.worldMonsters.some(m=>m.id==='world-bandit-1'));
+  assert.ok(!snap2.worldMonsters.some(m=>m.id==='world-bandit-1'));
+  assert.deepEqual(snap1.worldPosition,before.worldPosition);
+  assert.deepEqual(snap2.worldPosition,before.worldPosition);
+
+  const activeBattles=rawQuery(`SELECT id FROM battles WHERE character_id='char-demo' AND status='ACTIVE'`);
+  assert.equal(activeBattles.length,1);
+  assert.equal(activeBattles[0].id,battleId);
+  const encounterRows=rawQuery(`SELECT * FROM world_monster_encounters WHERE character_id='char-demo' AND monster_id='world-bandit-1'`);
+  assert.equal(encounterRows.length,1);
+  assert.equal(encounterRows[0].battle_id,battleId);
+
+  const after=await request('/api/character/char-demo/snapshot');
+  assert.deepEqual(after.worldPosition,before.worldPosition);
+});
+
 // P4-02-K: battle end unlock. Retreating from the triggered battle ends it; once there is no
 // longer an ACTIVE battle (and no pending loot settlement, which retreat never creates), world
 // movement must become acceptable again via the existing, unmodified battle-lifecycle machinery.
@@ -163,21 +204,6 @@ test('P4-02-K: retreating from the triggered battle unlocks world movement again
   const moved=await post('/api/commands/world/move',envelope('move-after-retreat',{targetX:before.worldPosition.x+30,targetY:before.worldPosition.y}));
   assert.equal(moved.status,'ACCEPTED');
   assert.notDeepEqual(moved.data.worldPosition,before.worldPosition);
-  const activeBattles=rawQuery(`SELECT id FROM battles WHERE character_id='char-demo' AND status='ACTIVE'`);
-  assert.equal(activeBattles.length,0);
-});
-
-// P4-02-I: snapshot/reload. Repeated GETs never re-trigger anything (GET performs no movement),
-// the battle id stays the same across reloads, and the consumed monster stays absent.
-test('P4-02-I: repeated snapshot/battle reads are stable across reload — no re-trigger, stable battle id, monster stays consumed',async()=>{
-  const battleBefore=await request('/api/character/char-demo/battle');
-  const snap1=await request('/api/character/char-demo/snapshot');
-  const snap2=await request('/api/character/char-demo/snapshot');
-  const battleAfter=await request('/api/character/char-demo/battle');
-  assert.equal(battleBefore.id,battleAfter.id);
-  assert.deepEqual(snap1.worldMonsters,snap2.worldMonsters);
-  assert.ok(!snap1.worldMonsters.some(m=>m.id==='world-bandit-1'));
-  assert.ok(!snap2.worldMonsters.some(m=>m.id==='world-bandit-1'));
   const activeBattles=rawQuery(`SELECT id FROM battles WHERE character_id='char-demo' AND status='ACTIVE'`);
   assert.equal(activeBattles.length,0);
 });
