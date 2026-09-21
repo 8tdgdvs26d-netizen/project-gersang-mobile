@@ -1,0 +1,28 @@
+name: p3-03-apply
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gpt/p3-03-cargo-capacity-60
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply P3-03 approved changes
+        run: node scripts/p3-03-apply.mjs
+      - name: Remove temporary helper files
+        run: rm scripts/p3-03-apply.mjs .github/workflows/p3-03-apply.yml
+      - name: Run full test suite
+        run: npm test
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat: P3-03 cargo capacity 60 prototype adjustment'
+          git push origin HEAD:gpt/p3-03-cargo-capacity-60
