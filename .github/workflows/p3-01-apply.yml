@@ -16,6 +16,15 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Fix helper template escaping
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/p3-01-apply.mjs')
+          s=p.read_text()
+          s=s.replace(r'\\${name}', r'\${name}').replace(r'\\${type}', r'\${type}')
+          p.write_text(s)
+          PY
       - run: node scripts/p3-01-apply.mjs
       - run: npm test
       - name: Commit generated P3-01 implementation
