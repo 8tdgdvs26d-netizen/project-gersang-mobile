@@ -8,6 +8,14 @@ if(!server.includes(oldSeed))throw new Error('expected P3-03 seed target not fou
 server=server.replace(oldSeed,newSeed);
 writeFileSync(serverPath,server);
 
+const economyPath='test/market-economy.test.mjs';
+let economy=readFileSync(economyPath,'utf8');
+const oldPartial="const q=await post('/api/commands/market/quote',{goodTypeId:'iron',side:'BUY',requestedQuantity:20});assert.equal(q.fillQuantity,6);";
+const newPartial="const q=await post('/api/commands/market/quote',{goodTypeId:'iron',side:'BUY',requestedQuantity:25});assert.equal(q.fillQuantity,20);";
+if(!economy.includes(oldPartial))throw new Error('expected cargo partial-fill regression target not found');
+economy=economy.replace(oldPartial,newPartial);
+writeFileSync(economyPath,economy);
+
 mkdirSync('test',{recursive:true});
 writeFileSync('test/cargo-capacity-60.test.mjs',`import test from 'node:test';
 import assert from 'node:assert/strict';
