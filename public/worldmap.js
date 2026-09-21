@@ -118,7 +118,7 @@ function travelStatusHtml(state){
   const t=state.snap.activeTravel;
   if(state.snap.state==='TRAVELING'&&t){
     const a=new Date(t.startedAt).getTime(),e=new Date(t.estimatedArrivalAt).getTime(),p=Math.max(0,Math.min(1,(Date.now()-a)/(e-a)));
-    return `<div class="map-travel-status"><p>🚌 巴士：${cityDisplayName(state.cities,t.fromCityId)} → ${cityDisplayName(state.cities,t.toCityId)}</p><div class="track"><div id="travel-fill" class="fill" data-start="${a}" data-end="${e}" style="width:${p*100}%"></div></div><div class="travel-progress"><span id="travel-progress-pct">${Math.round(p*100)}%</span><span>ETA ${new Date(t.estimatedArrivalAt).toLocaleTimeString()}</span></div><button class="btn" id="arrive">檢查到埗</button><div class="small">車費已支付；行程中不可自由移動或改道。</div></div>`;
+    return `<div class="map-travel-status"><p>🚌 巴士：${cityDisplayName(state.cities,t.fromCityId)} → ${cityDisplayName(state.cities,t.toCityId)}</p><div class="track"><div id="travel-fill" class="fill" data-start="${a}" data-end="${e}" style="width:${p*100}%"></div></div><div class="travel-progress"><span id="travel-progress-pct">${Math.round(p*100)}%</span><span>預計到埗 ${new Date(t.estimatedArrivalAt).toLocaleTimeString()}</span></div><button class="btn" id="arrive">檢查到埗</button><div class="small">車費已支付；行程中不可自由移動或改道。</div></div>`;
   }
   // P2-07 City Hub Navigation: IN_CITY no longer shows the World Map by default (Hub does — see
   // shouldShowCityHubOnStateChange), so this branch is now reached only via the explicit "查看地圖"
@@ -126,7 +126,7 @@ function travelStatusHtml(state){
   // read-only look at the map, not an unfinished entry.
   if(state.snap.state==='IN_CITY'){
     const city=state.cities.find(c=>c.id===state.snap.cityId);
-    return `<div class="map-travel-status"><p>${city?.name||state.snap.cityId} · 地圖查看中</p><button class="btn" data-back-hub="1">返回City Hub</button></div>`;
+    return `<div class="map-travel-status"><p>${city?.name||state.snap.cityId} · 地圖查看中</p><button class="btn" data-back-hub="1">返回城市中心</button></div>`;
   }
   // P2-07 Decision 2 — the separate "已抵達：XX城 / 進入XX城" control is intentionally removed.
   // The city marker itself (yellow circle + name, see renderWorldMapHtml's [data-city] node) is now
@@ -216,7 +216,7 @@ export function renderWorldMapHtml(state){
   // P1-07 Root Cause Measurement Test — 7 more static placeholder ids, appended after the P1-07C
   // ones, patched by the same tickMovementFrame/patchTelemetryOverlay pattern above. Purely
   // additive: nothing existing above is reordered or removed.
-  const telemetryOverlay=`<div class="telemetry-overlay" id="telemetry-overlay" aria-hidden="true"><div>FPS <span id="telemetry-fps">…</span></div><div>RTT <span id="telemetry-rtt">…</span></div><div>Gap <span id="telemetry-gap">…</span></div><div>Lead <span id="telemetry-lead">…</span></div><div>Flight <span id="telemetry-inflight">…</span></div><div>Throttled <span id="telemetry-throttled">…</span></div><div>Collided <span id="telemetry-collided">…</span></div><div>Suspend <span id="telemetry-suspended">…</span></div><div>Status <span id="telemetry-status">…</span></div><div>Err <span id="telemetry-errorcode">…</span></div><div>LeadCap <span id="telemetry-leadcaphit">…</span></div><div>Frozen <span id="telemetry-capfrozen">…</span></div><div>FrozenCur <span id="telemetry-frozen-current">…</span></div><div>FrozenTot <span id="telemetry-frozen-total">…</span></div><div>FrozenPct <span id="telemetry-frozen-ratio">…</span></div><div>Correction <span id="telemetry-correction">…</span></div><div>HardResets <span id="telemetry-hardresets">…</span></div></div>`;
+  const telemetryOverlay=`<div class="telemetry-overlay" id="telemetry-overlay" aria-hidden="true"><div>幀率 <span id="telemetry-fps">…</span></div><div>延遲 <span id="telemetry-rtt">…</span></div><div>回應間隔 <span id="telemetry-gap">…</span></div><div>預測超前 <span id="telemetry-lead">…</span></div><div>請求中 <span id="telemetry-inflight">…</span></div><div>限速 <span id="telemetry-throttled">…</span></div><div>碰撞 <span id="telemetry-collided">…</span></div><div>暫停預測 <span id="telemetry-suspended">…</span></div><div>狀態 <span id="telemetry-status">…</span></div><div>錯誤 <span id="telemetry-errorcode">…</span></div><div>超前上限 <span id="telemetry-leadcaphit">…</span></div><div>凍結 <span id="telemetry-capfrozen">…</span></div><div>本次凍結 <span id="telemetry-frozen-current">…</span></div><div>累計凍結 <span id="telemetry-frozen-total">…</span></div><div>凍結比例 <span id="telemetry-frozen-ratio">…</span></div><div>修正量 <span id="telemetry-correction">…</span></div><div>強制重置 <span id="telemetry-hardresets">…</span></div></div>`;
   return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${obstacles}${nodes}${hero}</svg>${mapViewToggle}${joystick}${telemetryOverlay}</div>${travelStatusHtml(state)}</section>`;
 }
 

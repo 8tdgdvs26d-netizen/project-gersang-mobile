@@ -621,12 +621,12 @@ test('requirement 9/13: while IN_CITY, renderWorldMapHtml no longer renders the 
   assert.ok(!html.includes('進入城市'),'no copy anywhere should still imply the player needs to "enter" a city they are already inside');
 });
 
-test('requirement 11: while IN_CITY, the World Map inspection screen offers a 返回City Hub control (data-back-hub) — the same client-only mechanism Market/Storage/Bus already use to return to Hub',()=>{
+test('requirement 11: while IN_CITY, the World Map inspection screen offers a 返回城市中心 control (data-back-hub) — the same client-only mechanism Market/Storage/Bus already use to return to Hub',()=>{
   const cities=[{id:'starter-village',name:'新手村',coordinates:{x:220,y:150}}];
   const snap={state:'IN_CITY',cityId:'starter-village',worldPosition:{x:220,y:150}};
   const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
   assert.ok(html.includes('data-back-hub="1"'));
-  assert.ok(html.includes('返回City Hub'));
+  assert.ok(html.includes('返回城市中心'));
   assert.ok(html.includes('新手村'),'the inspection screen may show the current city name for context');
 });
 
