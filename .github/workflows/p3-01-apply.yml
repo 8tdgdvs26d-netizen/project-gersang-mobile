@@ -23,6 +23,11 @@ jobs:
           p=Path('scripts/p3-01-apply.mjs')
           s=p.read_text()
           s=s.replace(r'\\${name}', r'\${name}').replace(r'\\${type}', r'\${type}')
+          start=s.index("const testFile=`")
+          end=s.index("`;\nmkdirSync('test'", start)
+          segment=s[start:end]
+          segment=segment.replace('${', r'\${')
+          s=s[:start]+segment+s[end:]
           p.write_text(s)
           PY
       - run: node scripts/p3-01-apply.mjs
