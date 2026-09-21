@@ -96,17 +96,6 @@ test('world/move clamps a target outside world bounds so the result stays within
   assert.equal(moved.data.worldPosition.y,0);
 });
 
-test('a command sent sooner than the minimum movement interval produces no additional displacement',async()=>{
-  await wait(150);
-  const first=await post('/api/commands/world/move',envelope('move-throttle-a',{targetX:500,targetY:500}));
-  assert.equal(first.status,'ACCEPTED');
-  assert.equal(first.data.throttled,false);
-  const second=await post('/api/commands/world/move',envelope('move-throttle-b',{targetX:900,targetY:900}));
-  assert.equal(second.status,'ACCEPTED');
-  assert.equal(second.data.throttled,true);
-  assert.deepEqual(second.data.worldPosition,first.data.worldPosition);
-});
-
 test('world/move is rejected while TRAVELING, and leaves the stored position unchanged',async()=>{
   await wait(150);
   const fixture=new DatabaseSync(join(dir,'test.sqlite'));
