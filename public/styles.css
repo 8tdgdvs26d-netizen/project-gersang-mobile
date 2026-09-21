@@ -38,5 +38,6 @@
 .map-obstacle{fill:#5a3a2a;stroke:#2a1a10;stroke-width:2}
 .map-city circle{fill:#e5d1a6;stroke:#18130c;stroke-width:3}.map-city text{fill:#f4efe4;font-size:22px;text-anchor:middle}.map-city{cursor:pointer}
 .hero-marker{fill:#4fc3ff;stroke:#0d1117;stroke-width:4}
+.map-monster circle{fill:#c0392b;stroke:#18130c;stroke-width:3}.map-monster text{fill:#f4efe4;font-size:16px;text-anchor:middle}
 .map-travel-status{margin-top:12px;padding-top:10px;border-top:1px solid #242c35}.map-travel-status p{margin:0 0 8px;font-weight:700}
 .hub-card{text-align:center}.hub-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}.hub-tile{padding:18px 8px;border:1px solid #48535f;border-radius:13px;background:#1b242d;color:#f4efe4;font-weight:700}.hub-tile small{display:block;margin-top:4px;font-weight:400;opacity:.6}.hub-tile.hub-disabled{opacity:.5}.hub-tile.hub-leave{grid-column:1/-1;background:#2a3541}

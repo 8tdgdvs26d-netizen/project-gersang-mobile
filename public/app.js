@@ -374,7 +374,14 @@ const sendWorldMove=async(target)=>{
                                                                          // stale or not (P1-07D v4.1)
   if(r.data.collided&&!stale)toast('撞到障礙物'); // a stale collision toast would describe a
                                                     // direction the player has already left
-  if(!stale){
+  if(r.data.encounterTriggered){
+    // P4-02 — a world monster encounter really did start a battle server-side regardless of this
+    // generation's staleness (the battle row exists either way); movement must stop immediately and
+    // the client must reuse the EXISTING refresh() auto-tab-switch (battle?.status==='ACTIVE') rather
+    // than reconstructing battle state locally from this response.
+    predictionSuspended=true;
+    await refresh();
+  }else if(!stale){
     predictionSuspended=shouldSuspendAfterAccepted(r.data);
     if(!predictionSuspended)catchUpDebt=catchUpDebtAfterGrant(predictedPosition,r.data.worldPosition,joystickInput.active?joystickInput:null);
     // stale: predictionSuspended and catchUpDebt are both left completely untouched by this response

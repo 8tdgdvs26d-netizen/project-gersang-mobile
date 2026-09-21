@@ -201,6 +201,12 @@ export function renderWorldMapHtml(state){
   const roads=roadsSvg(state.cities,state.roads);
   const obstacles=OBSTACLES.map(o=>`<rect class="map-obstacle" data-obstacle="${o.id}" x="${o.minX}" y="${o.minY}" width="${o.maxX-o.minX}" height="${o.maxY-o.minY}"></rect>`).join('');
   const nodes=state.cities.map(c=>`<g class="map-city" data-city="${c.id}"><circle cx="${c.coordinates.x}" cy="${c.coordinates.y}" r="26"></circle><text x="${c.coordinates.x}" y="${c.coordinates.y+44}">${c.name}</text></g>`).join('');
+  // P4-02 — minimal world monster marker, mirroring the existing [data-city] node pattern. Sourced
+  // only from state.snap.worldMonsters (the server's own already-filtered "still available" list):
+  // a consumed monster simply stops appearing on the next snapshot refresh, never a client-local
+  // removal. Prototype-level art per the approved P4-02 Coding Order — no animation, no aggro range
+  // visualisation.
+  const monsters=(state.snap.worldMonsters||[]).map(m=>`<g class="map-monster" data-monster="${m.id}"><circle cx="${m.position.x}" cy="${m.position.y}" r="18"></circle><text x="${m.position.x}" y="${m.position.y+34}">${m.displayName}</text></g>`).join('');
   const hero=heroPosition?`<circle class="hero-marker" cx="${heroPosition.x}" cy="${heroPosition.y}" r="14"></circle>`:'';
   // Follow View / Full Map toggle (P1-07A) — client-only presentation state, never sent to the server.
   const mapViewToggle=`<button class="btn map-view-toggle" id="map-view-toggle" type="button">${mapView==='follow'?'🗺️ 全圖':'📍 跟隨'}</button>`;
@@ -217,7 +223,7 @@ export function renderWorldMapHtml(state){
   // ones, patched by the same tickMovementFrame/patchTelemetryOverlay pattern above. Purely
   // additive: nothing existing above is reordered or removed.
   const telemetryOverlay=`<div class="telemetry-overlay" id="telemetry-overlay" aria-hidden="true"><div>幀率 <span id="telemetry-fps">…</span></div><div>延遲 <span id="telemetry-rtt">…</span></div><div>回應間隔 <span id="telemetry-gap">…</span></div><div>預測超前 <span id="telemetry-lead">…</span></div><div>請求中 <span id="telemetry-inflight">…</span></div><div>限速 <span id="telemetry-throttled">…</span></div><div>碰撞 <span id="telemetry-collided">…</span></div><div>暫停預測 <span id="telemetry-suspended">…</span></div><div>狀態 <span id="telemetry-status">…</span></div><div>錯誤 <span id="telemetry-errorcode">…</span></div><div>超前上限 <span id="telemetry-leadcaphit">…</span></div><div>凍結 <span id="telemetry-capfrozen">…</span></div><div>本次凍結 <span id="telemetry-frozen-current">…</span></div><div>累計凍結 <span id="telemetry-frozen-total">…</span></div><div>凍結比例 <span id="telemetry-frozen-ratio">…</span></div><div>修正量 <span id="telemetry-correction">…</span></div><div>強制重置 <span id="telemetry-hardresets">…</span></div></div>`;
-  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${obstacles}${nodes}${hero}</svg>${mapViewToggle}${joystick}${telemetryOverlay}</div>${travelStatusHtml(state)}</section>`;
+  return `<section class="card map-card"><b>世界地圖</b><div class="map-scroll"><svg class="world-map" viewBox="${viewBoxAttr(camera)}" preserveAspectRatio="xMidYMid meet">${zones}${roads}${obstacles}${nodes}${monsters}${hero}</svg>${mapViewToggle}${joystick}${telemetryOverlay}</div>${travelStatusHtml(state)}</section>`;
 }
 
 export function renderCityHubHtml(state){
