@@ -59,41 +59,43 @@ fs.writeFileSync(mapPath, map);
 
 for (const file of fs.readdirSync('test').filter(x => x.endsWith('.test.mjs'))) {
   const p = path.join('test', file);
-  let text = fs.readFileSync(p, 'utf8');
+  const text = fs.readFileSync(p, 'utf8');
   const next = text.replaceAll('返回City Hub', '返回城市中心');
   if (next !== text) fs.writeFileSync(p, next);
 }
 
-const test = `import test from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
-
-const app=fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
-const map=fs.readFileSync(new URL('../public/worldmap.js',import.meta.url),'utf8');
-
-test('P3-03 player-facing market and state labels use Chinese instead of internal codes',()=>{
-  assert.match(app,/戰鬥原型 版本 0\\.32\\.0/);
-  assert.match(app,/IN_CITY:'城內'/);
-  assert.match(app,/IN_WORLD:'城外'/);
-  assert.match(app,/TRAVELING:'旅途中'/);
-  assert.match(app,/買價 \\${m\\.buyPrice} · 庫存 \\${m\\.stock}/);
-  assert.doesNotMatch(app,/Stock \\${m\\.stock}/);
-  assert.doesNotMatch(app,/· v\\${m\\.version}/);
-  assert.doesNotMatch(app,/由 Server 再檢查/);
-  assert.doesNotMatch(app,/返回City Hub/);
-});
-
-test('P3-03 cargo shows Chinese good names while stable IDs stay internal',()=>{
-  assert.match(app,/goodNameFor\\(x\\.goodTypeId\\)}/);
-  assert.doesNotMatch(app,/<div>\\${x\\.goodTypeId} × \\${x\\.quantity}<\\/div>/);
-});
-
-test('P3-03 map/travel diagnostic labels shown to the player are Chinese',()=>{
-  assert.match(map,/預計到埗/);
-  assert.match(map,/返回城市中心/);
-  for(const label of ['幀率','延遲','回應間隔','預測超前','請求中','限速','碰撞','暫停預測','狀態','錯誤','超前上限','凍結','本次凍結','累計凍結','凍結比例','修正量','強制重置']) assert.match(map,new RegExp(label));
-  assert.doesNotMatch(map,/返回City Hub/);
-  assert.doesNotMatch(map,/>ETA /);
-});
-`;
-fs.writeFileSync('test/ui-chinese-cleanup.test.mjs', test);
+const testLines = [
+  "import test from 'node:test';",
+  "import assert from 'node:assert/strict';",
+  "import fs from 'node:fs';",
+  '',
+  "const app=fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8');",
+  "const map=fs.readFileSync(new URL('../public/worldmap.js',import.meta.url),'utf8');",
+  '',
+  "test('P3-03 player-facing market and state labels use Chinese instead of internal codes',()=>{",
+  "  assert.ok(app.includes('戰鬥原型 版本 0.32.0'));",
+  "  assert.ok(app.includes(\"IN_CITY:'城內'\"));",
+  "  assert.ok(app.includes(\"IN_WORLD:'城外'\"));",
+  "  assert.ok(app.includes(\"TRAVELING:'旅途中'\"));",
+  "  assert.ok(app.includes('買價 ${m.buyPrice} · 庫存 ${m.stock}'));",
+  "  assert.ok(!app.includes('Stock ${m.stock}'));",
+  "  assert.ok(!app.includes('· v${m.version}'));",
+  "  assert.ok(!app.includes('由 Server 再檢查'));",
+  "  assert.ok(!app.includes('返回City Hub'));",
+  "});",
+  '',
+  "test('P3-03 cargo shows Chinese good names while stable IDs stay internal',()=>{",
+  "  assert.ok(app.includes('goodNameFor(x.goodTypeId)'));",
+  "  assert.ok(!app.includes('<div>${x.goodTypeId} × ${x.quantity}</div>'));",
+  "});",
+  '',
+  "test('P3-03 map/travel diagnostic labels shown to the player are Chinese',()=>{",
+  "  assert.ok(map.includes('預計到埗'));",
+  "  assert.ok(map.includes('返回城市中心'));",
+  "  for(const label of ['幀率','延遲','回應間隔','預測超前','請求中','限速','碰撞','暫停預測','狀態','錯誤','超前上限','凍結','本次凍結','累計凍結','凍結比例','修正量','強制重置']) assert.ok(map.includes(label));",
+  "  assert.ok(!map.includes('返回City Hub'));",
+  "  assert.ok(!map.includes('>ETA '));",
+  "});",
+  ''
+];
+fs.writeFileSync('test/ui-chinese-cleanup.test.mjs', testLines.join('\n'));
