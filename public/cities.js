@@ -42,8 +42,8 @@ export const CITY_DEFINITIONS=Object.freeze([
     coordinates:Object.freeze({x:220,y:780}),
     entryRadius:48,
     exitPoint:Object.freeze({x:220,y:708}),
-    // Phase 3 owns market/storage content. Keep the fourth city's economy closed until then.
-    facilities:Object.freeze([]),
+    // Phase 3 P3-01 opens the fourth city's economy for the six-good trading slice.
+    facilities:Object.freeze(['MARKET','STORAGE']),
     theme:'growth'
   })
 ]);

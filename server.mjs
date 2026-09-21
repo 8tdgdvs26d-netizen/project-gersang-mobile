@@ -8,6 +8,7 @@ import { WORLD_BOUNDS, PLAYER_COLLISION_RADIUS, OBSTACLES, inflateRect, segmentI
 import { MOVE_SPEED_RATE, MOVE_CATCHUP_CAP_MS } from "./public/movement.js";
 import { CITY_DEFINITIONS, isWithinCityEntry } from "./public/cities.js";
 import { busQuote } from "./public/bus.js";
+import { GOOD_DEFINITIONS, MARKET_SEED } from "./public/goods.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
@@ -67,6 +68,10 @@ if(!db.prepare(`PRAGMA table_info(equipment_inventory)`).all().some(x=>x.name===
 db.prepare(`UPDATE equipment_inventory SET owner_unit_id=COALESCE(equipped_unit_id,'hero') WHERE owner_unit_id IS NULL AND storage_city_id IS NULL`).run();
 if(!db.prepare(`PRAGMA table_info(characters)`).all().some(x=>x.name==='world_x'))db.exec(`ALTER TABLE characters ADD COLUMN world_x REAL`);
 if(!db.prepare(`PRAGMA table_info(characters)`).all().some(x=>x.name==='world_y'))db.exec(`ALTER TABLE characters ADD COLUMN world_y REAL`);
+// P3-01 additive market migration. Existing saves keep their rows and current prices/stock.
+const marketColumns=()=>db.prepare(`PRAGMA table_info(market)`).all().map(x=>x.name);
+for(const [name,type] of [['base_price','INTEGER'],['target_stock','INTEGER'],['restock_rate','INTEGER'],['last_tick_at','INTEGER']]){if(!marketColumns().includes(name))db.exec(`ALTER TABLE market ADD COLUMN ${name} ${type}`)}
+db.prepare(`UPDATE market SET base_price=COALESCE(base_price,ref_price),target_stock=COALESCE(target_stock,stock),restock_rate=COALESCE(restock_rate,5),last_tick_at=COALESCE(last_tick_at,?)`).run(Date.now());
 
 const cities=CITY_DEFINITIONS;
 
@@ -74,12 +79,9 @@ function seed(){
   db.prepare(`INSERT OR IGNORE INTO accounts(id) VALUES('account-demo')`).run();
   const startCity=cities.find(c=>c.id==='starter-village');
   db.prepare(`INSERT OR IGNORE INTO characters(id,account_id,city_id,state,wallet,cargo_capacity,world_x,world_y) VALUES('char-demo','account-demo','starter-village','IN_CITY',1000,20,?,?)`).run(startCity.coordinates.x,startCity.coordinates.y);
-  const markets=[
-    ['starter-village','rice',100,10,2,1],['starter-village','tea',100,14,3,1],
-    ['harbour-city','rice',100,18,2,1],['harbour-city','tea',100,9,2,1],
-    ['hill-market','rice',100,13,2,1],['hill-market','tea',100,20,3,1]
-  ];
-  const m=db.prepare(`INSERT OR IGNORE INTO market VALUES(?,?,?,?,?,?)`); for(const r of markets)m.run(...r);
+  const m=db.prepare(`INSERT OR IGNORE INTO market(city_id,good_id,stock,ref_price,spread,version,base_price,target_stock,restock_rate,last_tick_at) VALUES(?,?,?,?,?,1,?,?,?,?)`);
+  const seededAt=Date.now();
+  for(const r of MARKET_SEED)m.run(r.cityId,r.goodTypeId,r.stock,r.basePrice,r.spread,r.basePrice,r.targetStock,r.restockRate,seededAt);
   const roads=[
     ['ab','starter-village','harbour-city',8000],['ba','harbour-city','starter-village',8000],
     ['bc','harbour-city','hill-market',10000],['cb','hill-market','harbour-city',10000],
@@ -90,7 +92,7 @@ function seed(){
 }
 seed();
 
-const cargoUnits={rice:1,tea:1,cloth:2,iron:3,timber:4};
+const cargoUnits=Object.fromEntries(GOOD_DEFINITIONS.map(g=>[g.id,g.cargoUnits]));
 const h=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const reply=(res,status,body)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(body));};
 const readBody=req=>new Promise((resolve,reject)=>{let s='';req.on('data',c=>s+=c);req.on('end',()=>{try{resolve(s?JSON.parse(s):{})}catch(e){reject(e)}});req.on('error',reject)});
@@ -135,8 +137,19 @@ function snapshot(){
   // journey for an ongoing one.
   return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,worldPosition,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t&&t.status==='TRAVELING'?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),segments:normalizedSegments(t),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null};
 }
-function marketRow(city,good){return db.prepare(`SELECT * FROM market WHERE city_id=? AND good_id=?`).get(city,good)}
-function market(city){return db.prepare(`SELECT * FROM market WHERE city_id=? ORDER BY good_id`).all(city).map(m=>({cityId:m.city_id,goodTypeId:m.good_id,stock:m.stock,referencePrice:m.ref_price,baseSpread:m.spread,version:m.version,buyPrice:m.ref_price+m.spread,sellPrice:Math.max(1,m.ref_price-m.spread)}))}
+const MARKET_TICK_MS=30000;
+function applyMarketTick(city){
+  const now=Date.now(),rows=db.prepare(`SELECT * FROM market WHERE city_id=?`).all(city);
+  for(const row of rows){
+    const last=row.last_tick_at??now,steps=Math.floor((now-last)/MARKET_TICK_MS);if(steps<=0)continue;
+    const target=row.target_stock??row.stock,rate=row.restock_rate??0,stock=Math.min(target,row.stock+steps*rate),base=row.base_price??row.ref_price;
+    const delta=base-row.ref_price,ref=delta===0?row.ref_price:row.ref_price+Math.sign(delta)*Math.min(Math.abs(delta),steps),nextTick=last+steps*MARKET_TICK_MS;
+    const changed=stock!==row.stock||ref!==row.ref_price;
+    db.prepare(`UPDATE market SET stock=?,ref_price=?,version=version+?,last_tick_at=? WHERE city_id=? AND good_id=?`).run(stock,ref,changed?1:0,nextTick,row.city_id,row.good_id);
+  }
+}
+function marketRow(city,good){applyMarketTick(city);return db.prepare(`SELECT * FROM market WHERE city_id=? AND good_id=?`).get(city,good)}
+function market(city){applyMarketTick(city);return db.prepare(`SELECT * FROM market WHERE city_id=? ORDER BY good_id`).all(city).map(m=>({cityId:m.city_id,goodTypeId:m.good_id,stock:m.stock,referencePrice:m.ref_price,basePrice:m.base_price,baseSpread:m.spread,targetStock:m.target_stock,restockRate:m.restock_rate,version:m.version,buyPrice:m.ref_price+m.spread,sellPrice:Math.max(1,m.ref_price-m.spread)}))}
 function cargoQty(g){return db.prepare(`SELECT quantity FROM cargo WHERE character_id='char-demo' AND good_id=?`).get(g)?.quantity??0}
 function storage(city){return db.prepare(`SELECT good_id,quantity FROM storage WHERE character_id='char-demo' AND city_id=? AND quantity>0 ORDER BY good_id`).all(city).map(x=>({goodTypeId:x.good_id,quantity:x.quantity}))}
 function allStorage(){return cities.map(city=>({cityId:city.id,goods:storage(city.id)}))}
@@ -423,7 +436,7 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
-  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.32.0',phase:'Phase 2 Four-City Entry & Bus Transport'});
+  if(req.method==='GET'&&u.pathname==='/api/health')return reply(res,200,{ok:true,version:'0.32.0',phase:'Phase 3 Six-Goods Economy Foundation'});
   if(req.method==='GET'&&u.pathname==='/api/battle/encounters')return reply(res,200,encounterSummaries());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/roster')return reply(res,200,rosterSnapshot());
   if(req.method==='GET'&&u.pathname==='/api/character/char-demo/equipment')return reply(res,200,equipmentSnapshot());
