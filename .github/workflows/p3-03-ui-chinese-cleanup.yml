@@ -1,0 +1,31 @@
+name: p3-03-ui-chinese-cleanup
+on:
+  push:
+    branches:
+      - gpt/p3-03-ui-chinese-cleanup
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: gpt/p3-03-ui-chinese-cleanup
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply approved Chinese UI cleanup
+        run: node scripts/p3-03-ui-chinese-cleanup.mjs
+      - name: Remove temporary applicator
+        run: rm scripts/p3-03-ui-chinese-cleanup.mjs .github/workflows/p3-03-ui-chinese-cleanup.yml
+      - name: Run full test suite
+        run: npm test
+      - name: Commit verified implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: localize player-facing UI labels to Chinese'
+          git push origin HEAD:gpt/p3-03-ui-chinese-cleanup
