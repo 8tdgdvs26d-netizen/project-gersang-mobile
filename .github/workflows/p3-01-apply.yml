@@ -1,0 +1,28 @@
+name: p3-01-apply
+on:
+  push:
+    branches:
+      - gpt/p3-01-six-goods-economy-foundation
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/p3-01-apply.mjs
+      - run: npm test
+      - name: Commit generated P3-01 implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat: add P3-01 six-goods economy foundation"
+          git push
