@@ -172,34 +172,43 @@ test('world/move rejects a non-numeric or missing target payload without crashin
 // P1-07D — Latency-Decoupled Movement (Issue #23). Simulates a sustained single-in-flight hold at a
 // fixed request cadence (standing in for round-trip time, since asyncqueue.js's single-in-flight
 // coalescing means "how often a request actually lands" is effectively bound by RTT) and proves the
-// server grants close to the full cadence-proportional allowance each cycle — the steady-state
+// server grants close to the full elapsed-time-proportional allowance each cycle — the steady-state
 // throughput this whole feature exists to decouple from a flat per-call cap.
 for(const cadenceMs of [400,500,700]){
-  test(`world/move sustains catch-up at a ${cadenceMs}ms request cadence: each cycle's grant is close to MOVE_SPEED_RATE*cadence, not clipped to a flat per-call cap`,async()=>{
+  test(`world/move sustains catch-up at a ${cadenceMs}ms request cadence: each cycle's grant tracks the server's real elapsed-time allowance, not a nominal timer delay`,async()=>{
     setPosition(100,500,'IN_WORLD'); // plenty of rightward room (900px) within WORLD_BOUNDS for
                                        // every cycle's grant, and a clean slate independent of
                                        // whatever earlier tests left lastWorldMoveAt/position at
     await wait(150);
-    // Anchor move: establishes a clean lastWorldMoveAt "now" so the FIRST cadence cycle's elapsed
-    // time is exactly one cadence wait, not inflated by this test's own setup waits.
+    // The server bases allowance on its own Date.now() at request handling time. setTimeout(cadenceMs)
+    // is only a minimum delay: under CI scheduler load it can wake late. Bound each server timestamp
+    // between the local request-send and response-complete timestamps instead of pretending the
+    // requested timeout duration is the actual elapsed wall-clock time.
+    let previousSentAt=Date.now();
     const anchor=await post('/api/commands/world/move',envelope(`move-cadence-${cadenceMs}-anchor`,{targetX:100,targetY:500}));
+    let previousCompletedAt=Date.now();
     assert.equal(anchor.status,'ACCEPTED');
     let position=anchor.data.worldPosition;
-    let totalDistance=0;
     const cycles=3;
     for(let i=0;i<cycles;i++){
       await wait(cadenceMs);
+      const sentAt=Date.now();
       const moved=await post('/api/commands/world/move',envelope(`move-cadence-${cadenceMs}-${i}`,{targetX:position.x+99999,targetY:position.y}));
+      const completedAt=Date.now();
       assert.equal(moved.status,'ACCEPTED');
+      assert.equal(moved.data.throttled,false);
       const distance=Math.hypot(moved.data.worldPosition.x-position.x,moved.data.worldPosition.y-position.y);
-      totalDistance+=distance;
+      const minElapsed=Math.max(0,sentAt-previousCompletedAt);
+      const maxElapsed=Math.max(0,completedAt-previousSentAt);
+      const minExpected=MOVE_SPEED_RATE*Math.min(minElapsed,MOVE_CATCHUP_CAP_MS);
+      const maxExpected=MOVE_SPEED_RATE*Math.min(maxElapsed,MOVE_CATCHUP_CAP_MS);
+      const epsilon=0.001;
+      assert.ok(distance+epsilon>=minExpected,`expected displacement ${distance} to be >= measured lower allowance ${minExpected} (elapsed >= ${minElapsed}ms)`);
+      assert.ok(distance<=maxExpected+epsilon,`expected displacement ${distance} to be <= measured upper allowance ${maxExpected} (elapsed <= ${maxElapsed}ms)`);
       position=moved.data.worldPosition;
+      previousSentAt=sentAt;
+      previousCompletedAt=completedAt;
     }
-    const expectedPerCycle=MOVE_SPEED_RATE*cadenceMs,expectedTotal=expectedPerCycle*cycles;
-    // Generous tolerance for real wall-clock scheduling jitter around setTimeout — the point being
-    // proven is "close to the full cadence-proportional allowance every cycle", not exact-to-the-ms.
-    assert.ok(totalDistance>=expectedTotal*0.85,`expected total displacement close to ${expectedTotal} (${cycles} cycles at ${cadenceMs}ms), got ${totalDistance}`);
-    assert.ok(totalDistance<=expectedTotal*1.15,`expected total displacement not to exceed ${expectedTotal} by more than jitter tolerance, got ${totalDistance}`);
   });
 }
 
