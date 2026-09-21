@@ -21,5 +21,5 @@ test('health endpoint reports ok, version, and phase',async()=>{
   const body=await res.json();
   assert.equal(body.ok,true);
   assert.equal(body.version,'0.32.0');
-  assert.equal(body.phase,'Phase 1 Free World Movement');
+  assert.equal(body.phase,'Phase 2 Four-City Entry & Bus Transport');
 });

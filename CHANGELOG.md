@@ -506,3 +506,14 @@
 - 測試結果：346（baseline，內容除上面明確列出嘅1句assertion更新外完全不變）+ 13（新增）= **359 tests passed, 0 failed**。
 - 存檔影響：無。
 - Rollback基準：`main` @ `fe552e2e96ef150570119c1d02eb80f89dc08ec1`。
+
+## Phase 2 Closeout — 2026-09-21 — Health Metadata 更新（Issue #30 Gate PASS 後嘅純文件收尾）
+
+- 分類：Phase 2「四城實體進出及坐車交通」（Issue #30）已經由Charlie完成完整真iPhone驗收（四城進出、離城、坐車、reload全部PASS），Phase 2 Final Gate = PASS。落實checkpoint／backup之前，先修正一個Gate audit發現嘅遺留metadata缺口：`/api/health`嘅`phase`欄位由Phase 2開發期間一直冇更新，仍然寫住Phase 1嘅字眼。呢個純粹係文件/metadata修正，**唔改任何gameplay行為**。
+- 起點：`main` @ `3c8b941ba24fea8a041b39a959ae138aafa632f7`（P2-07 City Hub Navigation merge之後）。Baseline測試：**359 tests passed, 0 failed**（checkout main後親自跑，唔假設數字）。
+- **`server.mjs`改動**：`/api/health`嘅`phase`欄位由`'Phase 1 Free World Movement'`改做`'Phase 2 Four-City Entry & Bus Transport'`；`version`欄位（`'0.32.0'`）不變。除呢一個字串常數之外，`/api/health`嘅其他部分（`ok:true`、路由本身）同成個`api()`函數嘅其餘部分完全冇改。
+- **`test/health.test.mjs`改動**：對應斷言由`assert.equal(body.phase,'Phase 1 Free World Movement')`改做`assert.equal(body.phase,'Phase 2 Four-City Entry & Bus Transport')`——同步更新，唔係weaken，斷言驗證嘅嘢（health endpoint正確回報phase）完全不變。
+- **不涉及**：movement、joystick、camera、collision、cities、城市座標、entry/exit邏輯、巴士/交通邏輯、economy、DB schema、地圖layout（正方形四角redesign留返之後）、任何Phase 3+功能。`git diff --stat`確認呢次改動範圍僅限`server.mjs`（1行）、`test/health.test.mjs`（1行）、`CHANGELOG.md`。
+- 測試結果：359（baseline，內容除上面明確列出嘅1句assertion更新外完全不變）= **359 tests passed, 0 failed**（呢次冇新增test，純粹更新現有斷言嘅期望值）。
+- 存檔影響：無。
+- Rollback基準：`main` @ `3c8b941ba24fea8a041b39a959ae138aafa632f7`。
