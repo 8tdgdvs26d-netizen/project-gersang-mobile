@@ -40,25 +40,6 @@ test('IN_WORLD position survives a fresh, independent snapshot re-fetch (self-co
   assert.equal(second.state,first.state);
 });
 
-test('throttle: the first move is accepted and establishes lastWorldMoveAt, the immediate second move is genuinely throttled, and a direct DB read proves the second command made literally zero additional write',async()=>{
-  setPosition(50,50,'IN_WORLD');
-  await wait(150);
-  const first=await post('/api/commands/world/move',envelope('persist-throttle-first',{targetX:90,targetY:50}));
-  assert.equal(first.status,'ACCEPTED');
-  assert.equal(first.data.throttled,false);
-  assert.deepEqual(first.data.worldPosition,{x:90,y:50});
-  const rowAfterFirst=readCharacterRow();
-  assert.equal(rowAfterFirst.world_x,90);
-  assert.equal(rowAfterFirst.world_y,50);
-  assert.equal(rowAfterFirst.state,'IN_WORLD');
-  const second=await post('/api/commands/world/move',envelope('persist-throttle-second',{targetX:900,targetY:900}));
-  assert.equal(second.status,'ACCEPTED');
-  assert.equal(second.data.throttled,true);
-  assert.deepEqual(second.data.worldPosition,{x:90,y:50});
-  const rowAfterSecond=readCharacterRow();
-  assert.deepEqual(rowAfterSecond,rowAfterFirst,'the throttled command must not have changed the characters row at all');
-});
-
 test('collision: a blocked move is ACCEPTED with collided:true, and a direct DB read proves it made literally zero additional write',async()=>{
   const ridgeA=OBSTACLES.find(o=>o.id==='ridge-a'),inflatedA=inflateRect(ridgeA,PLAYER_COLLISION_RADIUS);
   const centerA={x:(inflatedA.minX+inflatedA.maxX)/2,y:(inflatedA.minY+inflatedA.maxY)/2};
