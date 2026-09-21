@@ -42,9 +42,9 @@ jobs:
               if "base=`http://127.0.0.1:" in line:
                   indent=line[:len(line)-len(line.lstrip())]
                   out.append(indent+"base='http://127.0.0.1:'+line.match(/:(\\d+)/)[1];")
-              elif "fetch(base+`/api/cities/" in line and "city.id" in line:
-                  line=line.replace("fetch(base+`/api/cities/${city.id}/market`)", "fetch(base+'/api/cities/'+city.id+'/market')")
-                  out.append(line)
+              elif "for(const city of CITY_DEFINITIONS)" in line:
+                  indent=line[:len(line)-len(line.lstrip())]
+                  out.append(indent+"for(const city of CITY_DEFINITIONS){assert.ok(city.facilities.includes('MARKET'));assert.ok(city.facilities.includes('STORAGE'));const rows=await (await fetch(base+'/api/cities/'+city.id+'/market')).json();assert.equal(rows.length,6);assert.deepEqual(new Set(rows.map(x=>x.goodTypeId)),new Set(GOOD_DEFINITIONS.map(g=>g.id)))}")
               else:
                   out.append(line.replace("new Error(`server exited ${code}`)", "new Error('server exited '+code)"))
           p.write_text('\n'.join(out)+'\n')
