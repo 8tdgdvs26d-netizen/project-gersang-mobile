@@ -32,7 +32,7 @@ test('all four cities expose market and storage facilities and six market goods'
 });
 
 test('cargo capacity uses goods data and partial fill',async()=>{
-  const q=await post('/api/commands/market/quote',{goodTypeId:'iron',side:'BUY',requestedQuantity:20});assert.equal(q.fillQuantity,6);
+  const q=await post('/api/commands/market/quote',{goodTypeId:'iron',side:'BUY',requestedQuantity:25});assert.equal(q.fillQuantity,20);
 });
 
 test('same-city buy then sell is a net loss and writes economy/item traces',async()=>{

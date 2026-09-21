@@ -79,7 +79,10 @@ const cities=CITY_DEFINITIONS;
 function seed(){
   db.prepare(`INSERT OR IGNORE INTO accounts(id) VALUES('account-demo')`).run();
   const startCity=cities.find(c=>c.id==='starter-village');
-  db.prepare(`INSERT OR IGNORE INTO characters(id,account_id,city_id,state,wallet,cargo_capacity,world_x,world_y) VALUES('char-demo','account-demo','starter-village','IN_CITY',1000,20,?,?)`).run(startCity.coordinates.x,startCity.coordinates.y);
+  db.prepare(`INSERT OR IGNORE INTO characters(id,account_id,city_id,state,wallet,cargo_capacity,world_x,world_y) VALUES('char-demo','account-demo','starter-village','IN_CITY',1000,60,?,?)`).run(startCity.coordinates.x,startCity.coordinates.y);
+  // P3-03 Prototype migration: only the legacy prototype default (20) is lifted to 60.
+  // Preserve every other character field and never lower/custom-overwrite a different capacity.
+  db.prepare(`UPDATE characters SET cargo_capacity=60 WHERE id='char-demo' AND cargo_capacity=20`).run();
   const m=db.prepare(`INSERT OR IGNORE INTO market(city_id,good_id,stock,ref_price,spread,version,base_price,target_stock,restock_rate,last_tick_at) VALUES(?,?,?,?,?,1,?,?,?,?)`);
   const seededAt=Date.now();
   for(const r of MARKET_SEED)m.run(r.cityId,r.goodTypeId,r.stock,r.basePrice,r.spread,r.basePrice,r.targetStock,r.restockRate,seededAt);
