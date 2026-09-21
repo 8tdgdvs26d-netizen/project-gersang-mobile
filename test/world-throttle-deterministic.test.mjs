@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 
+// Test-only controlled clock: server gameplay code and the 120ms throttle constant stay untouched.
 const requestJson=async(base,path,options={})=>{const r=await fetch(base+path,{headers:{'content-type':'application/json'},...options});return r.json()};
 
 test('world/move minimum interval throttles a back-to-back command deterministically and makes zero extra DB write',async()=>{
