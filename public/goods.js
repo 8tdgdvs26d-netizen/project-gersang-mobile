@@ -17,3 +17,4 @@ export const MARKET_SEED=Object.freeze([
 ].map(([cityId,goodTypeId,stock,basePrice,spread,targetStock,restockRate])=>Object.freeze({cityId,goodTypeId,stock,basePrice,spread,targetStock,restockRate})));
 
 export const cargoUnitsFor=goodId=>GOOD_DEFINITIONS.find(g=>g.id===goodId)?.cargoUnits??1;
+export const goodNameFor=goodId=>GOOD_DEFINITIONS.find(g=>g.id===goodId)?.name??goodId;
