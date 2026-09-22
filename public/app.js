@@ -90,6 +90,16 @@ async function refresh(){
   S.snap=await req('/api/character/char-demo/snapshot');
   const responseReceivedAt=Date.now();
   serverTimeOffset=computeServerTimeOffset(S.snap.serverNowMs,requestStartedAt,responseReceivedAt);
+  // P4-03C Draft Review Fix — a fresh snapshot's own worldMonsters IS this endpoint's authoritative
+  // truth (server.mjs's snapshot() computes it via the exact same serializeWorldMonsters() shared by
+  // worldHeartbeat()/moveWorld(), using the SAME `now` as this response's own serverNowMs), so it
+  // must advance the SAME freshness watermark sendWorldMove/sendWorldHeartbeat's own sync already
+  // uses — never a second, unrelated freshness system. Without this, a heartbeat/move request that
+  // began before this refresh() but only completes (client-side) after it — a real, server-timestamp
+  // -OLDER response simply arriving late — could still pass shouldApplyWorldMonstersSync's check
+  // against a watermark this refresh() never touched, and wrongly overwrite the fresher snapshot
+  // just applied below.
+  lastWorldMonstersSyncAt=nextWorldMonstersSyncWatermark(lastWorldMonstersSyncAt,S.snap.serverNowMs);
   if(shouldShowCityHubOnStateChange(previousState,S.snap.state))S.tab='hub';
   // P1-07B: a full refresh() replaces S.snap wholesale (e.g. after travel/arrival/settlement) —
   // whatever the client was predicting before this is no longer trustworthy, so force a hard
@@ -372,7 +382,7 @@ function applyWorldMonstersSync(data){
   if(!shouldApplyWorldMonstersSync(data.worldMonsters,lastWorldMonstersSyncAt))return;
   S.snap.worldMonsters=data.worldMonsters;
   const appliedAt=data.worldMonsters?.[0]?.serverNowMs;
-  if(Number.isFinite(appliedAt))lastWorldMonstersSyncAt=appliedAt;
+  lastWorldMonstersSyncAt=nextWorldMonstersSyncWatermark(lastWorldMonstersSyncAt,appliedAt);
 }
 // P4-02 Merge Gate fix — pure, DOM/network-free extraction of the order-independent decision the
 // completion-reorder race fix depends on: does this world command response mean the server already
@@ -403,6 +413,23 @@ export function shouldApplyWorldMonstersSync(candidateWorldMonsters,lastAppliedS
   const candidateServerNowMs=candidateWorldMonsters[0]?.serverNowMs;
   if(!Number.isFinite(candidateServerNowMs))return true;
   return !Number.isFinite(lastAppliedServerNowMs)||candidateServerNowMs>=lastAppliedServerNowMs;
+}
+// P4-03C Draft Review Fix — refresh() replaces S.snap wholesale with a fresh authoritative
+// snapshot (e.g. after travel/arrival/settlement/reload, or on every world/heartbeat 1000ms tick
+// this app.js already issues), but a snapshot's own worldMonsters never passed through
+// applyWorldMonstersSync — so lastWorldMonstersSyncAt was never advanced by it. A delayed
+// heartbeat/move response that began BEFORE the snapshot but only completes AFTER it (a real,
+// server-timestamp-older response arriving client-side later) could then still pass
+// shouldApplyWorldMonstersSync's staleness check (against a watermark refresh() never touched) and
+// wrongly overwrite the fresher snapshot's worldMonsters. This exported, pure function is the ONE
+// place lastWorldMonstersSyncAt is ever advanced from — both applyWorldMonstersSync (below) and
+// refresh() (see its own comment) route through it, so there is exactly one freshness axis, never
+// two independent ones. NaN-safe: an unset watermark (`current`) is treated as -Infinity, and a
+// non-finite `candidate` (nothing authoritative to advance to) leaves `current` untouched.
+export function nextWorldMonstersSyncWatermark(current,candidate){
+  if(!Number.isFinite(candidate))return current;
+  if(!Number.isFinite(current))return candidate;
+  return Math.max(current,candidate);
 }
 const sendWorldMove=async(target)=>{
   const requestSequence=++movementRequestSequence;
