@@ -155,7 +155,12 @@ function snapshot(){
   // more than ordinary network latency. Server authority is unaffected either way: every actual
   // encounter/battle decision is computed server-side with the server's own Date.now(), never the
   // client's.
-  return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,worldPosition,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t&&t.status==='TRAVELING'?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),segments:normalizedSegments(t),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null,worldMonsters:serializeWorldMonsters(c.id,now),serverNowMs:now};
+  const worldMonsters=serializeWorldMonsters(c.id,now);
+  // P4-03C Codex Review (P2) — exposed at the top level (not just per-monster) so a caller can
+  // establish a freshness baseline even when `worldMonsters` is empty (every monster consumed) — see
+  // serializeWorldMonsters's own comment on `revision`. Reading the module counter directly here is
+  // safe: nothing else can run between the serializeWorldMonsters() call above and this line.
+  return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,worldPosition,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t&&t.status==='TRAVELING'?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),segments:normalizedSegments(t),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null,worldMonsters,serverNowMs:now,worldStateRevision:worldStateRevisionCounter};
 }
 const MARKET_TICK_MS=30000;
 function applyMarketTick(city){
@@ -217,15 +222,23 @@ function battleIsActive(characterId='char-demo'){return !!db.prepare(`SELECT 1 F
 // worldHeartbeat()/moveWorld() to serialize THIS evaluate's own just-proposed transition — see
 // their own call sites' comments for why the live Map cannot be read yet at that point).
 const USE_LIVE_CHASE_STATE=Symbol('use-live-chase-state');
+// P4-03C Codex Review (P2) — `revision` is a fresh tick of the same global worldStateRevisionCounter
+// worldChaseState ordering uses (see its own comment), stamped on every entry THIS call returns so
+// they all share one value. Millisecond-resolution `serverNowMs` cannot distinguish two evaluates
+// landing in the same millisecond; a client comparing responses purely by serverNowMs could let an
+// out-of-order-arriving (but coincidentally-equal-timestamp) older response overwrite a newer one —
+// `revision`, being a plain incrementing integer, never ties, so it is what public/app.js's
+// shouldApplyWorldMonstersSync actually compares on (see its own comment).
 function serializeWorldMonsters(characterId='char-demo',now=Date.now(),state=USE_LIVE_CHASE_STATE){
+  const revision=++worldStateRevisionCounter;
   const consumed=new Set(db.prepare(`SELECT monster_id FROM world_monster_encounters WHERE character_id=?`).all(characterId).map(x=>x.monster_id));
   const effectiveState=state===USE_LIVE_CHASE_STATE?worldChaseState.get(characterId):state;
   return WORLD_MONSTER_DEFINITIONS.filter(m=>m.active&&!consumed.has(m.id)).map(m=>{
     if(effectiveState&&effectiveState.monsterId===m.id){
       const state=effectiveState;
-      return{id:m.id,displayName:m.displayName,level:m.level,mode:'CHASE',position:chasePositionAt(state.chaseAnchorPos,state.chaseAnchorAt,state.lastKnownPlayerPos,m.chaseSpeed,now),encounterRadius:m.encounterRadius,serverNowMs:now,chaseAnchorPos:state.chaseAnchorPos,chaseAnchorAt:state.chaseAnchorAt,lastKnownPlayerPos:state.lastKnownPlayerPos};
+      return{id:m.id,displayName:m.displayName,level:m.level,mode:'CHASE',position:chasePositionAt(state.chaseAnchorPos,state.chaseAnchorAt,state.lastKnownPlayerPos,m.chaseSpeed,now),encounterRadius:m.encounterRadius,serverNowMs:now,revision,chaseAnchorPos:state.chaseAnchorPos,chaseAnchorAt:state.chaseAnchorAt,lastKnownPlayerPos:state.lastKnownPlayerPos};
     }
-    return{id:m.id,displayName:m.displayName,level:m.level,mode:'PATROL',position:patrolPositionAt(m,now),encounterRadius:m.encounterRadius,serverNowMs:now};
+    return{id:m.id,displayName:m.displayName,level:m.level,mode:'PATROL',position:patrolPositionAt(m,now),encounterRadius:m.encounterRadius,serverNowMs:now,revision};
   });
 }
 function rosterSnapshot(){return playerTemplates.map(p=>{const r=db.prepare(`SELECT level,xp FROM roster_units WHERE character_id='char-demo' AND unit_id=?`).get(p.id)??{level:1,xp:0},bonus=db.prepare(`SELECT COALESCE(SUM(attack_bonus),0) attack_bonus,COALESCE(SUM(hp_bonus),0) hp_bonus FROM equipment_inventory WHERE character_id='char-demo' AND equipped_unit_id=?`).get(p.id);return{id:p.id,name:p.name,role:p.role,level:r.level,xp:r.xp,xpIntoLevel:r.xp%100,xpToNext:100-r.xp%100,maxHp:p.baseHp+(r.level-1)*p.hpPerLevel+bonus.hp_bonus,attack:p.baseAttack+(r.level-1)*p.attackPerLevel+bonus.attack_bonus,equipmentBonuses:{attack:bonus.attack_bonus,hp:bonus.hp_bonus},attackRange:p.range,agility:p.agility,moveIntervalMs:p.moveInterval,attackIntervalMs:p.interval,skills:(skillDefinitions[p.id]??[]).map(({id,name,type,targetType,description,damage,range,cooldownMs})=>({id,name,type,targetType,description,damage,range,cooldownMs}))}})}
@@ -441,15 +454,15 @@ function exitCity(env){const e=check(env);if(e)return e;
     // P4-03C — Exit City Reset (Coding Order §28): a leftover CHASE runtime from BEFORE this city
     // visit must never silently revive on the next IN_WORLD evaluate (the character's whole world
     // position just jumped to this city's exitPoint, unrelated to wherever a chase was in progress
-    // before entering). Routed through the exact same evaluatedAt-monotonic advanceWorldChaseState
-    // guard every other CHASE write uses (see its own comment) — same reasoning as
-    // worldExposureRebasedAt above: only ever clears a chase that is OLDER than this exit, never a
-    // legitimately NEWER one (e.g. a fresh aggro acquired after a later replay/re-entry). A second,
-    // independent Date.now() call (rather than sharing one local var with worldExposureRebasedAt) is
-    // deliberate here: unlike moveWorld()/worldHeartbeat(), exitCity() never computes any monster
-    // geometry off `now` — these two timestamps are independent bookkeeping markers for two separate
-    // Maps, so a sub-millisecond difference between them is inconsequential either way.
-    return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_WORLD',worldPosition:{x:exitPoint.x,y:exitPoint.y},worldExposureRebasedAt:Date.now(),chaseStateProposal:{evaluatedAt:Date.now(),state:null}}}});
+    // before entering). Routed through nextChaseStateProposal/advanceWorldChaseState's own
+    // revision-monotonic guard every other CHASE write uses (see their own comments) — same
+    // reasoning as worldExposureRebasedAt above: only ever clears a chase that is OLDER than this
+    // exit, never a legitimately NEWER one (e.g. a fresh aggro acquired after a later replay/
+    // re-entry). A second, independent Date.now() call (rather than sharing one local var with
+    // worldExposureRebasedAt) is deliberate here: unlike moveWorld()/worldHeartbeat(), exitCity()
+    // never computes any monster geometry off `now` — these two timestamps are independent
+    // bookkeeping markers for two separate Maps, so a sub-millisecond difference is inconsequential.
+    return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_WORLD',worldPosition:{x:exitPoint.x,y:exitPoint.y},worldExposureRebasedAt:Date.now(),chaseStateProposal:nextChaseStateProposal(Date.now(),null)}}});
   // P4-03B — IN_CITY->IN_WORLD is a position discontinuity (world_x/world_y just jumped to this
   // city's exitPoint, unrelated to wherever the character was before entering the city): rebasing the
   // exposure watermark here (after the transaction commits, only on ACCEPTED — same rollback-safety
@@ -590,26 +603,46 @@ function advanceWorldExposureWatermark(characterId,result){
 // worldExposureWatermark/lastWorldMoveAt above; a server restart naturally resets every monster to
 // PATROL (Coding Order §29), which is the deterministic, zero-persistence content truth anyway.
 const worldChaseState=new Map();
+// P4-03C Codex Review (P1/P2) — a single, global, monotonically increasing integer, never reused,
+// shared by BOTH worldChaseState's own ordering (advanceWorldChaseState below) and the client-facing
+// worldMonsters payload (serializeWorldMonsters). Millisecond-resolution Date.now() cannot
+// distinguish two evaluates that land in the same millisecond — a real risk given this is fast,
+// synchronous, single-process request handling — so `evaluatedAt` alone could wrongly treat a
+// genuinely later transition as a tie and drop it (server-side), or let a same-millisecond-but-
+// truly-older HTTP response pass a client-side staleness check that only compares timestamps. An
+// integer counter can never tie, so it replaces the wall-clock comparison entirely wherever ordering
+// (not just "when", but "which happened first") actually matters.
+let worldStateRevisionCounter=0;
+// The one place a chaseStateProposal is ever built, so `revision` is always attached consistently.
+// `state===null` (clear — disengage/leash/consumed) is stored as a TOMBSTONE, never a deleted Map
+// entry: deleting would also delete the only `evaluatedAt`/`revision` high-water mark guarding
+// against a stale idem() replay. Concretely — command A acquires CHASE (revision rA); command B
+// later disengages/clears it (revision rB>rA, tombstone stored); if A's ORIGINAL idempotencyKey is
+// then replayed, idem() returns A's cached result (proposal revision rA) without re-running
+// anything — advanceWorldChaseState below must still see a `current` with revision>=rA to reject it,
+// which a deleted entry could never provide. A tombstone carries no `monsterId`, so every existing
+// "is this monster the one being chased" check (`state.monsterId===m.id`) already treats it exactly
+// like a fresh/never-chased character — no other code needed to change for this.
+function nextChaseStateProposal(now,state){
+  const revision=++worldStateRevisionCounter;
+  return{revision,state:state===null?{mode:'PATROL',evaluatedAt:now,revision}:{...state,revision}};
+}
 // The ONLY place worldChaseState is ever written. Same rollback/replay-safety discipline as
 // advanceWorldExposureWatermark above (see P4-03B's exitCity idempotent-replay watermark bug and its
 // fix — Coding Order §41 explicitly calls out not repeating it): called AFTER idem() has already
 // returned (a JS Map mutation is never rolled back by SQLite, so writing this inside the transaction
 // could leave a runtime transition that was actually rolled back "stuck"), only on ACCEPTED, and only
-// ever applied when the proposal's own `evaluatedAt` is not older than whatever is already stored —
+// ever applied when the proposal's own `revision` is not older than whatever is already stored —
 // never a raw overwrite — so a cached idempotent replay (whose proposal was computed and baked into
 // the response the FIRST time this exact command ever ran) can never regress a newer real transition
 // that has since landed from a different command (Coding Order §42/§43's ordering/race requirements).
-// `state:null` means "clear" (disengage, leash, or consumption) as opposed to `chaseStateProposal`
-// being absent from `result.data` entirely, which means this call's evaluate never touched any
-// monster's CHASE runtime at all (leave whatever is already stored completely untouched).
 function advanceWorldChaseState(characterId,result){
   if(result.status!=='ACCEPTED')return;
   const proposal=result.data?.chaseStateProposal;
-  if(!proposal||!Number.isFinite(proposal.evaluatedAt))return;
+  if(!proposal||!Number.isFinite(proposal.revision))return;
   const current=worldChaseState.get(characterId);
-  if(current&&Number.isFinite(current.evaluatedAt)&&current.evaluatedAt>=proposal.evaluatedAt)return;
-  if(proposal.state===null)worldChaseState.delete(characterId);
-  else worldChaseState.set(characterId,proposal.state);
+  if(current&&Number.isFinite(current.revision)&&current.revision>=proposal.revision)return;
+  worldChaseState.set(characterId,proposal.state);
 }
 // The live worldChaseState Map is only ever updated AFTER idem() returns (advanceWorldChaseState
 // above), so a response being built INSIDE the same evaluate that just proposed a transition cannot
@@ -682,14 +715,27 @@ function triggerWorldMonsterBattle(characterId,m,now){
 // chaseSegmentsBetween/relativeMotionEntersRadius primitive is needed for this Prototype slice.
 //
 // Returns {encounter, chaseStateProposal}. `encounter` is {monsterId,battleId} or null.
-// `chaseStateProposal` is `{evaluatedAt,state}` (state:null means clear/disengage/consumed) or
+// `chaseStateProposal` is `{revision,state}` (state:null means clear/disengage/consumed) or
 // `undefined` when this call's evaluate never touched any monster's CHASE runtime at all — see
 // advanceWorldChaseState's own comment for exactly how the caller must apply this AFTER idem()
 // returns, never inside the transaction.
 function evaluateWorldMonsterAggroChase(characterId,playerPosition,fromTime,now,acceptedMoveSegment){
-  const exposureHit=evaluateWorldMonsterExposure(characterId,playerPosition,fromTime,now);
-  if(exposureHit)return{encounter:exposureHit,chaseStateProposal:undefined};
   const state=worldChaseState.get(characterId);
+  // P4-03C Codex Review (P1) — once ANY monster is already CHASE (single-monster-at-a-time
+  // Prototype scope — see worldChaseState's own comment), the canonical-patrol exposure check below
+  // must be skipped entirely, not just deprioritized behind it. evaluateWorldMonsterExposure() tests
+  // the player against patrolPositionAt()'s formula — the monster's position if it had NEVER left
+  // its route — which is pure fiction once CHASE has actually moved it elsewhere. Left unconditional,
+  // a player who drew the monster off-route and looped back near the canonical patrol strip (while
+  // staying genuinely far from the monster's real, chasing position) could open a battle against that
+  // phantom patrol copy. This is safe against Coding Order §15's Encounter-before-Aggro priority:
+  // that priority only ever concerns a monster STILL patrolling (mutually exclusive with `state.mode
+  // ==='CHASE'` here — a monster whose sweep enters encounterRadius while still PATROL has no chase
+  // state yet by construction). Checked via `state.mode==='CHASE'`, never `state` truthiness alone —
+  // a cleared TOMBSTONE (see nextChaseStateProposal's own comment) is also a truthy Map entry but
+  // represents "not chasing", and must not suppress the exposure check.
+  const exposureHit=state?.mode==='CHASE'?null:evaluateWorldMonsterExposure(characterId,playerPosition,fromTime,now);
+  if(exposureHit)return{encounter:exposureHit,chaseStateProposal:undefined};
   for(const m of WORLD_MONSTER_DEFINITIONS){
     if(!m.active)continue;
     if(db.prepare(`SELECT 1 FROM world_monster_encounters WHERE character_id=? AND monster_id=?`).get(characterId,m.id))continue;
@@ -706,7 +752,7 @@ function evaluateWorldMonsterAggroChase(characterId,playerPosition,fromTime,now,
       const aggroHit=patrolSegmentsBetween(m,fromTime,now).some(seg=>segmentEntersEncounterRadius(seg.from,seg.to,{position:playerPosition,encounterRadius:m.aggroRadius}));
       if(!aggroHit)continue;
       const newState={monsterId:m.id,mode:'CHASE',chaseAnchorPos:patrolPositionAt(m,now),chaseAnchorAt:now,lastKnownPlayerPos:playerPosition,lastKnownPlayerAt:now,evaluatedAt:now};
-      return{encounter:null,chaseStateProposal:{evaluatedAt:now,state:newState}};
+      return{encounter:null,chaseStateProposal:nextChaseStateProposal(now,newState)};
     }
     // CHASE — historical phase (Model A): ONE segment using the anchor as it stood BEFORE this
     // evaluate, swept across [fromTime,now], vs the static, pre-move playerPosition. Obstacle gate
@@ -717,7 +763,7 @@ function evaluateWorldMonsterAggroChase(characterId,playerPosition,fromTime,now,
     if(segmentEntersEncounterRadius(histFrom,histTo,{position:playerPosition,encounterRadius:m.encounterRadius})
       &&!segmentBlocked(histTo.x,histTo.y,playerPosition.x,playerPosition.y)){
       const encounter=triggerWorldMonsterBattle(characterId,m,now);
-      if(encounter)return{encounter,chaseStateProposal:{evaluatedAt:now,state:null}};
+      if(encounter)return{encounter,chaseStateProposal:nextChaseStateProposal(now,null)};
     }
     // CHASE movement resolve (Coding Order §17-19): advance from the OLD anchor toward the
     // freshly-observed playerPosition, capped at chaseSpeed*elapsed and at the target itself
@@ -735,7 +781,7 @@ function evaluateWorldMonsterAggroChase(characterId,playerPosition,fromTime,now,
       &&segmentEntersEncounterRadius(acceptedMoveSegment.from,acceptedMoveSegment.to,{position:finalPos,encounterRadius:m.encounterRadius})
       &&!segmentBlocked(finalPos.x,finalPos.y,acceptedMoveSegment.to.x,acceptedMoveSegment.to.y)){
       const encounter=triggerWorldMonsterBattle(characterId,m,now);
-      if(encounter)return{encounter,chaseStateProposal:{evaluatedAt:now,state:null}};
+      if(encounter)return{encounter,chaseStateProposal:nextChaseStateProposal(now,null)};
     }
     // Leash / Disengage (Coding Order §24-25): measured from the FIXED patrol route center, never
     // from the monster's own live chase position (which would let it drift the leash along with
@@ -746,9 +792,9 @@ function evaluateWorldMonsterAggroChase(characterId,playerPosition,fromTime,now,
     // the canonical patrol formula with a chase anchor", not a special transition (Coding Order §5).
     const patrolCenter={x:(m.patrolA.x+m.patrolB.x)/2,y:(m.patrolA.y+m.patrolB.y)/2};
     const beyondLeash=Math.hypot(playerPosition.x-patrolCenter.x,playerPosition.y-patrolCenter.y)>m.leashRadius;
-    if(beyondLeash)return{encounter:null,chaseStateProposal:{evaluatedAt:now,state:null}};
+    if(beyondLeash)return{encounter:null,chaseStateProposal:nextChaseStateProposal(now,null)};
     const newState={monsterId:m.id,mode:'CHASE',chaseAnchorPos:finalPos,chaseAnchorAt:now,lastKnownPlayerPos:playerPosition,lastKnownPlayerAt:now,evaluatedAt:now};
-    return{encounter:null,chaseStateProposal:{evaluatedAt:now,state:newState}};
+    return{encounter:null,chaseStateProposal:nextChaseStateProposal(now,newState)};
   }
   return{encounter:null,chaseStateProposal:undefined};
 }
@@ -773,7 +819,8 @@ function worldHeartbeat(env){const e=check(env);if(e)return e;
     // segment of its own, so `acceptedMoveSegment` is left undefined — only the historical-phase
     // exposure/aggro/chase-encounter checks and the chase movement/leash resolve ever run here.
     const evaluation=evaluateWorldMonsterAggroChase(characterId,s.worldPosition,fromTime,now);
-    return{status:'ACCEPTED',data:{worldExposureEvaluatedAt:now,encounterTriggered:!!evaluation.encounter,...(evaluation.encounter?{battleId:evaluation.encounter.battleId,monsterId:evaluation.encounter.monsterId}:{}),chaseStateProposal:evaluation.chaseStateProposal,worldMonsters:serializeWorldMonsters(characterId,now,effectiveChaseStateFor(characterId,evaluation.chaseStateProposal))}};
+    const worldMonsters=serializeWorldMonsters(characterId,now,effectiveChaseStateFor(characterId,evaluation.chaseStateProposal));
+    return{status:'ACCEPTED',data:{worldExposureEvaluatedAt:now,encounterTriggered:!!evaluation.encounter,...(evaluation.encounter?{battleId:evaluation.encounter.battleId,monsterId:evaluation.encounter.monsterId}:{}),chaseStateProposal:evaluation.chaseStateProposal,worldMonsters,worldStateRevision:worldStateRevisionCounter}};
   });
   advanceWorldExposureWatermark(characterId,result);
   advanceWorldChaseState(characterId,result);
@@ -837,7 +884,8 @@ function moveWorld(env){const e=check(env);if(e)return e;
   // when two DIFFERENT monsters could each match).
   const evaluation=evaluateWorldMonsterAggroChase('char-demo',current,fromTime,now,{from:current,to:{x:candidateX,y:candidateY}});
   if(evaluation.encounter){
-    return{status:'ACCEPTED',data:{worldPosition:current,state:'IN_WORLD',throttled:false,collided:false,staleSequence:false,worldExposureEvaluatedAt:now,encounterTriggered:true,battleId:evaluation.encounter.battleId,monsterId:evaluation.encounter.monsterId,chaseStateProposal:evaluation.chaseStateProposal,worldMonsters:serializeWorldMonsters('char-demo',now,effectiveChaseStateFor('char-demo',evaluation.chaseStateProposal))}};
+    const worldMonsters=serializeWorldMonsters('char-demo',now,effectiveChaseStateFor('char-demo',evaluation.chaseStateProposal));
+    return{status:'ACCEPTED',data:{worldPosition:current,state:'IN_WORLD',throttled:false,collided:false,staleSequence:false,worldExposureEvaluatedAt:now,encounterTriggered:true,battleId:evaluation.encounter.battleId,monsterId:evaluation.encounter.monsterId,chaseStateProposal:evaluation.chaseStateProposal,worldMonsters,worldStateRevision:worldStateRevisionCounter}};
   }
   if(!throttled)lastWorldMoveAt=now;
   const nextX=candidateX,nextY=candidateY;
@@ -880,7 +928,8 @@ function moveWorld(env){const e=check(env);if(e)return e;
       encounterResult={monsterId:monster.id,battleId:battle.battleId};
     }
   }
-  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:'IN_WORLD',throttled,collided,staleSequence:false,worldExposureEvaluatedAt:now,...(encounterResult?{encounterTriggered:true,battleId:encounterResult.battleId,monsterId:encounterResult.monsterId}:{}),chaseStateProposal:evaluation.chaseStateProposal,worldMonsters:serializeWorldMonsters('char-demo',now,effectiveChaseStateFor('char-demo',evaluation.chaseStateProposal))}};
+  const worldMonsters=serializeWorldMonsters('char-demo',now,effectiveChaseStateFor('char-demo',evaluation.chaseStateProposal));
+  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:'IN_WORLD',throttled,collided,staleSequence:false,worldExposureEvaluatedAt:now,...(encounterResult?{encounterTriggered:true,battleId:encounterResult.battleId,monsterId:encounterResult.monsterId}:{}),chaseStateProposal:evaluation.chaseStateProposal,worldMonsters,worldStateRevision:worldStateRevisionCounter}};
   });
   advanceWorldExposureWatermark('char-demo',result);
   advanceWorldChaseState('char-demo',result);

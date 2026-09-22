@@ -395,12 +395,12 @@ test('P4-03C-X: CHASE->PATROL needs no client-side transition handling — the m
   assert.ok(appSource.includes('for(const monster of S.snap?.worldMonsters||[])'),'the loop must keep iterating the live snapshot array directly (P4-03A-I precedent) — a disengaged monster simply reports mode:\'PATROL\' on its very next entry, with no separate client-side "was chasing" flag to clear');
 });
 
-test('P4-03C-Y: shouldApplyWorldMonstersSync rejects an older serverNowMs and accepts a newer/equal one, independent of request completion order',()=>{
-  const older=[{id:'world-bandit-1',serverNowMs:1000}],newer=[{id:'world-bandit-1',serverNowMs:2000}];
-  assert.equal(shouldApplyWorldMonstersSync(newer,1000),true);
-  assert.equal(shouldApplyWorldMonstersSync(older,2000),false,'an out-of-order OLDER response must never roll world-monster truth backwards');
-  assert.equal(shouldApplyWorldMonstersSync(newer,2000),true,'equal timestamps (the same evaluate observed twice) must still apply, never treated as stale');
-  assert.equal(shouldApplyWorldMonstersSync([],2000),true,'an empty array (every monster consumed) has nothing to disagree with — always applied');
+test('P4-03C-Y: shouldApplyWorldMonstersSync rejects an older revision and accepts a newer/equal one, independent of request completion order',()=>{
+  const older=[{id:'world-bandit-1',revision:1}],newer=[{id:'world-bandit-1',revision:2}];
+  assert.equal(shouldApplyWorldMonstersSync(newer,1),true);
+  assert.equal(shouldApplyWorldMonstersSync(older,2),false,'an out-of-order OLDER response must never roll world-monster truth backwards');
+  assert.equal(shouldApplyWorldMonstersSync(newer,2),true,'equal revisions (the same evaluate observed twice) must still apply, never treated as stale');
+  assert.equal(shouldApplyWorldMonstersSync([],2),true,'an empty array (every monster consumed) has nothing to disagree with — always applied');
   assert.equal(shouldApplyWorldMonstersSync(newer,NaN),true,'no prior sync recorded yet — always applied');
 });
 
@@ -420,54 +420,64 @@ test('P4-03C-Y: shouldApplyWorldMonstersSync rejects an older serverNowMs and ac
 test('P4-03C-Y2 (Layer 1 — reproduces the confirmed bug): without refresh() advancing the freshness watermark, a delayed OLDER world response wrongly passes the staleness check after a newer snapshot',()=>{
   const T1=1000,T2=2000; // T2 > T1 — the snapshot (T2) is genuinely newer than the delayed response (T1)
   const delayedOlderResponse=[{id:'world-bandit-1',serverNowMs:T1}];
-  // Step 1-2: an old world response exists with monster serverNowMs=T1, current watermark old/unset.
-  // Step 3: a newer authoritative snapshot (serverNowMs=T2) is "applied" — but on the pre-fix head,
-  // refresh() never touched lastWorldMonstersSyncAt, so the watermark AFTER the snapshot is exactly
-  // whatever it was BEFORE (unset here — the common real case: no world/move or world/heartbeat
-  // response has completed yet since boot/reload).
+  // Step 1-2: an old world response exists (this proof predates the Codex-review revision fix, so it
+  // is expressed in the ORIGINAL serverNowMs-based shape the confirmed bug was reported against —
+  // current watermark old/unset.
+  // Step 3: a newer authoritative snapshot (serverNowMs=T2) is "applied" — but on the pre-Draft-
+  // Review-Fix head, refresh() never touched lastWorldMonstersSyncAt, so the watermark AFTER the
+  // snapshot is exactly whatever it was BEFORE (unset here — the common real case: no world/move or
+  // world/heartbeat response has completed yet since boot/reload).
   const staleWatermarkOnPreFixHead=NaN;
-  // Step 5-6: the delayed T1 response now arrives. On the pre-fix head this WRONGLY returns true —
-  // the confirmed bug — even though T2 (already applied via the snapshot) is genuinely newer.
+  // Step 5-6: the delayed T1 response now arrives. On that pre-fix head this WRONGLY returns true —
+  // the confirmed bug — even though T2 (already applied via the snapshot) is genuinely newer. Note:
+  // shouldApplyWorldMonstersSync's field name has since moved from serverNowMs to revision (Codex
+  // Review P2, see Layer 2/3 below) — this proof still holds against the pre-fix head exactly as
+  // originally reported, since that head compared on serverNowMs.
   assert.equal(shouldApplyWorldMonstersSync(delayedOlderResponse,staleWatermarkOnPreFixHead),true,'reproduces the confirmed bug exactly: on the pre-fix head refresh() never advanced the watermark, so this delayed OLDER (T1<T2) response is wrongly accepted and would overwrite the fresher snapshot\'s worldMonsters');
 });
 
-test('P4-03C-Y2 (Layer 2 — proves the fix): nextWorldMonstersSyncWatermark, wired the way refresh() now is, correctly rejects the same delayed older response, still applies a genuinely newer one, and keeps equal-timestamp semantics deterministic',()=>{
-  const T1=1000,T2=2000,T3=3000;
+// P4-03C Codex Review (P2) — millisecond-resolution serverNowMs cannot distinguish two evaluates
+// landing in the same millisecond, so the freshness axis (both server-side worldStateRevisionCounter
+// and this client-side watermark) moved to a plain incrementing integer, `revision`, that can never
+// tie across genuinely different evaluates. Layer 2/3 below are expressed against this current,
+// revision-based shape.
+test('P4-03C-Y2 (Layer 2 — proves the fix): nextWorldMonstersSyncWatermark, wired the way refresh() now is, correctly rejects the same delayed older response, still applies a genuinely newer one, and keeps equal-revision semantics deterministic',()=>{
+  const R1=1,R2=2,R3=3;
   let watermark=NaN; // "current monster sync watermark is old/unset"
-  // refresh() applies the snapshot (serverNowMs=T2) and advances the SAME watermark from it.
-  watermark=nextWorldMonstersSyncWatermark(watermark,T2);
-  assert.equal(watermark,T2,'the watermark must advance to the snapshot\'s own authoritative serverNowMs');
-  // The delayed T1 response (older than the snapshot just applied) now arrives — must be rejected.
-  const delayedOlderResponse=[{id:'world-bandit-1',serverNowMs:T1}];
+  // refresh() applies the snapshot (revision=R2) and advances the SAME watermark from it.
+  watermark=nextWorldMonstersSyncWatermark(watermark,R2);
+  assert.equal(watermark,R2,'the watermark must advance to the snapshot\'s own authoritative revision');
+  // The delayed R1 response (older than the snapshot just applied) now arrives — must be rejected.
+  const delayedOlderResponse=[{id:'world-bandit-1',revision:R1}];
   assert.equal(shouldApplyWorldMonstersSync(delayedOlderResponse,watermark),false,'a response older than the snapshot just applied must never overwrite it — this is what fails on the pre-fix head (see Layer 1) and passes here');
-  // Required side-case: a genuinely NEWER response (T3>T2) arriving after the snapshot must still apply.
-  const newerResponse=[{id:'world-bandit-1',serverNowMs:T3}];
+  // Required side-case: a genuinely NEWER response (R3>R2) arriving after the snapshot must still apply.
+  const newerResponse=[{id:'world-bandit-1',revision:R3}];
   assert.equal(shouldApplyWorldMonstersSync(newerResponse,watermark),true,'a response genuinely newer than the last-applied snapshot must still be allowed to apply');
-  watermark=nextWorldMonstersSyncWatermark(watermark,T3);
-  assert.equal(watermark,T3);
-  // Required side-case: equal-timestamp semantics remain deterministic (the same evaluate observed
+  watermark=nextWorldMonstersSyncWatermark(watermark,R3);
+  assert.equal(watermark,R3);
+  // Required side-case: equal-revision semantics remain deterministic (the same evaluate observed
   // twice, e.g. once via its own response and once again via a subsequent snapshot, must not be
   // treated as stale merely for arriving a second time).
-  const sameInstantResponse=[{id:'world-bandit-1',serverNowMs:T3}];
-  assert.equal(shouldApplyWorldMonstersSync(sameInstantResponse,watermark),true,'an equal serverNowMs must still apply deterministically, never treated as stale');
-  assert.equal(nextWorldMonstersSyncWatermark(watermark,T3),T3,'advancing by an equal timestamp is a deterministic no-op, never regresses');
+  const sameInstantResponse=[{id:'world-bandit-1',revision:R3}];
+  assert.equal(shouldApplyWorldMonstersSync(sameInstantResponse,watermark),true,'an equal revision must still apply deterministically, never treated as stale');
+  assert.equal(nextWorldMonstersSyncWatermark(watermark,R3),R3,'advancing by an equal revision is a deterministic no-op, never regresses');
   // Defensive/NaN-safety cases the pure helper itself must handle.
-  assert.equal(nextWorldMonstersSyncWatermark(NaN,T1),T1,'an unset current watermark adopts the first real candidate');
-  assert.equal(nextWorldMonstersSyncWatermark(T3,NaN),T3,'a non-finite candidate (nothing authoritative to advance to) leaves the current watermark untouched');
+  assert.equal(nextWorldMonstersSyncWatermark(NaN,R1),R1,'an unset current watermark adopts the first real candidate');
+  assert.equal(nextWorldMonstersSyncWatermark(R3,NaN),R3,'a non-finite candidate (nothing authoritative to advance to) leaves the current watermark untouched');
 });
 
-test('P4-03C-Y2 (Layer 3 — production wiring): refresh() actually calls nextWorldMonstersSyncWatermark with S.snap\'s own serverNowMs immediately after S.snap is replaced, and applyWorldMonstersSync routes through the exact same function',()=>{
+test('P4-03C-Y2 (Layer 3 — production wiring): refresh() actually calls nextWorldMonstersSyncWatermark with S.snap\'s own worldStateRevision immediately after S.snap is replaced, and applyWorldMonstersSync routes through the exact same function',()=>{
   const appSource=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
   const refreshStart=appSource.indexOf('async function refresh('),refreshEnd=appSource.indexOf('\nfunction ',refreshStart+10);
   const refreshBody=appSource.slice(refreshStart,refreshEnd>0?refreshEnd:undefined);
   const snapAssignIdx=refreshBody.indexOf("S.snap=await req('/api/character/char-demo/snapshot');");
-  const watermarkAdvanceIdx=refreshBody.indexOf('lastWorldMonstersSyncAt=nextWorldMonstersSyncWatermark(lastWorldMonstersSyncAt,S.snap.serverNowMs);');
+  const watermarkAdvanceIdx=refreshBody.indexOf('lastWorldMonstersSyncRevision=nextWorldMonstersSyncWatermark(lastWorldMonstersSyncRevision,S.snap.worldStateRevision);');
   assert.ok(snapAssignIdx>=0,'refresh() must still replace S.snap from the snapshot endpoint');
-  assert.ok(watermarkAdvanceIdx>=0,'refresh() must advance lastWorldMonstersSyncAt via nextWorldMonstersSyncWatermark, using S.snap\'s own authoritative serverNowMs');
+  assert.ok(watermarkAdvanceIdx>=0,'refresh() must advance lastWorldMonstersSyncRevision via nextWorldMonstersSyncWatermark, using S.snap\'s own authoritative worldStateRevision');
   assert.ok(watermarkAdvanceIdx>snapAssignIdx,'the watermark advance must happen AFTER S.snap is actually replaced with the fresh snapshot, not before');
   const applySyncStart=appSource.indexOf('function applyWorldMonstersSync('),applySyncEnd=appSource.indexOf('\nfunction ',applySyncStart+10);
   const applySyncBody=appSource.slice(applySyncStart,applySyncEnd>0?applySyncEnd:undefined);
-  assert.ok(applySyncBody.includes('lastWorldMonstersSyncAt=nextWorldMonstersSyncWatermark(lastWorldMonstersSyncAt,appliedAt);'),'applyWorldMonstersSync must advance the SAME watermark via the SAME function — one consistent freshness axis, never two independent systems');
+  assert.ok(applySyncBody.includes('lastWorldMonstersSyncRevision=nextWorldMonstersSyncWatermark(lastWorldMonstersSyncRevision,appliedRevision);'),'applyWorldMonstersSync must advance the SAME watermark via the SAME function — one consistent freshness axis, never two independent systems');
 });
 
 test('P4-03C-Z: worldMonsters sync never gates or delays the existing battle-resync priority — applyWorldMonstersSync runs unconditionally before the battleAlreadyActiveFromWorldResponse check in both sendWorldMove and sendWorldHeartbeat',()=>{
@@ -565,12 +575,13 @@ test('P4-03C-AF: two concurrent evaluates racing while CHASE is closing in conve
   rawRun(`UPDATE battles SET status='RETREATED' WHERE character_id='char-demo' AND status='ACTIVE'`);
 });
 
-test('P4-03C-AG: advanceWorldChaseState only ever advances monotonically by evaluatedAt — same rollback/replay-safety discipline as advanceWorldExposureWatermark, applied AFTER idem() returns, never inside the transaction',()=>{
+test('P4-03C-AG: advanceWorldChaseState only ever advances monotonically by revision — same rollback/replay-safety discipline as advanceWorldExposureWatermark, applied AFTER idem() returns, never inside the transaction',()=>{
   const serverSource=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
   const start=serverSource.indexOf('function advanceWorldChaseState('),end=serverSource.indexOf('// The live worldChaseState Map is only ever updated AFTER idem() returns');
   const body=serverSource.slice(start,end);
   assert.ok(body.includes("if(result.status!=='ACCEPTED')return;"),'must bail out immediately on anything but ACCEPTED — a rolled-back/rejected command never mutates the Map');
-  assert.ok(body.includes('current.evaluatedAt>=proposal.evaluatedAt'),'must compare evaluatedAt monotonically — a stale/cached proposal can never regress a newer real transition');
+  assert.ok(body.includes('current.revision>=proposal.revision'),'must compare revision monotonically (never millisecond-resolution evaluatedAt, which can tie across two genuinely different evaluates in the same millisecond) — a stale/cached proposal can never regress a newer real transition');
+  assert.ok(!body.includes('.delete(characterId)'),'must never delete the Map entry on clear — deleting loses the ordering watermark and lets a stale idempotent replay resurrect obsolete chase state; a tombstone ({mode:\'PATROL\',...}) must be written instead');
   for(const fnName of ['worldHeartbeat','moveWorld','exitCity']){
     const callSite=serverSource.indexOf(`function ${fnName}(env)`);
     const nextFn=serverSource.indexOf('\nfunction ',callSite+10);
