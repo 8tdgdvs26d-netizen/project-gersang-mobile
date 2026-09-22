@@ -75,6 +75,84 @@ export function patrolPositionAt(monster, timeMs) {
   return { x: patrolA.x + dx * t, y: patrolA.y + dy * t };
 }
 
+// P4-03B — the actual piecewise-linear patrol path travelled during [fromTime, toTime], NOT a single
+// straight line from patrolPositionAt(fromTime) to patrolPositionAt(toTime). A direct start->end
+// segment is wrong whenever the interval crosses one or more patrol turnarounds (A or B): the
+// triangle-wave position can legitimately end up back near where it started (see the worked example
+// below), making the naive straight segment zero-length or otherwise miss the real path entirely,
+// even though the monster genuinely swept through the player's position in between. Pure: no
+// Date.now(), no DB, no DOM, no mutable state, no randomness — same purity contract as
+// patrolPositionAt, which this function is built entirely out of.
+//
+// Worked example (current world-bandit-1 content): patrolA=440, patrolB=560, patrolAnchorAt=0,
+// legDurationMs=6000 (120px leg / 0.02px/ms). fromTime=4500 (x=530, A->B leg), toTime=7500 (x=530
+// again, now on the B->A leg, having turned around at B at t=6000):
+//   patrolSegmentsBetween(monster,4500,7500) === [
+//     {from:{x:530,y:220}, to:{x:560,y:220}},   // 4500 -> 6000 (A->B leg, up to the turnaround)
+//     {from:{x:560,y:220}, to:{x:530,y:220}}    // 6000 -> 7500 (B->A leg, after the turnaround)
+//   ]
+// A direct 4500->7500 segment would be {from:{530,220},to:{530,220}} — zero-length, completely
+// missing the real excursion out to B and back.
+//
+// Algorithm: turnarounds occur at every patrolAnchorAt + k*legDurationMs for integer k (both A and B
+// are turnaround points, one legDurationMs apart — NOT one cycleDurationMs apart). Walk forward from
+// the first such boundary strictly after `fromTime` (via Math.floor, correct for negative offsets
+// too — mirrors patrolPositionAt's own negative-modulo handling) up to `toTime`, collecting every
+// boundary timestamp in between; each consecutive pair of boundaries is then guaranteed to contain no
+// turnaround, so patrolPositionAt at each boundary and a straight line between them is exact, not an
+// approximation. Landing exactly on a turnaround at either end of the interval never produces a
+// duplicate or a missing segment: the boundary loop starts strictly after `fromTime` (so a turnaround
+// AT fromTime is only ever the interval's own start, never re-added), and the loop condition is a
+// strict `<` against `toTime` (so a turnaround AT toTime is only ever the interval's own end, never
+// re-added as an extra zero-length tail segment).
+//
+// Complexity: O(1 + floor((end-start)/legDurationMs)) segments, each one O(1) (a single
+// patrolPositionAt call) — bounded linearly by how many turnarounds the interval spans, never
+// unbounded/exponential. Callers are expected to additionally bound (end-start) itself via a lookback
+// cap (see server.mjs's MAX_WORLD_EXPOSURE_LOOKBACK_MS) so this stays cheap even under a very stale
+// watermark; this function itself is still safe (just proportionally more segments) if a caller ever
+// omits that cap.
+export function patrolSegmentsBetween(monster, fromTime, toTime) {
+  const { patrolA, patrolB, patrolSpeed, patrolAnchorAt } = monster || {};
+  if (!patrolA || !Number.isFinite(patrolA.x) || !Number.isFinite(patrolA.y)) return [];
+  const fallbackPoint = { x: patrolA.x, y: patrolA.y };
+  if (!patrolB || !Number.isFinite(patrolB.x) || !Number.isFinite(patrolB.y)
+    || !Number.isFinite(patrolSpeed) || patrolSpeed <= 0
+    || !Number.isFinite(patrolAnchorAt) || !Number.isFinite(fromTime) || !Number.isFinite(toTime)) {
+    return [{ from: fallbackPoint, to: fallbackPoint }];
+  }
+  // Defensive: a caller-reversed (fromTime>toTime) interval still produces a valid piecewise path
+  // for the normalized [start,end] range rather than crashing or silently returning nonsense.
+  const start = Math.min(fromTime, toTime), end = Math.max(fromTime, toTime);
+  const dx = patrolB.x - patrolA.x, dy = patrolB.y - patrolA.y;
+  const legDistance = Math.hypot(dx, dy);
+  // Zero-length interval, or a zero-length patrol route (patrolA===patrolB): nothing to sweep,
+  // return a single degenerate point-segment — segmentEntersEncounterRadius already treats a
+  // zero-length segment as a plain point-in-circle check, so callers need no special-casing.
+  if (legDistance === 0 || start === end) {
+    const p = patrolPositionAt(monster, start);
+    return [{ from: p, to: p }];
+  }
+  const legDurationMs = legDistance / patrolSpeed;
+  const firstK = Math.floor((start - patrolAnchorAt) / legDurationMs) + 1;
+  const boundaries = [start];
+  for (let k = firstK, t = patrolAnchorAt + k * legDurationMs; t < end; k++, t = patrolAnchorAt + k * legDurationMs) {
+    boundaries.push(t);
+  }
+  boundaries.push(end);
+  const segments = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const t1 = boundaries[i], t2 = boundaries[i + 1];
+    if (t2 === t1) continue;
+    segments.push({ from: patrolPositionAt(monster, t1), to: patrolPositionAt(monster, t2) });
+  }
+  if (!segments.length) {
+    const p = patrolPositionAt(monster, start);
+    segments.push({ from: p, to: p });
+  }
+  return segments;
+}
+
 // Closest-point-on-segment-to-circle-center check (standard swept-circle test), NOT an endpoint-only
 // distance check — a single movement step can legitimately go from outside the encounter radius,
 // through it, and back outside within one accepted server displacement (tunnelling), so only

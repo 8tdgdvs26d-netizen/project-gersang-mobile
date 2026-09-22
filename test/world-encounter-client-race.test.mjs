@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {battleAlreadyActiveFromMoveResponse} from '../public/app.js';
+import {battleAlreadyActiveFromWorldResponse} from '../public/app.js';
 
 // P4-02 Merge Gate Race Fix — public/app.js is a browser entry module (its only top-level side
 // effect, `boot()`, is guarded behind `typeof document!=='undefined'` specifically so this import is
@@ -18,14 +18,14 @@ const battleActiveRejectedResponse=Object.freeze({status:'REJECTED',errorCode:'E
 const ordinaryAcceptedResponse=Object.freeze({status:'ACCEPTED',data:{worldPosition:{x:300,y:220},state:'IN_WORLD',throttled:false,collided:false,staleSequence:false}});
 const ordinaryRejectedResponse=Object.freeze({status:'REJECTED',errorCode:'ERR_INVALID_WORLD_TARGET'});
 
-test('battleAlreadyActiveFromMoveResponse: correctly classifies every response shape sendWorldMove can receive',()=>{
-  assert.equal(battleAlreadyActiveFromMoveResponse(encounterTriggeredResponse),true);
-  assert.equal(battleAlreadyActiveFromMoveResponse(battleActiveRejectedResponse),true);
-  assert.equal(battleAlreadyActiveFromMoveResponse(ordinaryAcceptedResponse),false);
-  assert.equal(battleAlreadyActiveFromMoveResponse(ordinaryRejectedResponse),false);
-  assert.equal(battleAlreadyActiveFromMoveResponse({status:'ACCEPTED',data:{encounterTriggered:false}}),false);
-  assert.equal(battleAlreadyActiveFromMoveResponse(null),false);
-  assert.equal(battleAlreadyActiveFromMoveResponse(undefined),false);
+test('battleAlreadyActiveFromWorldResponse: correctly classifies every response shape sendWorldMove can receive',()=>{
+  assert.equal(battleAlreadyActiveFromWorldResponse(encounterTriggeredResponse),true);
+  assert.equal(battleAlreadyActiveFromWorldResponse(battleActiveRejectedResponse),true);
+  assert.equal(battleAlreadyActiveFromWorldResponse(ordinaryAcceptedResponse),false);
+  assert.equal(battleAlreadyActiveFromWorldResponse(ordinaryRejectedResponse),false);
+  assert.equal(battleAlreadyActiveFromWorldResponse({status:'ACCEPTED',data:{encounterTriggered:false}}),false);
+  assert.equal(battleAlreadyActiveFromWorldResponse(null),false);
+  assert.equal(battleAlreadyActiveFromWorldResponse(undefined),false);
 });
 
 // P4-02-M: Encounter completion reorder. Reproduces the exact race the P4-02 Merge Gate review
@@ -36,25 +36,25 @@ test('battleAlreadyActiveFromMoveResponse: correctly classifies every response s
 // "battle-already-active" so that whichever one is actually processed takes the resync path.
 test('P4-02-M: encounter completion reorder — both the (delayed) encounterTriggered response and the (early) ERR_BATTLE_ACTIVE response independently force the resync path, in either processing order',()=>{
   // Order 1: B (the later request) is processed first, as the review's race describes.
-  const bProcessedFirst=battleAlreadyActiveFromMoveResponse(battleActiveRejectedResponse);
-  const aProcessedSecond=battleAlreadyActiveFromMoveResponse(encounterTriggeredResponse);
+  const bProcessedFirst=battleAlreadyActiveFromWorldResponse(battleActiveRejectedResponse);
+  const aProcessedSecond=battleAlreadyActiveFromWorldResponse(encounterTriggeredResponse);
   assert.equal(bProcessedFirst,true,'B (ERR_BATTLE_ACTIVE) must force resync even though it completed first');
   assert.equal(aProcessedSecond,true,'A (encounterTriggered:true) must still force resync even though it completed second and arrives after B already resynced');
 
   // Order 2 (reversed): A is processed first, B second — the predicate takes no shared/ordering
   // state (no closure over latestCompletedMovementSequence or similar), so there is no "which one
   // came first" input for it to be sensitive to; both orders must produce identical results.
-  const aProcessedFirst=battleAlreadyActiveFromMoveResponse(encounterTriggeredResponse);
-  const bProcessedSecond=battleAlreadyActiveFromMoveResponse(battleActiveRejectedResponse);
+  const aProcessedFirst=battleAlreadyActiveFromWorldResponse(encounterTriggeredResponse);
+  const bProcessedSecond=battleAlreadyActiveFromWorldResponse(battleActiveRejectedResponse);
   assert.equal(aProcessedFirst,bProcessedFirst);
   assert.equal(bProcessedSecond,aProcessedSecond);
 
   // Structural proof this predicate is actually wired in FRONT of the completion-order discard in
   // sendWorldMove — a passing predicate alone doesn't prove the race is closed if the discard could
   // still run first and `return` before the predicate is ever consulted.
-  const gateIndex=appSource.indexOf('if(battleAlreadyActiveFromMoveResponse(r)){');
+  const gateIndex=appSource.indexOf('if(battleAlreadyActiveFromWorldResponse(r)){');
   const discardIndex=appSource.indexOf('if(requestSequence<latestCompletedMovementSequence){');
-  assert.ok(gateIndex>=0,'battleAlreadyActiveFromMoveResponse gate must exist in sendWorldMove');
+  assert.ok(gateIndex>=0,'battleAlreadyActiveFromWorldResponse gate must exist in sendWorldMove');
   assert.ok(discardIndex>=0,'the completion-order discard must still exist, unremoved');
   assert.ok(gateIndex<discardIndex,'the battle-already-active gate must run BEFORE the completion-order discard, or an older response could still be silently dropped before the gate ever sees it');
 
@@ -73,15 +73,15 @@ test('P4-02-M: encounter completion reorder — both the (delayed) encounterTrig
 // client ever sees is a bare REJECTED/ERR_BATTLE_ACTIVE. That alone must still be enough to recover
 // the existing ACTIVE battle, without ever having seen an encounterTriggered:true response.
 test('P4-02-N: ERR_BATTLE_ACTIVE alone (no encounterTriggered response ever received) still forces prediction-suspend + resync',()=>{
-  assert.equal(battleAlreadyActiveFromMoveResponse(battleActiveRejectedResponse),true);
+  assert.equal(battleAlreadyActiveFromWorldResponse(battleActiveRejectedResponse),true);
   // The predicate needs nothing beyond {status,errorCode} — no `data`, no battleId/monsterId — proving
   // it cannot possibly depend on having seen the original triggering response's payload.
   assert.deepEqual(Object.keys(battleActiveRejectedResponse),['status','errorCode']);
 
   // A plain ERR_BATTLE_ACTIVE response has no `.data` at all (see server.mjs's REJECTED shape) — the
   // resync branch must tolerate that (optional chaining), never throwing on `r.data.throttled`.
-  assert.doesNotThrow(()=>battleAlreadyActiveFromMoveResponse({status:'REJECTED',errorCode:'ERR_BATTLE_ACTIVE'}));
-  const gateBranch=appSource.slice(appSource.indexOf('if(battleAlreadyActiveFromMoveResponse(r)){'),appSource.indexOf('if(requestSequence<latestCompletedMovementSequence){'));
+  assert.doesNotThrow(()=>battleAlreadyActiveFromWorldResponse({status:'REJECTED',errorCode:'ERR_BATTLE_ACTIVE'}));
+  const gateBranch=appSource.slice(appSource.indexOf('if(battleAlreadyActiveFromWorldResponse(r)){'),appSource.indexOf('if(requestSequence<latestCompletedMovementSequence){'));
   assert.ok(/r\.data\?\.throttled/.test(gateBranch)&&/r\.data\?\.collided/.test(gateBranch),'telemetry recording in the resync branch must use optional chaining, since a REJECTED response has no .data');
 });
 
@@ -101,13 +101,13 @@ test('P4-02-O: an older ordinary completion arriving after a battle-signal respo
 
   // B (newer than C) completes first: bounces off battleIsActive() with ERR_BATTLE_ACTIVE. The fix's
   // own watermark-advance line (Math.max, verified structurally below) is replicated here exactly.
-  assert.equal(battleAlreadyActiveFromMoveResponse(battleActiveRejectedResponse),true);
+  assert.equal(battleAlreadyActiveFromWorldResponse(battleActiveRejectedResponse),true);
   latestCompletedMovementSequence=Math.max(latestCompletedMovementSequence,seqB);
   assert.equal(latestCompletedMovementSequence,6);
 
   // A (the actual trigger, older than B but newer than C) completes second: also battle-signaled —
   // the watermark must never regress (Math.max keeps it at 6, A's own seqA=5 is lower).
-  assert.equal(battleAlreadyActiveFromMoveResponse(encounterTriggeredResponse),true);
+  assert.equal(battleAlreadyActiveFromWorldResponse(encounterTriggeredResponse),true);
   latestCompletedMovementSequence=Math.max(latestCompletedMovementSequence,seqA);
   assert.equal(latestCompletedMovementSequence,6,'the watermark must never move backwards');
 
@@ -116,14 +116,14 @@ test('P4-02-O: an older ordinary completion arriving after a battle-signal respo
   // discard check the rest of sendWorldMove already relies on must now correctly identify it as
   // stale, because the watermark has advanced past it.
   const responseC=Object.freeze({status:'ACCEPTED',data:{worldPosition:{x:300,y:220},state:'IN_WORLD',throttled:false,collided:false,staleSequence:false}});
-  assert.equal(battleAlreadyActiveFromMoveResponse(responseC),false,'C is an ordinary move, not itself battle-signaled — it must go through the normal discard path, not the resync branch');
+  assert.equal(battleAlreadyActiveFromWorldResponse(responseC),false,'C is an ordinary move, not itself battle-signaled — it must go through the normal discard path, not the resync branch');
   const cIsDiscarded=seqC<latestCompletedMovementSequence; // the exact expression sendWorldMove uses
   assert.equal(cIsDiscarded,true,'C must be discarded now — before this fix, an unadvanced watermark could have let it through');
 
   // Structural proof: the watermark-advance line actually lives inside the battle-already-active
   // branch (before its own `return`), uses Math.max (never regresses the watermark), and the
   // completion-order discard expression below is still exactly what this test replicated above.
-  const gateIndex=appSource.indexOf('if(battleAlreadyActiveFromMoveResponse(r)){');
+  const gateIndex=appSource.indexOf('if(battleAlreadyActiveFromWorldResponse(r)){');
   const discardIndex=appSource.indexOf('if(requestSequence<latestCompletedMovementSequence){');
   const gateBranch=appSource.slice(gateIndex,discardIndex);
   assert.ok(/latestCompletedMovementSequence=Math\.max\(latestCompletedMovementSequence,requestSequence\);/.test(gateBranch),'the battle-already-active branch must advance the watermark via Math.max before its own return');
@@ -136,7 +136,7 @@ test('P4-02-O: an older ordinary completion arriving after a battle-signal respo
 // fix. And an ordinary stale ACCEPTED response's handling block (shouldSuspendAfterAccepted/
 // catchUpDebtAfterGrant, gated on `!stale`) must still exist, unremoved and unmodified in shape.
 test('normal (non-battle-active) REJECTED and stale ACCEPTED handling are completely unchanged by this fix',()=>{
-  assert.equal(battleAlreadyActiveFromMoveResponse(ordinaryRejectedResponse),false);
+  assert.equal(battleAlreadyActiveFromWorldResponse(ordinaryRejectedResponse),false);
   assert.ok(appSource.includes(`console.warn('sendWorldMove: REJECTED',r.errorCode);\n      toast(describeWorldMoveError(r.errorCode));\n      predictionSuspended=true;`),'the ordinary REJECTED handling block must be byte-for-byte unchanged');
   assert.ok(appSource.includes('predictionSuspended=shouldSuspendAfterAccepted(r.data);'),'the ordinary ACCEPTED prediction-suspend decision must still exist unchanged');
   assert.ok(appSource.includes("if(r.data.collided&&!stale)toast('撞到障礙物');"),'the stale-gated collision toast must still exist unchanged');
