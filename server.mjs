@@ -10,7 +10,7 @@ import { CITY_DEFINITIONS, isWithinCityEntry } from "./public/cities.js";
 import { busQuote } from "./public/bus.js";
 import { GOOD_DEFINITIONS, MARKET_SEED } from "./public/goods.js";
 import { marketExecutionQuote } from "./public/marketpricing.js";
-import { WORLD_MONSTER_DEFINITIONS, segmentEntersEncounterRadius, patrolPositionAt } from "./public/worldmonsters.js";
+import { WORLD_MONSTER_DEFINITIONS, segmentEntersEncounterRadius, patrolPositionAt, patrolSegmentsBetween } from "./public/worldmonsters.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
@@ -411,7 +411,42 @@ function enterCity(env){const e=check(env);if(e)return e;return idem(env.idempot
   // ACTIVE world-triggered battle could still call city/enter and escape the fight via city entry.
   if(battleIsActive())return{status:'REJECTED',errorCode:'ERR_BATTLE_ACTIVE'};
   const city=cities.find(c=>c.id===env.payload.destinationCityId);if(!city)return{status:'REJECTED',errorCode:'ERR_CITY_NOT_FOUND'};if(!isWithinCityEntry(s.worldPosition,city))return{status:'REJECTED',errorCode:'ERR_CITY_ENTRY_OUT_OF_RANGE'};db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY' WHERE id='char-demo'`).run(city.id);return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_CITY',worldPosition:s.worldPosition}}})}
-function exitCity(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot();if(s.state!=='IN_CITY')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};const city=cities.find(c=>c.id===s.cityId),exitPoint=city?.exitPoint;if(!Number.isFinite(exitPoint?.x)||!Number.isFinite(exitPoint?.y)||exitPoint.x<WORLD_BOUNDS.min||exitPoint.x>WORLD_BOUNDS.max||exitPoint.y<WORLD_BOUNDS.min||exitPoint.y>WORLD_BOUNDS.max||INFLATED_OBSTACLES.some(rect=>pointInRect(exitPoint.x,exitPoint.y,rect)))return{status:'REJECTED',errorCode:'ERR_CITY_EXIT_INVALID'};db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(exitPoint.x,exitPoint.y);return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_WORLD',worldPosition:{x:exitPoint.x,y:exitPoint.y}}}})}
+function exitCity(env){const e=check(env);if(e)return e;
+  const result=idem(env.idempotencyKey,env.payload,()=>{const s=snapshot();if(s.state!=='IN_CITY')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};const city=cities.find(c=>c.id===s.cityId),exitPoint=city?.exitPoint;if(!Number.isFinite(exitPoint?.x)||!Number.isFinite(exitPoint?.y)||exitPoint.x<WORLD_BOUNDS.min||exitPoint.x>WORLD_BOUNDS.max||exitPoint.y<WORLD_BOUNDS.min||exitPoint.y>WORLD_BOUNDS.max||INFLATED_OBSTACLES.some(rect=>pointInRect(exitPoint.x,exitPoint.y,rect)))return{status:'REJECTED',errorCode:'ERR_CITY_EXIT_INVALID'};db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(exitPoint.x,exitPoint.y);
+    // P4-03B Merge Gate fix — captured INSIDE the idem()-cached callback so an idempotent replay
+    // (same idempotencyKey; idem() returns the CACHED result WITHOUT re-running this body at all)
+    // reuses this exact original instant, never a fresh Date.now() taken at replay time. See the
+    // rebase logic right after this idem() call for why that distinction matters.
+    return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_WORLD',worldPosition:{x:exitPoint.x,y:exitPoint.y},worldExposureRebasedAt:Date.now()}}});
+  // P4-03B — IN_CITY->IN_WORLD is a position discontinuity (world_x/world_y just jumped to this
+  // city's exitPoint, unrelated to wherever the character was before entering the city): rebasing the
+  // exposure watermark here (after the transaction commits, only on ACCEPTED — same rollback-safety
+  // rule as advanceWorldExposureWatermark, defined below) stops the next heartbeat/moveWorld from
+  // testing a stale pre-city (or even a previous IN_WORLD session's) time window against the
+  // character's brand-new exit-point position — see the P4-03B Design Clarification's watermark
+  // lifecycle analysis for why this is a correctness fix, not just a staleness nicety.
+  //
+  // P4-03B Merge Gate fix — "exitCity idempotent replay incorrectly rebases the exposure watermark
+  // to replay time": idem() can return a CACHED ACCEPTED result for a replayed idempotencyKey
+  // WITHOUT re-running the callback above — a fresh Date.now() taken HERE (outside idem()) would
+  // then silently rebase the watermark to the REPLAY instant on every replay, discarding legitimate
+  // Monster->Player exposure history between the original exit and the replay. Using
+  // result.data.worldExposureRebasedAt instead means a replay always reuses the ORIGINAL exit
+  // instant (baked into the cached response the very first time), never a new one. Math.max keeps
+  // this monotonic, consistent with advanceWorldExposureWatermark's own write rule (T0<=T-of-replay
+  // always holds here regardless, but the explicit Math.max keeps this write pattern uniform and
+  // safe against any future caller ordering).
+  if(result.status!=='ACCEPTED')return result;
+  worldExposureWatermark.set('char-demo',Math.max(worldExposureWatermark.get('char-demo')??0,result.data.worldExposureRebasedAt));
+  // worldExposureRebasedAt is purely internal bookkeeping (read just above) — it was never part of
+  // exitCity()'s public response contract before this fix and must not become part of it now, so it
+  // is stripped before the response reaches the client. idem()'s own cache still stores the full
+  // `result` (including this field) exactly as returned by the callback, which is what keeps a
+  // replay's rebase timestamp correct — this stripping happens strictly after that, per-call, and
+  // never touches what gets cached.
+  const {worldExposureRebasedAt,...publicData}=result.data;
+  return {...result,data:publicData};
+}
 function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot(),p=env.payload;if(s.state!=='IN_CITY'||s.cityId!==p.cityId)return{status:'REJECTED',errorCode:'ERR_PHYSICAL_PRESENCE_REQUIRED'};if(p.quantity<=0)return{status:'REJECTED',errorCode:'ERR_INVALID_QUANTITY'};const cur=db.prepare(`SELECT quantity FROM storage WHERE character_id='char-demo' AND city_id=? AND good_id=?`).get(s.cityId,p.goodTypeId)?.quantity??0;if(p.direction==='CARGO_TO_STORAGE'){changeCargo(p.goodTypeId,-p.quantity);db.prepare(`INSERT INTO storage VALUES('char-demo',?,?,?) ON CONFLICT(character_id,city_id,good_id) DO UPDATE SET quantity=quantity+excluded.quantity`).run(s.cityId,p.goodTypeId,p.quantity)}else if(p.direction==='STORAGE_TO_CARGO'){if(cur<p.quantity)throw new Error('ERR_INSUFFICIENT_STORAGE');db.prepare(`UPDATE storage SET quantity=quantity-? WHERE character_id='char-demo' AND city_id=? AND good_id=?`).run(p.quantity,s.cityId,p.goodTypeId);changeCargo(p.goodTypeId,p.quantity)}else return{status:'REJECTED',errorCode:'ERR_INVALID_DIRECTION'};return{status:'ACCEPTED',data:{quantity:p.quantity}}})}
 
 // Movement Prototype Parameters (P1-02/P1-04) — not final balance/UX specs, subject to Playtest.
@@ -471,7 +506,97 @@ const INFLATED_OBSTACLES=OBSTACLES.map(r=>inflateRect(r,PLAYER_COLLISION_RADIUS)
 function segmentBlocked(x1,y1,x2,y2){
   return INFLATED_OBSTACLES.some(rect=>pointInRect(x1,y1,rect)?pointInRect(x2,y2,rect):segmentIntersectsRect(x1,y1,x2,y2,rect));
 }
-function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{
+
+// P4-03B — Active Monster -> Stationary Player Encounter. See the approved P4-03B Audit/Design
+// Clarification for the full rationale; this block implements exactly what those documents settled.
+//
+// Memory-only per-character watermark: the last authoritative instant Monster->Player exposure was
+// evaluated through. Deliberately NOT persisted (no DB schema change) — same single-`char-demo`
+// Prototype simplification already accepted for lastWorldMoveAt/lastWorldMoveSequenceBySession above.
+const worldExposureWatermark=new Map();
+// Prototype Parameter, tunable/Playtest-subject like MOVE_CATCHUP_CAP_MS. Deliberately well under the
+// current patrol leg duration (~6000ms) so a normal, on-cadence evaluation crosses at most one
+// turnaround — see patrolSegmentsBetween's own comment for why this bounds cost, not correctness (the
+// function itself stays correct, just proportionally more expensive, even if a future content change
+// shrinks the leg below this value).
+const MAX_WORLD_EXPOSURE_LOOKBACK_MS=2000;
+// The bounded fromTime an exposure evaluation should actually use. A missing/non-finite watermark
+// (first server boot, first evaluation since a restart, or a character whose exposure has never been
+// evaluated this IN_WORLD session) is treated as a ZERO-length window ending at `now` — never a
+// `now-lookback` window — there is no real reference point for what happened before a watermark that
+// was never set, so nothing before `now` is ever retroactively evaluated (see P4-03B Design
+// Clarification §5, scenarios 1/12). A real (however stale) watermark is clamped to at most
+// MAX_WORLD_EXPOSURE_LOOKBACK_MS behind `now`, and the outer Math.min guards a (should-never-happen)
+// future/inverted watermark from ever producing a negative-length interval.
+function boundedExposureFromTime(characterId,now){
+  const raw=worldExposureWatermark.get(characterId);
+  if(raw===undefined||!Number.isFinite(raw))return now;
+  return Math.min(now,Math.max(raw,now-MAX_WORLD_EXPOSURE_LOOKBACK_MS));
+}
+// The ONLY place worldExposureWatermark is ever written. Called AFTER idem() has already returned (so
+// the SQLite transaction's fate — commit or rollback — is already decided), and only when
+// result.status==='ACCEPTED': a JS Map mutation is NOT rolled back by SQLite, so writing this inside
+// the transaction could leave the watermark advanced past an exposure interval that was actually
+// rolled back, silently skipping it on every future evaluation. Math.max (never a raw overwrite) keeps
+// this safe against idem()'s own duplicate-idempotencyKey replay path (a cached result, re-delivered
+// without re-running the evaluation) and against two calls completing out of order — the watermark can
+// only ever advance, never regress.
+function advanceWorldExposureWatermark(characterId,result){
+  if(result.status!=='ACCEPTED')return;
+  const evaluatedAt=result.data?.worldExposureEvaluatedAt;
+  if(!Number.isFinite(evaluatedAt))return;
+  worldExposureWatermark.set(characterId,Math.max(worldExposureWatermark.get(characterId)??0,evaluatedAt));
+}
+// The ONE shared server-authoritative primitive deciding "did any active, not-yet-consumed world
+// monster's own patrol movement sweep into `playerPosition` at any point during [fromTime,now]".
+// Reused unchanged by both worldHeartbeat() (idle-world liveness) and moveWorld() (so an actively
+// moving player with a delayed/disabled heartbeat still cannot bypass Monster->Player exposure — see
+// moveWorld()'s own comment below). Deliberately NOT a second battle-creation pipeline: on a hit it
+// calls the exact same createBattleCore()/world_monster_encounters primitives moveWorld()'s
+// pre-existing Player->Monster check already used before this slice — there is only ever one
+// encounter-creation code path in this file, just two different geometric questions feeding into it.
+function evaluateWorldMonsterExposure(characterId,playerPosition,fromTime,now){
+  for(const m of WORLD_MONSTER_DEFINITIONS){
+    if(!m.active)continue;
+    if(db.prepare(`SELECT 1 FROM world_monster_encounters WHERE character_id=? AND monster_id=?`).get(characterId,m.id))continue;
+    const hit=patrolSegmentsBetween(m,fromTime,now).some(seg=>segmentEntersEncounterRadius(seg.from,seg.to,{position:playerPosition,encounterRadius:m.encounterRadius}));
+    if(!hit)continue;
+    const encounter=encounterDefinitions[m.encounterId];
+    if(!encounter)continue;
+    const requested=playerTemplates.map(x=>x.id);
+    const deployments=playerTemplates.map(x=>({unitId:x.id,row:x.row,col:x.col}));
+    const battle=createBattleCore(encounter,requested,deployments);
+    db.prepare(`INSERT OR IGNORE INTO world_monster_encounters VALUES(?,?,?,?)`).run(characterId,m.id,battle.battleId,now);
+    return{monsterId:m.id,battleId:battle.battleId};
+  }
+  return null;
+}
+// P4-03B — client-triggered idle-world liveness: while the player is stationary (or at least not
+// sending world/move commands), nothing else in this file would ever evaluate whether an active
+// monster's own patrol has swept into them. This command is the trigger; every actual decision inside
+// it is still 100% server-authoritative (time, monster positions, swept geometry, battle creation,
+// consumption — see the P4-03B Design Clarification's "server-authoritative geometry, client-triggered
+// liveness" distinction). Payload is deliberately empty: the client supplies nothing about which
+// monster, what position, or what time — all of that comes from server.mjs's own state, exactly like
+// every other command in this file.
+function worldHeartbeat(env){const e=check(env);if(e)return e;
+  const characterId='char-demo';
+  const result=idem(env.idempotencyKey,env.payload,()=>{
+    const s=snapshot();
+    if(s.state!=='IN_WORLD')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};
+    if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};
+    if(battleIsActive())return{status:'REJECTED',errorCode:'ERR_BATTLE_ACTIVE'};
+    const now=Date.now();
+    const fromTime=boundedExposureFromTime(characterId,now);
+    const exposure=evaluateWorldMonsterExposure(characterId,s.worldPosition,fromTime,now);
+    return{status:'ACCEPTED',data:{worldExposureEvaluatedAt:now,encounterTriggered:!!exposure,...(exposure?{battleId:exposure.battleId,monsterId:exposure.monsterId}:{})}};
+  });
+  advanceWorldExposureWatermark(characterId,result);
+  return result;
+}
+
+function moveWorld(env){const e=check(env);if(e)return e;
+  const result=idem(env.idempotencyKey,env.payload,()=>{
   const s=snapshot();
   if(s.state!=='IN_WORLD')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};
   if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};
@@ -488,7 +613,25 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
   if(effectiveMoveSequence<=lastSequence)return{status:'ACCEPTED',data:{worldPosition:s.worldPosition,state:s.state,throttled:false,collided:false,staleSequence:true}};
   lastWorldMoveSequenceBySession.set(env.sessionId,effectiveMoveSequence);
   const current=s.worldPosition;
-  const now=Date.now(),throttled=now-lastWorldMoveAt<MOVEMENT_MIN_INTERVAL_MS;
+  const now=Date.now();
+  // P4-03B — historical Monster->Player exposure MUST be evaluated against the player's position
+  // BEFORE this move is even considered, using the SAME shared primitive worldHeartbeat() uses (see
+  // evaluateWorldMonsterExposure's own comment) — this is what stops a client from bypassing Monster
+  // exposure entirely by never calling worldHeartbeat() while still actively moving (P4-03B Design
+  // Clarification Blocker 2). A hit here means "the monster's own patrol already swept through where
+  // you were standing, at some point since the last time this was checked" — that already happened
+  // BEFORE this move's own target was even sent, so this move must not additionally relocate the
+  // player this call: the response reports the PRE-move position unchanged (as if the move had never
+  // been attempted) plus the encounter signal, and the existing P4-02 Player->Monster check below is
+  // skipped entirely for this call (mutual exclusion — a single command may create at most one battle;
+  // world_monster_encounters' PRIMARY KEY guarantees exactly-once per monster regardless, but only this
+  // early return guarantees at most one NEW battle when two DIFFERENT monsters could each match).
+  const fromTime=boundedExposureFromTime('char-demo',now);
+  const exposure=evaluateWorldMonsterExposure('char-demo',current,fromTime,now);
+  if(exposure){
+    return{status:'ACCEPTED',data:{worldPosition:current,state:'IN_WORLD',throttled:false,collided:false,staleSequence:false,worldExposureEvaluatedAt:now,encounterTriggered:true,battleId:exposure.battleId,monsterId:exposure.monsterId}};
+  }
+  const throttled=now-lastWorldMoveAt<MOVEMENT_MIN_INTERVAL_MS;
   let nextX=current.x,nextY=current.y,collided=false;
   if(!throttled){
     const elapsedMs=now-lastWorldMoveAt,allowance=MOVE_SPEED_RATE*Math.min(elapsedMs,MOVE_CATCHUP_CAP_MS);
@@ -533,8 +676,11 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
       encounterResult={monsterId:monster.id,battleId:battle.battleId};
     }
   }
-  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:'IN_WORLD',throttled,collided,staleSequence:false,...(encounterResult?{encounterTriggered:true,battleId:encounterResult.battleId,monsterId:encounterResult.monsterId}:{})}};
-})}
+  return{status:'ACCEPTED',data:{worldPosition:{x:nextX,y:nextY},state:'IN_WORLD',throttled,collided,staleSequence:false,worldExposureEvaluatedAt:now,...(encounterResult?{encounterTriggered:true,battleId:encounterResult.battleId,monsterId:encounterResult.monsterId}:{})}};
+  });
+  advanceWorldExposureWatermark('char-demo',result);
+  return result;
+}
 
 async function api(req,res){
   const u=new URL(req.url,'http://localhost');
@@ -553,7 +699,7 @@ async function api(req,res){
   if(req.method==='POST'&&u.pathname==='/api/session/open')return reply(res,200,{sessionId:openSession()});
   if(req.method==='POST'&&u.pathname==='/api/commands/market/quote'){const b=await readBody(req);try{return reply(res,200,quote(b.goodTypeId,b.side,b.requestedQuantity))}catch(e){return reply(res,400,{errorCode:e.message})}}
   if(req.method==='POST'&&u.pathname==='/api/commands/market/equipment-quote'){const b=await readBody(req);try{return reply(res,200,equipmentQuote(b.itemId))}catch(e){return reply(res,400,{errorCode:e.message})}}
-  if(req.method==='POST'){const env=await readBody(req);let out;if(u.pathname==='/api/commands/market/buy')out=buy(env);else if(u.pathname==='/api/commands/market/sell')out=sell(env);else if(u.pathname==='/api/commands/market/equipment-sell')out=sellEquipment(env);else if(u.pathname==='/api/commands/transport/bus/start')out=startBus(env);else if(u.pathname==='/api/commands/travel/start')out=startTravel(env);else if(u.pathname==='/api/commands/travel/reroute')out=reroute(env);else if(u.pathname==='/api/commands/travel/resolve-arrival')out=resolveArrival(env);else if(u.pathname==='/api/commands/city/enter')out=enterCity(env);else if(u.pathname==='/api/commands/city/exit')out=exitCity(env);else if(u.pathname==='/api/commands/container/move')out=moveStorage(env);else if(u.pathname==='/api/commands/equipment/equip')out=equipItem(env);else if(u.pathname==='/api/commands/equipment/unequip')out=unequipItem(env);else if(u.pathname==='/api/commands/equipment/transfer')out=transferEquipment(env);else if(u.pathname==='/api/commands/equipment/store')out=storeEquipment(env);else if(u.pathname==='/api/commands/equipment/withdraw')out=withdrawEquipment(env);else if(u.pathname==='/api/commands/battle/settle-loot')out=settleBattleLoot(env);else if(u.pathname==='/api/commands/battle/start')out=startBattle(env);else if(u.pathname==='/api/commands/battle/move')out=battleMove(env);else if(u.pathname==='/api/commands/battle/target')out=battleTarget(env);else if(u.pathname==='/api/commands/battle/hold')out=battleHold(env);else if(u.pathname==='/api/commands/battle/global-pause')out=battleGlobalPause(env);else if(u.pathname==='/api/commands/battle/skill')out=battleSkill(env);else if(u.pathname==='/api/commands/battle/retreat')out=retreatBattle(env);else if(u.pathname==='/api/commands/world/move')out=moveWorld(env);else return false;return reply(res,200,out)}
+  if(req.method==='POST'){const env=await readBody(req);let out;if(u.pathname==='/api/commands/market/buy')out=buy(env);else if(u.pathname==='/api/commands/market/sell')out=sell(env);else if(u.pathname==='/api/commands/market/equipment-sell')out=sellEquipment(env);else if(u.pathname==='/api/commands/transport/bus/start')out=startBus(env);else if(u.pathname==='/api/commands/travel/start')out=startTravel(env);else if(u.pathname==='/api/commands/travel/reroute')out=reroute(env);else if(u.pathname==='/api/commands/travel/resolve-arrival')out=resolveArrival(env);else if(u.pathname==='/api/commands/city/enter')out=enterCity(env);else if(u.pathname==='/api/commands/city/exit')out=exitCity(env);else if(u.pathname==='/api/commands/container/move')out=moveStorage(env);else if(u.pathname==='/api/commands/equipment/equip')out=equipItem(env);else if(u.pathname==='/api/commands/equipment/unequip')out=unequipItem(env);else if(u.pathname==='/api/commands/equipment/transfer')out=transferEquipment(env);else if(u.pathname==='/api/commands/equipment/store')out=storeEquipment(env);else if(u.pathname==='/api/commands/equipment/withdraw')out=withdrawEquipment(env);else if(u.pathname==='/api/commands/battle/settle-loot')out=settleBattleLoot(env);else if(u.pathname==='/api/commands/battle/start')out=startBattle(env);else if(u.pathname==='/api/commands/battle/move')out=battleMove(env);else if(u.pathname==='/api/commands/battle/target')out=battleTarget(env);else if(u.pathname==='/api/commands/battle/hold')out=battleHold(env);else if(u.pathname==='/api/commands/battle/global-pause')out=battleGlobalPause(env);else if(u.pathname==='/api/commands/battle/skill')out=battleSkill(env);else if(u.pathname==='/api/commands/battle/retreat')out=retreatBattle(env);else if(u.pathname==='/api/commands/world/move')out=moveWorld(env);else if(u.pathname==='/api/commands/world/heartbeat')out=worldHeartbeat(env);else return false;return reply(res,200,out)}
   return false;
 }
 function serveStatic(req,res){let p=req.url==='/'?'/index.html':req.url;p=normalize(p).replace(/^(\.\.[/\\])+/, '');const file=join(PUBLIC_DIR,p);try{const data=readFileSync(file),ext=extname(file);const ct=ext==='.html'?'text/html; charset=utf-8':ext==='.js'?'text/javascript; charset=utf-8':ext==='.css'?'text/css; charset=utf-8':'application/octet-stream';res.writeHead(200,{'content-type':ct});res.end(data)}catch{res.writeHead(404);res.end('Not found')}}

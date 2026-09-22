@@ -363,11 +363,17 @@ const networkMoveCall=({x,y,moveSequence})=>command('/api/commands/world/move',{
 const guardedMoveCall=guardStaleGeneration(networkMoveCall,()=>movementGeneration);
 let movementRequestSequence=0,latestCompletedMovementSequence=0;
 // P4-02 Merge Gate fix — pure, DOM/network-free extraction of the order-independent decision the
-// completion-reorder race fix depends on: does this world/move response mean the server already has
-// an ACTIVE battle, regardless of which of two in-flight requests it belongs to or what order their
-// HTTP completions arrive in? Exported so the race (see sendWorldMove's own comment below, and
+// completion-reorder race fix depends on: does this world command response mean the server already
+// has an ACTIVE battle, regardless of which of two in-flight requests it belongs to or what order
+// their HTTP completions arrive in? Exported so the race (see sendWorldMove's own comment below, and
 // P4-02-M/N) can be exercised directly and deterministically, without needing a DOM/fetch environment.
-export function battleAlreadyActiveFromMoveResponse(r){
+//
+// P4-03B — renamed from battleAlreadyActiveFromMoveResponse: the response shape this checks
+// (status/data.encounterTriggered/errorCode) is identical for /api/commands/world/move AND the new
+// /api/commands/world/heartbeat (see server.mjs's worldHeartbeat()/moveWorld()), and the logic itself
+// never referenced anything move-specific — reused as-is by sendWorldHeartbeat below, not
+// re-implemented.
+export function battleAlreadyActiveFromWorldResponse(r){
   if(!r)return false;
   return r.status==='ACCEPTED'?r.data?.encounterTriggered===true:r.errorCode==='ERR_BATTLE_ACTIVE';
 }
@@ -425,7 +431,7 @@ const sendWorldMove=async(target)=>{
   // catchUpDebt over the just-resynced Battle presentation state. Without this, that discard's
   // `requestSequence<latestCompletedMovementSequence` check could still let C through if C's own
   // sequence happens to be higher than whatever the watermark last was.
-  if(battleAlreadyActiveFromMoveResponse(r)){
+  if(battleAlreadyActiveFromWorldResponse(r)){
     latestCompletedMovementSequence=Math.max(latestCompletedMovementSequence,requestSequence);
     predictionSuspended=true;
     await refresh();
@@ -466,6 +472,37 @@ const sendWorldMove=async(target)=>{
   recordMoveTelemetry({status:'ACCEPTED',errorCode:null,throttled:r.data.throttled,collided:r.data.collided,startedAt});
   telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);
 };
+
+// P4-03B — client-triggered idle-world liveness poll. The server decides EVERYTHING about whether an
+// encounter happened (time, monster position, swept geometry, battle creation, consumption — see
+// evaluateWorldMonsterExposure's own comment in server.mjs); this call is purely the trigger that
+// makes that evaluation happen while the player isn't otherwise sending any world command (a
+// stationary player never calls world/move at all — see tickMovementFrame's own gating). Payload is
+// deliberately {} — the client never supplies player position, monster identity, or any timestamp.
+// `worldHeartbeatInFlight` guards against a slow response (network retry, etc.) still being in flight
+// when the next 1000ms tick fires — never more than one heartbeat request outstanding at once.
+let worldHeartbeatInFlight=false;
+async function sendWorldHeartbeat(){
+  if(worldHeartbeatInFlight)return;
+  worldHeartbeatInFlight=true;
+  try{
+    const r=await command('/api/commands/world/heartbeat',{});
+    // Same resync rule as sendWorldMove's own battleAlreadyActiveFromWorldResponse check: either this
+    // heartbeat itself just triggered an encounter, or the server already has an ACTIVE battle from
+    // some other in-flight request — either way, refresh() fetches fresh authoritative state (never
+    // trusts this response's payload beyond the trigger signal) and the existing refresh()/render()
+    // path naturally transitions to the Battle UI (see refresh()'s own battle?.status==='ACTIVE' tab
+    // switch).
+    if(battleAlreadyActiveFromWorldResponse(r))await refresh();
+  }catch(err){
+    // Best-effort: a failed heartbeat (network hiccup, etc.) is silently retried by the next 1000ms
+    // tick — no toast, no prediction suspension, since (unlike a rejected player-initiated move) there
+    // is no player action or on-screen prediction this failure needs to explain.
+    console.error('sendWorldHeartbeat: command() threw (network or server exception)',err);
+  }finally{
+    worldHeartbeatInFlight=false;
+  }
+}
 
 // Virtual joystick (P1-07A) — fixed bottom-left, replaces the old SVG direct-drag-to-move input.
 // Only one movement input mechanism is ever active: the joystick is the sole driver of free
@@ -647,9 +684,16 @@ function tickMovementFrame(now){
   if(rawTelemetryDt!=null)telemetryFpsEma=nextFpsEma(telemetryFpsEma,rawTelemetryDt);
   patchTelemetryOverlay(now,predictionLeadDistance(predictedPosition,serverPos));
 }
-async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600);requestAnimationFrame(tickMovementFrame)}
+async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600);
+  // P4-03B — same "one eternal setInterval + internal gate" style as the two intervals above (never
+  // dynamically created/destroyed on tab/state changes). Only actually sends a request while every
+  // condition holds: viewing the World Map tab, authoritatively IN_WORLD (excludes IN_CITY/TRAVELING),
+  // the document is visible (battery/network — server-side fairness comes from the bounded lookback
+  // regardless, see boundedExposureFromTime in server.mjs), and no battle is currently ACTIVE.
+  setInterval(()=>{if(S.tab==='map'&&S.snap?.state==='IN_WORLD'&&document.visibilityState==='visible'&&S.battle?.status!=='ACTIVE')sendWorldHeartbeat()},1000);
+  requestAnimationFrame(tickMovementFrame)}
 // P4-02 Merge Gate fix — guarded so this module can be safely `import`ed in a Node test (to exercise
-// battleAlreadyActiveFromMoveResponse above) without auto-booting a real app instance against a
+// battleAlreadyActiveFromWorldResponse above) without auto-booting a real app instance against a
 // nonexistent DOM/server. In every real browser load, `document` always exists, so this is identical
 // to the previous unconditional boot() call — zero behavior change for actual players.
 if(typeof document!=='undefined')boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);
