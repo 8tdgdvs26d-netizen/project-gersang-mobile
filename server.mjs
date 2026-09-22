@@ -412,7 +412,12 @@ function enterCity(env){const e=check(env);if(e)return e;return idem(env.idempot
   if(battleIsActive())return{status:'REJECTED',errorCode:'ERR_BATTLE_ACTIVE'};
   const city=cities.find(c=>c.id===env.payload.destinationCityId);if(!city)return{status:'REJECTED',errorCode:'ERR_CITY_NOT_FOUND'};if(!isWithinCityEntry(s.worldPosition,city))return{status:'REJECTED',errorCode:'ERR_CITY_ENTRY_OUT_OF_RANGE'};db.prepare(`UPDATE characters SET city_id=?,state='IN_CITY' WHERE id='char-demo'`).run(city.id);return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_CITY',worldPosition:s.worldPosition}}})}
 function exitCity(env){const e=check(env);if(e)return e;
-  const result=idem(env.idempotencyKey,env.payload,()=>{const s=snapshot();if(s.state!=='IN_CITY')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};const city=cities.find(c=>c.id===s.cityId),exitPoint=city?.exitPoint;if(!Number.isFinite(exitPoint?.x)||!Number.isFinite(exitPoint?.y)||exitPoint.x<WORLD_BOUNDS.min||exitPoint.x>WORLD_BOUNDS.max||exitPoint.y<WORLD_BOUNDS.min||exitPoint.y>WORLD_BOUNDS.max||INFLATED_OBSTACLES.some(rect=>pointInRect(exitPoint.x,exitPoint.y,rect)))return{status:'REJECTED',errorCode:'ERR_CITY_EXIT_INVALID'};db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(exitPoint.x,exitPoint.y);return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_WORLD',worldPosition:{x:exitPoint.x,y:exitPoint.y}}}});
+  const result=idem(env.idempotencyKey,env.payload,()=>{const s=snapshot();if(s.state!=='IN_CITY')return{status:'REJECTED',errorCode:'ERR_INVALID_STATE'};if(pendingLootSettlement())return{status:'REJECTED',errorCode:'ERR_BATTLE_SETTLEMENT_REQUIRED'};const city=cities.find(c=>c.id===s.cityId),exitPoint=city?.exitPoint;if(!Number.isFinite(exitPoint?.x)||!Number.isFinite(exitPoint?.y)||exitPoint.x<WORLD_BOUNDS.min||exitPoint.x>WORLD_BOUNDS.max||exitPoint.y<WORLD_BOUNDS.min||exitPoint.y>WORLD_BOUNDS.max||INFLATED_OBSTACLES.some(rect=>pointInRect(exitPoint.x,exitPoint.y,rect)))return{status:'REJECTED',errorCode:'ERR_CITY_EXIT_INVALID'};db.prepare(`UPDATE characters SET world_x=?,world_y=?,state='IN_WORLD' WHERE id='char-demo'`).run(exitPoint.x,exitPoint.y);
+    // P4-03B Merge Gate fix — captured INSIDE the idem()-cached callback so an idempotent replay
+    // (same idempotencyKey; idem() returns the CACHED result WITHOUT re-running this body at all)
+    // reuses this exact original instant, never a fresh Date.now() taken at replay time. See the
+    // rebase logic right after this idem() call for why that distinction matters.
+    return{status:'ACCEPTED',data:{cityId:city.id,state:'IN_WORLD',worldPosition:{x:exitPoint.x,y:exitPoint.y},worldExposureRebasedAt:Date.now()}}});
   // P4-03B — IN_CITY->IN_WORLD is a position discontinuity (world_x/world_y just jumped to this
   // city's exitPoint, unrelated to wherever the character was before entering the city): rebasing the
   // exposure watermark here (after the transaction commits, only on ACCEPTED — same rollback-safety
@@ -420,8 +425,27 @@ function exitCity(env){const e=check(env);if(e)return e;
   // testing a stale pre-city (or even a previous IN_WORLD session's) time window against the
   // character's brand-new exit-point position — see the P4-03B Design Clarification's watermark
   // lifecycle analysis for why this is a correctness fix, not just a staleness nicety.
-  if(result.status==='ACCEPTED')worldExposureWatermark.set('char-demo',Date.now());
-  return result;
+  //
+  // P4-03B Merge Gate fix — "exitCity idempotent replay incorrectly rebases the exposure watermark
+  // to replay time": idem() can return a CACHED ACCEPTED result for a replayed idempotencyKey
+  // WITHOUT re-running the callback above — a fresh Date.now() taken HERE (outside idem()) would
+  // then silently rebase the watermark to the REPLAY instant on every replay, discarding legitimate
+  // Monster->Player exposure history between the original exit and the replay. Using
+  // result.data.worldExposureRebasedAt instead means a replay always reuses the ORIGINAL exit
+  // instant (baked into the cached response the very first time), never a new one. Math.max keeps
+  // this monotonic, consistent with advanceWorldExposureWatermark's own write rule (T0<=T-of-replay
+  // always holds here regardless, but the explicit Math.max keeps this write pattern uniform and
+  // safe against any future caller ordering).
+  if(result.status!=='ACCEPTED')return result;
+  worldExposureWatermark.set('char-demo',Math.max(worldExposureWatermark.get('char-demo')??0,result.data.worldExposureRebasedAt));
+  // worldExposureRebasedAt is purely internal bookkeeping (read just above) — it was never part of
+  // exitCity()'s public response contract before this fix and must not become part of it now, so it
+  // is stripped before the response reaches the client. idem()'s own cache still stores the full
+  // `result` (including this field) exactly as returned by the callback, which is what keeps a
+  // replay's rebase timestamp correct — this stripping happens strictly after that, per-call, and
+  // never touches what gets cached.
+  const {worldExposureRebasedAt,...publicData}=result.data;
+  return {...result,data:publicData};
 }
 function moveStorage(env){const e=check(env);if(e)return e;return idem(env.idempotencyKey,env.payload,()=>{const s=snapshot(),p=env.payload;if(s.state!=='IN_CITY'||s.cityId!==p.cityId)return{status:'REJECTED',errorCode:'ERR_PHYSICAL_PRESENCE_REQUIRED'};if(p.quantity<=0)return{status:'REJECTED',errorCode:'ERR_INVALID_QUANTITY'};const cur=db.prepare(`SELECT quantity FROM storage WHERE character_id='char-demo' AND city_id=? AND good_id=?`).get(s.cityId,p.goodTypeId)?.quantity??0;if(p.direction==='CARGO_TO_STORAGE'){changeCargo(p.goodTypeId,-p.quantity);db.prepare(`INSERT INTO storage VALUES('char-demo',?,?,?) ON CONFLICT(character_id,city_id,good_id) DO UPDATE SET quantity=quantity+excluded.quantity`).run(s.cityId,p.goodTypeId,p.quantity)}else if(p.direction==='STORAGE_TO_CARGO'){if(cur<p.quantity)throw new Error('ERR_INSUFFICIENT_STORAGE');db.prepare(`UPDATE storage SET quantity=quantity-? WHERE character_id='char-demo' AND city_id=? AND good_id=?`).run(p.quantity,s.cityId,p.goodTypeId);changeCargo(p.goodTypeId,p.quantity)}else return{status:'REJECTED',errorCode:'ERR_INVALID_DIRECTION'};return{status:'ACCEPTED',data:{quantity:p.quantity}}})}
 

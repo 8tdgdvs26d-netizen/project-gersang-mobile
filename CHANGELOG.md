@@ -596,3 +596,15 @@
 - **已知限制**（如實記錄）：Encounter判定本身100%server-authoritative（時間、monster位置、swept geometry、battle creation、consumption全部server決定），但idle-world liveness依然需要**至少一個**client world request（heartbeat或者moveWorld）先會觸發evaluation。如果一個惡意client完全唔send任何world request（連heartbeat都唔send，亦完全唔郁），server唔會自己背景模擬encounter——呢個係request/response（無WebSocket、無server push）架構嘅固有限制，同市場tick／travel arrival呢啲現有lazy-evaluation機制屬於同一類已接受嘅Prototype限制，今次冇用server timer或WebSocket去解決（跟足Coding Order嘅明確要求）。
 - 存檔影響：無schema變動。
 - Rollback基準：`main` @ `314482d90951de39c425244927089ba8e41cc51e`。
+
+## P4-03B Merge Gate Fix — exitCity Idempotent Replay Watermark Bug — 2026-09-22
+
+- **Draft Review發現一個真實bug**：`exitCity()`嘅watermark rebase喺`idem()` return之後先攞`Date.now()`。但`idem()`對一個重複嘅idempotencyKey，可以直接返回cached嘅ACCEPTED result，完全唔會重新執行原本個transaction。舊code喺呢種replay情況下，依然會攞一個**全新**嘅`Date.now()`去rebase watermark——即係話一個已經成功咗嘅`exitCity`指令，如果client（或者retry機制）重新send多次同一個idempotencyKey，每次都會將watermark悄悄推前去retry嗰一刻，靜靜雞掉咗原本exit同retry之間嘅真正Monster→Player exposure歷史。
+- 修正：喺`idem()`嘅callback**入面**（會俾caching住嘅嗰部分）攞`worldExposureRebasedAt:Date.now()`，rebase邏輯改用`result.data.worldExposureRebasedAt`（唔再喺`idem()`外面自己攞`Date.now()`）。Replay嘅時候，`idem()`返回嘅係cache低咗嘅原始result（包括原始個timestamp），所以rebase永遠用返第一次執行嗰刻嘅真正exit時間，唔會因為replay而被覆蓋。維持`Math.max`嘅monotonic寫法。
+- `worldExposureRebasedAt`純粹係internal bookkeeping，讀完即刻喺response送出之前strip咗——`exitCity()`嘅client-facing response shape同之前完全一樣（呢個fix順便揭發咗一個我自己引入嘅regression：最初嘅fix直接將呢個欄位擺咗入client response，令`test/city-entry.test.mjs`一個成日已經有嘅strict-shape assertion唔再PASS；而家已經收返，`city-entry.test.mjs`一隻字都冇改過）。
+- 新增**P4-03B-Q2**（`test/world-monster-heartbeat.test.mjs`）——真正behavioral regression test，唔淨係source-string assertion：exitCity第一次喺T0成功（player企喺patrol leg嘅正中點，離兩個turnaround都有60px margin，避免real-time phase巧合）→ 等2500ms真實時間（monster繼續行，已經離開返嗰個點約50px）→ 用**完全相同**嘅idempotencyKey重試exitCity（確認cached result同第一次一模一樣）→ heartbeat必須依然可以偵測到T0至今呢段窗口嘅exposure（`encounterTriggered:true`）。已經用scratch copy（將`server.mjs`複製去`/tmp`，將exitCity改返舊嘅buggy pattern，真係spawn個server行呢個test）確認：舊code會令呢個test FAIL（`encounterTriggered:false`，因為watermark錯誤咁被推前咗去retry時間），新code先會PASS。
+- 亦已更新Q嘅structural assertion，同加多一句assert確認`worldExposureRebasedAt`唔會漏出client-visible response。
+- 測試結果：430（上一round）＋1（新增P4-03B-Q2）＝**431 tests passed, 0 failed**（連跑三次確認唔flaky）。修正過程中一度發現自己喺實作呢個fix時，順手引入咗一個`test/city-entry.test.mjs`嘅regression（因為最初將`worldExposureRebasedAt`直接擺咗入client response，撞正嗰個test一個成日已經有嘅strict-shape assertion）——已經即刻改正（唔係削弱或者刪除嗰個既有test嘅assertion，而係將`server.mjs`改到符合佢一直以嚟嘅正確要求：`worldExposureRebasedAt`純internal，永遠唔應該漏出去client），`test/city-entry.test.mjs`本身一隻字都冇改過。
+- Scope check：只改咗`server.mjs`同`test/world-monster-heartbeat.test.mjs`；patrol route／patrol speed／encounter radius／heartbeat cadence／lookback=2000ms／DB schema／Battle mechanics／movement constants／city coordinates／city entry radius／market economy／travel bus／WebSocket policy／server timer policy／aggro-chase-leash-respawn scope全部完全冇改。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `314482d90951de39c425244927089ba8e41cc51e`。

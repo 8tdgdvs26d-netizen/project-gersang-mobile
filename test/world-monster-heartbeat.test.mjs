@@ -421,7 +421,41 @@ test('P4-03B-Q: exitCity() rebases the watermark — a decoy position from befor
   const serverSource=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
   const exitStart=serverSource.indexOf('function exitCity(env){'),exitEnd=serverSource.indexOf('function moveStorage(env){');
   const exitBody=serverSource.slice(exitStart,exitEnd);
-  assert.ok(exitBody.includes("if(result.status==='ACCEPTED')worldExposureWatermark.set('char-demo',Date.now());"),'exitCity() must rebase the watermark to the exit-time now, only on ACCEPTED');
+  assert.ok(exitBody.includes("worldExposureWatermark.set('char-demo',Math.max(worldExposureWatermark.get('char-demo')??0,result.data.worldExposureRebasedAt));"),'exitCity() must rebase the watermark using the timestamp captured inside the idem()-cached callback — never a fresh Date.now() taken outside it (see Q2)');
+  assert.ok(exitBody.includes('worldExposureRebasedAt:Date.now()'),'the exit timestamp must be captured INSIDE the idem() callback so an idempotent replay reuses the original instant from the cached result, not a fresh one');
+  assert.ok(exitBody.includes('const {worldExposureRebasedAt,...publicData}=result.data;'),'the internal bookkeeping field must be stripped before the response reaches the client, keeping exitCity()\'s public response shape unchanged');
+});
+
+// Q2: exitCity idempotent replay must NOT rebase the watermark to the replay time — a replayed
+// idempotencyKey returns idem()'s CACHED original result without re-running exitCity()'s body at
+// all, so a fresh Date.now() taken after idem() returns (rather than the timestamp baked into that
+// cached result) would silently discard legitimate Monster->Player exposure history between the
+// original exit and the replay. This test fails against the pre-fix head
+// (68becd87b16d027c5de854ecc2cc564bc5ba98c9) and passes after the fix.
+test('P4-03B-Q2: exitCity idempotent replay does not move the watermark to replay time — exposure between the original exit and the replay is still caught',async()=>{
+  resetWorldState(SAFE_FAR.x,SAFE_FAR.y,'IN_WORLD');
+  rawRun(`UPDATE characters SET state='IN_CITY',city_id='starter-village' WHERE id='char-demo'`);
+  // Anchor T0 (the original exit) at the patrol's true leg midpoint (60px margin from either
+  // turnaround — same reasoning as waitForPatrolMidpoint) so the monster's motion for the next
+  // several seconds is guaranteed monotonic, no real-time phase-alignment risk.
+  const {position:midpoint}=await waitForPatrolMidpoint((await request('/api/character/char-demo/snapshot')).serverNowMs);
+  const exitKey=nextKey('q2-exit');
+  const firstExit=await post('/api/commands/city/exit',envelope(exitKey,{})); // T0
+  assert.equal(firstExit.status,'ACCEPTED');
+  assert.equal(firstExit.data.worldExposureRebasedAt,undefined,'the internal rebase timestamp must never leak into the client-visible response — exitCity()\'s public shape stays exactly what it was before this fix');
+  // The player stands exactly where the monster was AT T0 (the midpoint) — a correct T0-anchored
+  // window's very first segment starts exactly here (distance 0), while a buggy replay-time-anchored
+  // window starts wherever the monster is by then (see the math in this test's own review comment:
+  // with a ~2500ms gap the monster has moved ~50px away — outside encounterRadius=40 — while the
+  // correctly-clamped T0 window is only ~500ms stale, ~10px away — safely inside).
+  setPosition(midpoint.x,midpoint.y,'IN_WORLD');
+  await wait(2500); // real time passes; the monster's own continuing patrol moves on from `midpoint`
+  const replayExit=await post('/api/commands/city/exit',envelope(exitKey,{})); // T2: exact same key
+  assert.deepEqual(replayExit,firstExit,'a replayed idempotencyKey must return the exact cached original result, not re-run the exit');
+  const hb=await post('/api/commands/world/heartbeat',envelope(nextKey('q2-hb'),{}));
+  assert.equal(hb.status,'ACCEPTED');
+  assert.equal(hb.data.encounterTriggered,true,'the watermark must stay anchored at the ORIGINAL exit (T0), not the replay time (T2) — otherwise this legitimate exposure is silently missed');
+  assert.equal(hb.data.monsterId,'world-bandit-1');
 });
 
 // R: server restart fallback — a genuinely restarted server (same DB file, fresh in-memory
