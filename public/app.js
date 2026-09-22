@@ -318,6 +318,15 @@ function patchTelemetryOverlay(now,leadPx){
 const networkMoveCall=({x,y,moveSequence})=>command('/api/commands/world/move',{targetX:x,targetY:y,moveSequence});
 const guardedMoveCall=guardStaleGeneration(networkMoveCall,()=>movementGeneration);
 let movementRequestSequence=0,latestCompletedMovementSequence=0;
+// P4-02 Merge Gate fix — pure, DOM/network-free extraction of the order-independent decision the
+// completion-reorder race fix depends on: does this world/move response mean the server already has
+// an ACTIVE battle, regardless of which of two in-flight requests it belongs to or what order their
+// HTTP completions arrive in? Exported so the race (see sendWorldMove's own comment below, and
+// P4-02-M/N) can be exercised directly and deterministically, without needing a DOM/fetch environment.
+export function battleAlreadyActiveFromMoveResponse(r){
+  if(!r)return false;
+  return r.status==='ACCEPTED'?r.data?.encounterTriggered===true:r.errorCode==='ERR_BATTLE_ACTIVE';
+}
 const sendWorldMove=async(target)=>{
   const requestSequence=++movementRequestSequence;
   const{generation}=target;
@@ -348,11 +357,42 @@ const sendWorldMove=async(target)=>{
     telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);
     return;
   }
+  const r=outcome.result;
+  // P4-02 Merge Gate fix — a response reporting the server already has an ACTIVE battle (either this
+  // very request just triggered one, or a DIFFERENT in-flight request already did and this one simply
+  // bounced off the server's battleIsActive() guard) must resync the client no matter what order the
+  // HTTP completions happen to arrive in. Checked BEFORE the completion-order discard below on
+  // purpose: that guard exists to stop an OLDER response's own worldPosition from rolling presentation
+  // truth backwards, but refresh() here fetches fresh authoritative state directly rather than trusting
+  // this response's payload, so bypassing that guard here can never itself cause a rollback. Without
+  // this, the following race was possible — request A genuinely triggers an encounter, a later request
+  // B's ERR_BATTLE_ACTIVE response completes FIRST (bumping the completion-order counter), then A's own
+  // encounterTriggered:true response arrives and gets silently discarded by that same counter check,
+  // leaving the client stuck on the World Map with no battle showing until a manual reload — even
+  // though the server has an ACTIVE battle the whole time. Also deliberately not gated on `stale`
+  // (generation): the battle is real server-side either way, same rationale as encounterTriggered
+  // already had before this fix.
+  //
+  // P4-02 Final Merge Gate fix — this branch must also advance the completion watermark itself
+  // (never move it backwards, hence Math.max): once ANY response has confirmed the server already
+  // has an ACTIVE battle, an older, ordinary ACCEPTED response for some earlier request C (still
+  // in flight when the encounter triggered, completing only now) must never be allowed to pass the
+  // completion-order discard below and re-apply its own stale worldPosition/predictionSuspended/
+  // catchUpDebt over the just-resynced Battle presentation state. Without this, that discard's
+  // `requestSequence<latestCompletedMovementSequence` check could still let C through if C's own
+  // sequence happens to be higher than whatever the watermark last was.
+  if(battleAlreadyActiveFromMoveResponse(r)){
+    latestCompletedMovementSequence=Math.max(latestCompletedMovementSequence,requestSequence);
+    predictionSuspended=true;
+    await refresh();
+    recordMoveTelemetry({status:r.status,errorCode:r.status==='REJECTED'?r.errorCode:null,throttled:r.data?.throttled??null,collided:r.data?.collided??null,startedAt});
+    telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);
+    return;
+  }
   // Parallel transport: server rejects stale arrival order using moveSequence, while this completion
   // guard prevents an older HTTP completion from rolling client presentation truth backwards.
   if(requestSequence<latestCompletedMovementSequence){telemetryMoveInFlightCount=Math.max(0,telemetryMoveInFlightCount-1);return}
   latestCompletedMovementSequence=requestSequence;
-  const r=outcome.result;
   const stale=generation!==movementGeneration;
   if(r.status==='REJECTED'){
     if(!stale){
@@ -544,4 +584,8 @@ function tickMovementFrame(now){
   patchTelemetryOverlay(now,predictionLeadDistance(predictedPosition,serverPos));
 }
 async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600);requestAnimationFrame(tickMovementFrame)}
-boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);
+// P4-02 Merge Gate fix — guarded so this module can be safely `import`ed in a Node test (to exercise
+// battleAlreadyActiveFromMoveResponse above) without auto-booting a real app instance against a
+// nonexistent DOM/server. In every real browser load, `document` always exists, so this is identical
+// to the previous unconditional boot() call — zero behavior change for actual players.
+if(typeof document!=='undefined')boot().catch(e=>document.querySelector('#app').innerHTML=`<pre style="padding:20px;color:white">${e.stack||e}</pre>`);
