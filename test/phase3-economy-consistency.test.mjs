@@ -31,6 +31,14 @@ async function buy(good,quantity,key){const q=await post('/api/commands/market/q
 async function sell(good,quantity,key){const q=await post('/api/commands/market/quote',{goodTypeId:good,side:'SELL',requestedQuantity:quantity});const env=envelope({approvedQuote:q},{idempotencyKey:key});return {quote:q,env,result:await post('/api/commands/market/sell',env)}}
 
 function cargoQty(snap,good){return snap.cargo.stacks.find(x=>x.goodTypeId===good)?.quantity??0}
+// P4-03A — snapshot() now additively exposes serverNowMs and a live, time-varying
+// worldMonsters[].position (see public/worldmonsters.js's patrolPositionAt()). Both are legitimately
+// expected to differ between any two real snapshot() calls regardless of whether anything this test
+// actually cares about changed, so the two idempotent-retry deepEqual comparisons below must exclude
+// them — the economy invariant those comparisons exist to prove (wallet/cargo/market/economy_tx/
+// item_trace conservation) is fully covered by every other assertion in this file and is completely
+// untouched by this.
+const omitVolatileSnapshotFields=snap=>{const {serverNowMs,worldMonsters,...rest}=snap;return rest};
 
 await test.before(async()=>{dir=await mkdtemp(join(tmpdir(),'myrial-phase3-closeout-'));dbPath=join(dir,'test.sqlite');await start()});
 await test.after(async()=>{await stop();await rm(dir,{recursive:true,force:true})});
@@ -66,7 +74,7 @@ test('Phase 3 trade route conserves wallet/item ledgers, market stock, and idemp
   assert.deepEqual(buyRetry,bought.result);
   assert.equal(economyRows().filter(r=>r.kind==='NPC_BUY').length,1);
   assert.equal(itemRows().filter(r=>r.reason==='NPC_BUY').length,1);
-  assert.deepEqual(await snapshot(),afterBuy);
+  assert.deepEqual(omitVolatileSnapshotFields(await snapshot()),omitVolatileSnapshotFields(afterBuy));
 
   const busEnv=envelope({destinationCityId:to},{idempotencyKey:crypto.randomUUID()});
   const bus=await post('/api/commands/transport/bus/start',busEnv);
@@ -109,5 +117,5 @@ test('Phase 3 trade route conserves wallet/item ledgers, market stock, and idemp
   assert.deepEqual(sellRetry,sold.result);
   assert.equal(economyRows().filter(r=>r.kind==='NPC_SELL').length,1);
   assert.equal(itemRows().filter(r=>r.reason==='NPC_SELL').length,1);
-  assert.deepEqual(await snapshot(),after);
+  assert.deepEqual(omitVolatileSnapshotFields(await snapshot()),omitVolatileSnapshotFields(after));
 });

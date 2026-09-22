@@ -10,7 +10,7 @@ import { CITY_DEFINITIONS, isWithinCityEntry } from "./public/cities.js";
 import { busQuote } from "./public/bus.js";
 import { GOOD_DEFINITIONS, MARKET_SEED } from "./public/goods.js";
 import { marketExecutionQuote } from "./public/marketpricing.js";
-import { WORLD_MONSTER_DEFINITIONS, segmentEntersEncounterRadius } from "./public/worldmonsters.js";
+import { WORLD_MONSTER_DEFINITIONS, segmentEntersEncounterRadius, patrolPositionAt } from "./public/worldmonsters.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PUBLIC_DIR = join(__dirname, "public");
@@ -134,6 +134,11 @@ function resolveDueArrival(){
 }
 function snapshot(){
   resolveDueArrival();
+  // P4-03A — one Date.now() call shared by everything this snapshot computes/exposes (worldMonsters'
+  // patrol position AND the serverNowMs field itself), never re-called further down, so the position
+  // returned in worldMonsters and the serverNowMs a client cross-checks it against always refer to
+  // the exact same instant.
+  const now=Date.now();
   const c=db.prepare(`SELECT * FROM characters WHERE id='char-demo'`).get();
   const stacks=db.prepare(`SELECT good_id,quantity,cargo_units FROM cargo WHERE character_id='char-demo' AND quantity>0`).all();
   const used=stacks.reduce((n,s)=>n+s.quantity*s.cargo_units,0);
@@ -144,7 +149,13 @@ function snapshot(){
   // no delete), but activeTravel must only ever be exposed to the client while status==='TRAVELING';
   // once ARRIVED, snapshot returns activeTravel:null so the client can never mistake a completed
   // journey for an ongoing one.
-  return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,worldPosition,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t&&t.status==='TRAVELING'?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),segments:normalizedSegments(t),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null,worldMonsters:availableWorldMonsters(c.id)};
+  // P4-03A — serverNowMs is additive: it lets the client compute serverTimeOffset=serverNowMs-Date.now()
+  // for cosmetic patrol interpolation (public/app.js's tickMovementFrame) without assuming the
+  // player's device clock is anywhere close to the server's — the device clock could be off by far
+  // more than ordinary network latency. Server authority is unaffected either way: every actual
+  // encounter/battle decision is computed server-side with the server's own Date.now(), never the
+  // client's.
+  return {accountId:c.account_id,characterId:c.id,cityId:c.city_id,state:c.state,walletGold:c.wallet,worldPosition,cargo:{capacityUnits:c.cargo_capacity,usedUnits:used,stacks:stacks.map(s=>({goodTypeId:s.good_id,quantity:s.quantity,cargoUnitsPerItem:s.cargo_units}))},activeTravel:t&&t.status==='TRAVELING'?{travelId:'travel-demo',fromCityId:t.from_city,toCityId:t.to_city,routeEdgeIds:JSON.parse(t.route_json).map(x=>typeof x==='string'?x:x.edgeId),segments:normalizedSegments(t),startedAt:new Date(t.started_at).toISOString(),estimatedArrivalAt:new Date(t.eta).toISOString(),status:t.status}:null,worldMonsters:availableWorldMonsters(c.id,now),serverNowMs:now};
 }
 const MARKET_TICK_MS=30000;
 function applyMarketTick(city){
@@ -190,9 +201,12 @@ function battleIsActive(characterId='char-demo'){return !!db.prepare(`SELECT 1 F
 // (world_monster_encounters is the one-shot ledger). encounterId is deliberately withheld from the
 // client shape (see P4-02 spec §8) — the client must never be able to submit a monsterId/encounterId
 // itself to trigger a battle; only moveWorld()'s own server-side swept check may do that.
-function availableWorldMonsters(characterId='char-demo'){
+// P4-03A — `now` is passed in (never called internally) so a single caller-chosen Date.now() is
+// shared by every monster's position computation, consistent with moveWorld()'s own "one now per
+// encounter calculation" rule.
+function availableWorldMonsters(characterId='char-demo',now=Date.now()){
   const consumed=new Set(db.prepare(`SELECT monster_id FROM world_monster_encounters WHERE character_id=?`).all(characterId).map(x=>x.monster_id));
-  return WORLD_MONSTER_DEFINITIONS.filter(m=>m.active&&!consumed.has(m.id)).map(m=>({id:m.id,displayName:m.displayName,level:m.level,position:m.position,encounterRadius:m.encounterRadius}));
+  return WORLD_MONSTER_DEFINITIONS.filter(m=>m.active&&!consumed.has(m.id)).map(m=>({id:m.id,displayName:m.displayName,level:m.level,position:patrolPositionAt(m,now),encounterRadius:m.encounterRadius}));
 }
 function rosterSnapshot(){return playerTemplates.map(p=>{const r=db.prepare(`SELECT level,xp FROM roster_units WHERE character_id='char-demo' AND unit_id=?`).get(p.id)??{level:1,xp:0},bonus=db.prepare(`SELECT COALESCE(SUM(attack_bonus),0) attack_bonus,COALESCE(SUM(hp_bonus),0) hp_bonus FROM equipment_inventory WHERE character_id='char-demo' AND equipped_unit_id=?`).get(p.id);return{id:p.id,name:p.name,role:p.role,level:r.level,xp:r.xp,xpIntoLevel:r.xp%100,xpToNext:100-r.xp%100,maxHp:p.baseHp+(r.level-1)*p.hpPerLevel+bonus.hp_bonus,attack:p.baseAttack+(r.level-1)*p.attackPerLevel+bonus.attack_bonus,equipmentBonuses:{attack:bonus.attack_bonus,hp:bonus.hp_bonus},attackRange:p.range,agility:p.agility,moveIntervalMs:p.moveInterval,attackIntervalMs:p.interval,skills:(skillDefinitions[p.id]??[]).map(({id,name,type,targetType,description,damage,range,cooldownMs})=>({id,name,type,targetType,description,damage,range,cooldownMs}))}})}
 function unitMobility(battleId,unit){let m=db.prepare(`SELECT agility,move_interval,move_credit_ms FROM battle_mobility WHERE battle_id=? AND unit_id=?`).get(battleId,unit.id);if(m)return m;const template=playerTemplates.find(x=>x.id===unit.id),agility=template?.agility??(unit.role==='RANGED'?12:9),moveInterval=template?.moveInterval??(unit.role==='RANGED'?350:450);db.prepare(`INSERT OR IGNORE INTO battle_mobility VALUES(?,?,?,?,?)`).run(battleId,unit.id,agility,moveInterval,moveInterval);return{agility,move_interval:moveInterval,move_credit_ms:moveInterval}}
@@ -496,9 +510,13 @@ function moveWorld(env){const e=check(env);if(e)return e;return idem(env.idempot
   // player's actual position — segmentEntersEncounterRadius's zero-length fallback handles this
   // correctly as a plain point check, never referencing the rejected original target).
   let encounterResult=null;
+  // P4-03A — reuses the SAME `now` already captured above for the movement-allowance calculation
+  // (never a second Date.now() call here) so the monster's patrol position used for this encounter
+  // check refers to the exact same instant as the movement itself, not a slightly-later moment that
+  // could let the monster drift between computing the move and checking against it.
   const monster=WORLD_MONSTER_DEFINITIONS.find(m=>m.active
     && !db.prepare(`SELECT 1 FROM world_monster_encounters WHERE character_id='char-demo' AND monster_id=?`).get(m.id)
-    && segmentEntersEncounterRadius(current,{x:nextX,y:nextY},m));
+    && segmentEntersEncounterRadius(current,{x:nextX,y:nextY},{...m,position:patrolPositionAt(m,now)}));
   if(monster){
     const encounter=encounterDefinitions[monster.encounterId];
     if(encounter){

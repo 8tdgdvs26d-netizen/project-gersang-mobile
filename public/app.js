@@ -7,6 +7,14 @@ import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMov
 // the existing movement path above; nothing in this import or the code that uses it changes any
 // movement/joystick/prediction/reconciliation/camera behavior.
 import {nextFpsEma,nextTelemetryFrameDelta,predictionLeadDistance,nextMoveTiming,formatMs,formatFlag,formatLeadReadout,TELEMETRY_OVERLAY_PATCH_INTERVAL_MS,isNearLeadCap,isCapFrozenFrame,nextCapFrozenStreakMs,capFrozenRatio,formatPercent,formatPx,formatCount} from './telemetry.js';
+// P4-03A — cosmetic-only: WORLD_MONSTER_DEFINITIONS/patrolPositionAt are the same shared, DOM-free
+// content module server.mjs imports (already the established pattern — public/bus.js already
+// imports CITY_DEFINITIONS from ./cities.js directly into the client bundle the same way). The
+// client only ever uses these to interpolate a smooth on-screen position for a monster the SERVER
+// has already told it (via S.snap.worldMonsters) still exists — it never decides existence,
+// consumption, or encounter outcomes, which stay 100% server-authoritative (see tickMovementFrame's
+// monster-marker patch below).
+import {WORLD_MONSTER_DEFINITIONS,patrolPositionAt} from './worldmonsters.js';
 // P1-07B: same INFLATED_OBSTACLES construction as server.mjs's own (OBSTACLES.map(inflateRect)) —
 // used only as a presentation-only prediction clamp (see clampPredictedStep), never as the real
 // collision authority, which remains server.mjs's own segmentBlocked() over the same primitives.
@@ -30,6 +38,19 @@ function invalidateMovementGeneration(){
   movementGeneration=next.movementGeneration;
   generationAnchorInput=next.generationAnchorInput;
 }
+// P4-03A — best-effort offset between the server's clock and this device's own Date.now(), so
+// tickMovementFrame's cosmetic monster-patrol interpolation can approximate "the server's current
+// time" without assuming the player's device clock is anywhere close to it (unlike ordinary network
+// latency, a device clock can be off by minutes/hours). Recomputed on every refresh() from the
+// snapshot's own serverNowMs — never itself sent anywhere or used to decide any game logic.
+// Pure, exported so the arithmetic itself (not just its wiring into refresh()) can be tested
+// directly: for ANY clientNowMs (including a deliberately, wildly skewed device clock), adding the
+// returned offset back to a later clientNowMs reading approximates the server's own clock, exactly
+// reconstructing serverNowMs at the instant this was computed regardless of how wrong clientNowMs was.
+export function computeServerTimeOffset(serverNowMs,clientNowMs){
+  return Number.isFinite(serverNowMs)?serverNowMs-clientNowMs:0;
+}
+let serverTimeOffset=0;
 async function refresh(){
   // P1-07D Merge Gate review: invalidate BEFORE the first await below, not after the snapshot
   // response returns — a refresh() is itself a hard resync (S.snap is about to be replaced
@@ -46,6 +67,10 @@ async function refresh(){
   // must not yank the player out of whatever city screen they were already on.
   const previousState=S.snap?.state;
   S.snap=await req('/api/character/char-demo/snapshot');
+  // P4-03A — captured right after the response resolves, as close as practical to the moment
+  // serverNowMs was actually true; recomputed wholesale (never incrementally adjusted) so it can
+  // never drift further off with repeated refreshes.
+  serverTimeOffset=computeServerTimeOffset(S.snap.serverNowMs,Date.now());
   if(shouldShowCityHubOnStateChange(previousState,S.snap.state))S.tab='hub';
   // P1-07B: a full refresh() replaces S.snap wholesale (e.g. after travel/arrival/settlement) —
   // whatever the client was predicting before this is no longer trustworthy, so force a hard
@@ -493,6 +518,26 @@ function tickMovementFrame(now){
   requestAnimationFrame(tickMovementFrame);
   const dt=lastFrameTime?Math.min(now-lastFrameTime,100):16;
   lastFrameTime=now;
+  // P4-03A — cosmetic monster-patrol marker smoothing. Deliberately BEFORE the IN_WORLD-only early
+  // return below: the World Map is also viewable while IN_CITY (P2-07's "查看地圖"/data-view-map),
+  // and patrol motion has nothing to do with the player's own movement state. Gated purely on its
+  // own conditions — S.tab==='map', and only monsters the server's own S.snap.worldMonsters still
+  // lists (a consumed monster simply stops appearing there on the next refresh(), so this loop
+  // naturally stops finding/patching it, never any client-side removal logic). `now` here is rAF's
+  // own high-res timestamp, not epoch time — Date.now() is called explicitly for this, same as every
+  // other Date.now()-based read in this file. No network request, no full render().
+  if(S.tab==='map')for(const monster of S.snap?.worldMonsters||[]){
+    const definition=WORLD_MONSTER_DEFINITIONS.find(x=>x.id===monster.id);
+    if(!definition)continue;
+    const approxServerNow=Date.now()+serverTimeOffset;
+    const position=patrolPositionAt(definition,approxServerNow);
+    if(!position)continue;
+    const node=document.querySelector(`[data-monster="${monster.id}"]`);
+    if(!node)continue;
+    const circle=node.querySelector('circle'),label=node.querySelector('text');
+    if(circle){circle.setAttribute('cx',position.x);circle.setAttribute('cy',position.y)}
+    if(label){label.setAttribute('x',position.x);label.setAttribute('y',position.y+34)}
+  }
   if(!S.snap||S.snap.state!=='IN_WORLD')return;
   const serverPos=S.snap.worldPosition;
   if(!serverPos)return;

@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
 import {MOVE_CATCHUP_CAP_MS} from '../public/movement.js';
-import {WORLD_MONSTER_DEFINITIONS} from '../public/worldmonsters.js';
+import {WORLD_MONSTER_DEFINITIONS,patrolPositionAt} from '../public/worldmonsters.js';
 
 // P4-02 — First World Monster -> Encounter -> Battle Handoff. Covers acceptance tests P4-02-A
 // through P4-02-K from the approved Coding Order (P4-02-L, the full-suite regression count, is
@@ -30,30 +30,40 @@ test.before(async()=>{
 });
 test.after(async()=>{child?.kill();await rm(dir,{recursive:true,force:true})});
 
-// P4-02-A: monster definition has stable id, level, position, encounter radius, encounter link, active.
-test('P4-02-A: world monster data contract has a stable id, level, position, encounter radius, encounter link and active flag',()=>{
+// P4-02-A: monster definition has stable id, level, patrol parameters, encounter radius, encounter
+// link, active. P4-03A minimal update (GPT-approved): the single static `position` field is replaced
+// by the patrol parameters it was superseded by (patrolA/patrolB/patrolSpeed/patrolAnchorAt) — every
+// other field/assertion (id/level/encounterId/encounterRadius/active/frozen-ness) is unchanged.
+test('P4-02-A: world monster data contract has a stable id, level, deterministic patrol parameters, encounter radius, encounter link and active flag',()=>{
   assert.equal(WORLD_MONSTER_DEFINITIONS.length,1);
   const m=WORLD_MONSTER_DEFINITIONS[0];
   assert.equal(m.id,'world-bandit-1');
   assert.equal(typeof m.displayName,'string');
   assert.equal(m.level,1);
   assert.equal(m.encounterId,'bandit-patrol');
-  assert.deepEqual(m.position,{x:500,y:220});
+  assert.deepEqual(m.patrolA,{x:460,y:220});
+  assert.deepEqual(m.patrolB,{x:540,y:220});
+  assert.ok(Number.isFinite(m.patrolSpeed)&&m.patrolSpeed>0);
+  assert.ok(Number.isFinite(m.patrolAnchorAt));
   assert.equal(m.encounterRadius,40);
   assert.equal(m.active,true);
   assert.ok(Object.isFrozen(WORLD_MONSTER_DEFINITIONS));
   assert.ok(Object.isFrozen(m));
 });
 
-// P4-02-B: before trigger, snapshot.worldMonsters contains world-bandit-1.
-test('P4-02-B: snapshot.worldMonsters exposes world-bandit-1 before any encounter is triggered',async()=>{
+// P4-02-B: before trigger, snapshot.worldMonsters contains world-bandit-1. P4-03A minimal update:
+// `position` is now the server's live patrol truth (patrolPositionAt evaluated at the snapshot's own
+// serverNowMs), not a fixed constant — cross-checked directly against the real, shared formula
+// rather than assuming a wall-clock-dependent value, so this needs no sleep and is not flaky.
+test('P4-02-B: snapshot.worldMonsters exposes world-bandit-1 (server-computed live patrol position) before any encounter is triggered',async()=>{
   const snap=await request('/api/character/char-demo/snapshot');
+  assert.ok(Number.isFinite(snap.serverNowMs));
   assert.ok(Array.isArray(snap.worldMonsters));
   const monster=snap.worldMonsters.find(m=>m.id==='world-bandit-1');
   assert.ok(monster,'expected world-bandit-1 to be present in snapshot.worldMonsters');
   assert.equal(monster.displayName,'遊蕩山賊');
   assert.equal(monster.level,1);
-  assert.deepEqual(monster.position,{x:500,y:220});
+  assert.deepEqual(monster.position,patrolPositionAt(WORLD_MONSTER_DEFINITIONS[0],snap.serverNowMs));
   assert.equal(monster.encounterRadius,40);
   // The client must never be able to self-trigger a battle from this list — encounterId is not
   // part of the minimum required shape and is deliberately withheld here.
@@ -77,17 +87,29 @@ test('P4-02-C: normal movement whose segment stays outside the encounter radius 
 // P4-02-D + P4-02-E: a movement segment that starts outside the encounter radius, ends outside the
 // encounter radius, but sweeps through it (tunnelling) must still trigger the encounter — and must
 // do so exactly once: exactly one ACTIVE battle, exactly one persistent world_monster_encounters row.
+// P4-03A minimal update: the monster's circle center is no longer a fixed (500,220) — the segment
+// endpoints are anchored to the monster's OWN freshly-read LIVE position (queried right before
+// acting, exactly like P4-03A-G/H) instead of a hardcoded constant, so this test keeps proving the
+// swept-circle check against whatever the server's real, dynamic patrol truth actually is.
+let triggerMovePayload=null;
 test('P4-02-D/E: a swept movement segment that tunnels through the encounter radius triggers the encounter exactly once',async()=>{
   await wait(MOVE_CATCHUP_CAP_MS+100);
-  // from (450,200) to (550,200): both endpoints are ~53.9px from the monster center (500,220),
-  // outside the 40px radius, but the straight segment passes within 20px of the center at its
-  // midpoint — a pure endpoint-distance check would miss this; the swept-circle check must not.
-  setPosition(450,200,'IN_WORLD');
+  const live=await request('/api/character/char-demo/snapshot');
+  const liveMonster=live.worldMonsters.find(m=>m.id==='world-bandit-1');
+  assert.ok(liveMonster,'expected world-bandit-1 to still be available before triggering');
+  const {x:liveX,y:liveY}=liveMonster.position;
+  // Endpoints are (liveX-50,liveY-20) -> (liveX+50,liveY-20): each endpoint is ~53.9px from the
+  // monster's live center, outside the 40px radius, but the straight segment passes within 20px of
+  // the center at its midpoint — a pure endpoint-distance check would miss this; the swept-circle
+  // check must not. Total displacement is 100px, comfortably within a single move's elapsed-time
+  // allowance after the MOVE_CATCHUP_CAP_MS+100 wait above.
+  triggerMovePayload={targetX:liveX+50,targetY:liveY-20};
+  setPosition(liveX-50,liveY-20,'IN_WORLD');
   const before=await request('/api/character/char-demo/snapshot');
-  assert.equal(Math.hypot(before.worldPosition.x-500,before.worldPosition.y-220)>40,true);
-  const moved=await post('/api/commands/world/move',envelope('move-encounter-trigger',{targetX:550,targetY:200}));
+  assert.equal(Math.hypot(before.worldPosition.x-liveX,before.worldPosition.y-liveY)>40,true);
+  const moved=await post('/api/commands/world/move',envelope('move-encounter-trigger',triggerMovePayload));
   assert.equal(moved.status,'ACCEPTED');
-  assert.equal(Math.hypot(moved.data.worldPosition.x-500,moved.data.worldPosition.y-220)>40,true);
+  assert.equal(Math.hypot(moved.data.worldPosition.x-liveX,moved.data.worldPosition.y-liveY)>40,true);
   assert.equal(moved.data.encounterTriggered,true);
   assert.equal(moved.data.monsterId,'world-bandit-1');
   assert.equal(typeof moved.data.battleId,'string');
@@ -138,10 +160,13 @@ test('P4-02-G: city entry is rejected with ERR_BATTLE_ACTIVE while the triggered
 // now-blocked) monster under a different key must not create a second battle either.
 test('P4-02-H: retrying the same idempotencyKey and re-sending movement under a different key never creates a second battle',async()=>{
   const first=await request('/api/character/char-demo/battle');
-  const retrySameKey=await post('/api/commands/world/move',envelope('move-encounter-trigger',{targetX:550,targetY:200}));
+  // Replays the EXACT same idempotencyKey+payload P4-02-D/E actually sent (dynamic, anchored to
+  // whatever the live monster position was at that moment) — idem()'s cache is keyed on both, so this
+  // must return the byte-identical cached ACCEPTED result, not re-execute anything.
+  const retrySameKey=await post('/api/commands/world/move',envelope('move-encounter-trigger',triggerMovePayload));
   assert.equal(retrySameKey.status,'ACCEPTED');
   assert.equal(retrySameKey.data.battleId,first.id);
-  const retryDifferentKey=await post('/api/commands/world/move',envelope('move-encounter-retry-different-key',{targetX:551,targetY:201}));
+  const retryDifferentKey=await post('/api/commands/world/move',envelope('move-encounter-retry-different-key',{targetX:triggerMovePayload.targetX+1,targetY:triggerMovePayload.targetY+1}));
   assert.equal(retryDifferentKey.status,'REJECTED');
   assert.equal(retryDifferentKey.errorCode,'ERR_BATTLE_ACTIVE');
   const activeBattles=rawQuery(`SELECT id FROM battles WHERE character_id='char-demo' AND status='ACTIVE'`);
