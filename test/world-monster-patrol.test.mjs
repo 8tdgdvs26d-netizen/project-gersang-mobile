@@ -16,7 +16,9 @@ import {computeServerTimeOffset} from '../public/app.js';
 // from the approved Coding Order (P4-03A-J/K/L are the P4-02/movement/full-suite regression gates,
 // reported at the npm-test level via re-running the existing test files, not as individual tests
 // here). Pure-function tests (A-D) need no server; server-integration tests (E-I) follow the exact
-// real-spawned-server pattern already used by test/world-encounter.test.mjs.
+// real-spawned-server pattern already used by test/world-encounter.test.mjs. P4-03A-H was later
+// split into Layer 1/Layer 2 (Review Fix round 2). P4-03A-M through P (Merge Gate fix "Account for
+// Snapshot Transit Time") replace the original F — see their own comments below for why.
 
 const monster=WORLD_MONSTER_DEFINITIONS[0];
 const legDistance=Math.hypot(monster.patrolB.x-monster.patrolA.x,monster.patrolB.y-monster.patrolA.y);
@@ -169,18 +171,78 @@ test('P4-03A-E: snapshot\'s worldMonsters position is server-computed via patrol
   assert.deepEqual(m.position,patrolPositionAt(monster,snap.serverNowMs),'snapshot\'s reported monster position must exactly equal the shared formula evaluated at the snapshot\'s own reported serverNowMs');
 });
 
-// P4-03A-F: client clock offset. computeServerTimeOffset reconstructs the server's own clock reading
-// exactly, even from a wildly skewed client clock — proving the formula itself is correct — plus a
-// structural check that refresh() actually wires it in, not just an unused export.
-test('P4-03A-F: computeServerTimeOffset reconstructs the exact server time from a real serverNowMs, regardless of how skewed the client clock is',async()=>{
-  const snap=await request('/api/character/char-demo/snapshot');
-  for(const skewMs of [0,-6*60*60*1000,6*60*60*1000,10*24*60*60*1000]){
-    const skewedClientNow=Date.now()+skewMs;
-    const offset=computeServerTimeOffset(snap.serverNowMs,skewedClientNow);
-    assert.equal(skewedClientNow+offset,snap.serverNowMs,`offset must reconstruct serverNowMs exactly even with a ${skewMs}ms client clock skew`);
+// P4-03A-M through P — P4-03A Merge Gate fix "Account for Snapshot Transit Time". The original
+// computeServerTimeOffset(serverNowMs,clientNowMs) compared serverNowMs (captured on the SERVER
+// before the response travelled back) against the client's RECEIPT time — silently attributing the
+// entire one-way response transit time to "clock skew". At this monster's patrol speed
+// (0.02px/ms), a 2000ms response delay alone would already read back as ~40px of spurious visual
+// lag — the full encounterRadius. Fixed by bracketing the snapshot request with
+// requestStartedAt/responseReceivedAt and using their MIDPOINT (the standard symmetric-latency
+// approximation) as the client instant serverNowMs corresponds to, instead of the raw receipt time.
+
+// P4-03A-M: zero latency. request start === response receive (no transit time at all) — the
+// midpoint collapses to that single instant, and the offset must still reconstruct serverNowMs
+// exactly.
+test('P4-03A-M: zero latency — offset reconstructs serverNowMs exactly when request start equals response receipt',()=>{
+  const requestStartedAt=1000,responseReceivedAt=1000,serverNowMs=5000;
+  const offset=computeServerTimeOffset(serverNowMs,requestStartedAt,responseReceivedAt);
+  assert.equal(requestStartedAt+offset,serverNowMs);
+});
+
+// P4-03A-N: symmetric RTT. Proves the helper uses the request's MIDPOINT, not the raw response
+// receipt time directly — the exact defect the Merge Gate fix closes. RTT=2000ms, midpoint=2000;
+// serverNowMs corresponds to that midpoint (8000), so offset must be 6000 (midpoint+offset=8000).
+// The OLD (receipt-time) method would have computed serverNowMs-responseReceivedAt=8000-3000=5000 —
+// wrong by exactly half the RTT (1000ms). This test explicitly asserts the new result is NOT that
+// old, wrong value.
+test('P4-03A-N: symmetric RTT — offset uses the request midpoint, not raw response receipt time',()=>{
+  const requestStartedAt=1000,responseReceivedAt=3000,serverNowMs=8000;
+  const offset=computeServerTimeOffset(serverNowMs,requestStartedAt,responseReceivedAt);
+  const midpointClientTime=requestStartedAt+(responseReceivedAt-requestStartedAt)/2;
+  assert.equal(offset,6000);
+  assert.equal(midpointClientTime+offset,serverNowMs);
+  const oldWrongOffset=serverNowMs-responseReceivedAt;
+  assert.equal(oldWrongOffset,5000);
+  assert.notEqual(offset,oldWrongOffset,'the new offset must NOT match the old (wrong) receipt-time-based calculation');
+});
+
+// P4-03A-O: clock skew + latency together. Simulates a device clock hours ahead of the server
+// (requestStartedAt/responseReceivedAt drawn from a wildly skewed client clock domain) combined with
+// non-zero RTT, and asserts the midpoint+offset still reconstructs serverNowMs exactly — proving
+// device clock skew and network latency are both handled by the same single calculation.
+test('P4-03A-O: clock skew combined with non-zero RTT — midpoint plus offset still reconstructs the exact server time',()=>{
+  for(const [skewMs,rttMs] of [[6*60*60*1000,400],[-6*60*60*1000,1200],[10*24*60*60*1000,50],[0,2000]]){
+    const skewedNow=Date.now()+skewMs;
+    const requestStartedAt=skewedNow,responseReceivedAt=skewedNow+rttMs,serverNowMs=Date.now()+1234;
+    const offset=computeServerTimeOffset(serverNowMs,requestStartedAt,responseReceivedAt);
+    const midpointClientTime=requestStartedAt+(responseReceivedAt-requestStartedAt)/2;
+    assert.equal(midpointClientTime+offset,serverNowMs,`skew=${skewMs}ms rtt=${rttMs}ms: midpoint+offset must reconstruct serverNowMs exactly`);
   }
+});
+
+// P4-03A-P: refresh() production wiring. Confirms the REAL refresh() — not just the pure helper in
+// isolation — actually captures requestStartedAt before sending the snapshot request, captures
+// responseReceivedAt after it resolves, and passes both (in that order) into
+// computeServerTimeOffset(), rather than leaving production wired to the old, wrong single-timestamp
+// call.
+test('P4-03A-P: refresh() captures request start before and response receipt after the snapshot call, and passes both into computeServerTimeOffset',()=>{
   const appSource=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
-  assert.ok(appSource.includes('serverTimeOffset=computeServerTimeOffset(S.snap.serverNowMs,Date.now());'),'refresh() must actually wire computeServerTimeOffset in, not leave it unused');
+  const refreshStart=appSource.indexOf('async function refresh(){');
+  assert.ok(refreshStart>=0,'refresh() must exist in public/app.js');
+  const nextFunctionStart=appSource.indexOf('\nfunction setBattle(',refreshStart);
+  assert.ok(nextFunctionStart>refreshStart,'expected to find the next top-level function after refresh() to bound its body');
+  const refreshBody=appSource.slice(refreshStart,nextFunctionStart);
+  const requestStartedIndex=refreshBody.indexOf('const requestStartedAt=Date.now();');
+  const snapshotCallIndex=refreshBody.indexOf("S.snap=await req('/api/character/char-demo/snapshot');");
+  const responseReceivedIndex=refreshBody.indexOf('const responseReceivedAt=Date.now();');
+  const offsetCallIndex=refreshBody.indexOf('serverTimeOffset=computeServerTimeOffset(S.snap.serverNowMs,requestStartedAt,responseReceivedAt);');
+  assert.ok(requestStartedIndex>=0,'refresh() must capture requestStartedAt=Date.now()');
+  assert.ok(snapshotCallIndex>=0,'refresh() must still call the snapshot endpoint');
+  assert.ok(responseReceivedIndex>=0,'refresh() must capture responseReceivedAt=Date.now()');
+  assert.ok(offsetCallIndex>=0,'refresh() must pass requestStartedAt and responseReceivedAt into computeServerTimeOffset');
+  assert.ok(requestStartedIndex<snapshotCallIndex,'requestStartedAt must be captured BEFORE the snapshot request is sent');
+  assert.ok(snapshotCallIndex<responseReceivedIndex,'responseReceivedAt must be captured AFTER the snapshot request resolves');
+  assert.ok(responseReceivedIndex<offsetCallIndex,'computeServerTimeOffset must be called after both timestamps are captured');
 });
 
 // P4-03A-G: a movement segment through the monster's freshly-read LIVE patrol position triggers

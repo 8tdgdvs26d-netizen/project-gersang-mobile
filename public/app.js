@@ -43,12 +43,27 @@ function invalidateMovementGeneration(){
 // time" without assuming the player's device clock is anywhere close to it (unlike ordinary network
 // latency, a device clock can be off by minutes/hours). Recomputed on every refresh() from the
 // snapshot's own serverNowMs — never itself sent anywhere or used to decide any game logic.
-// Pure, exported so the arithmetic itself (not just its wiring into refresh()) can be tested
-// directly: for ANY clientNowMs (including a deliberately, wildly skewed device clock), adding the
-// returned offset back to a later clientNowMs reading approximates the server's own clock, exactly
-// reconstructing serverNowMs at the instant this was computed regardless of how wrong clientNowMs was.
-export function computeServerTimeOffset(serverNowMs,clientNowMs){
-  return Number.isFinite(serverNowMs)?serverNowMs-clientNowMs:0;
+//
+// P4-03A Merge Gate fix — "Account for Snapshot Transit Time": serverNowMs is captured on the
+// SERVER before the HTTP response travels back to the client, so comparing it against the client's
+// receipt time (Date.now() right after the request resolves) silently bakes the ENTIRE one-way
+// response transit time into what's treated as clock skew. At this monster's patrol speed
+// (0.02px/ms), a 2000ms response delay alone would already read back as ~40px of spurious lag — the
+// full encounterRadius — enough to visibly show the player colliding with the monster on screen while
+// the authoritative server position is actually elsewhere (never a real encounter, since that's
+// always decided server-side from the server's own live Date.now(), but a misleading, avoidable
+// visual glitch). Fix: capture requestStartedAt immediately before sending the request and
+// responseReceivedAt immediately after it resolves, and estimate the client instant the server's
+// timestamp corresponds to as the request's MIDPOINT — requestStartedAt + (responseReceivedAt -
+// requestStartedAt)/2 — the standard symmetric-latency approximation (assumes the outbound and return
+// legs took about the same time, not provable, but far better than attributing 100% of the round trip
+// to one direction). Pure, exported so the arithmetic itself (not just its wiring into refresh()) can
+// be tested directly. Deliberately NOT a clock-sync subsystem: no historical RTT averaging, no
+// NTP-style multi-sample estimation — a single request's midpoint per refresh(), nothing more.
+export function computeServerTimeOffset(serverNowMs,requestStartedAt,responseReceivedAt){
+  if(!Number.isFinite(serverNowMs)||!Number.isFinite(requestStartedAt)||!Number.isFinite(responseReceivedAt)||responseReceivedAt<requestStartedAt)return 0;
+  const midpointClientTime=requestStartedAt+(responseReceivedAt-requestStartedAt)/2;
+  return serverNowMs-midpointClientTime;
 }
 let serverTimeOffset=0;
 async function refresh(){
@@ -66,11 +81,15 @@ async function refresh(){
   // S.snap was null) apart from an ordinary in-city refresh (buying, selling, storage move) that
   // must not yank the player out of whatever city screen they were already on.
   const previousState=S.snap?.state;
+  // P4-03A Merge Gate fix — requestStartedAt/responseReceivedAt bracket the snapshot request itself
+  // (not any of the Promise.all() calls further below), so their midpoint approximates the client
+  // instant serverNowMs actually corresponds to, rather than attributing the whole one-way response
+  // transit time to clock skew (see computeServerTimeOffset's own comment). Recomputed wholesale on
+  // every refresh() (never incrementally adjusted) so it can never drift further off over time.
+  const requestStartedAt=Date.now();
   S.snap=await req('/api/character/char-demo/snapshot');
-  // P4-03A — captured right after the response resolves, as close as practical to the moment
-  // serverNowMs was actually true; recomputed wholesale (never incrementally adjusted) so it can
-  // never drift further off with repeated refreshes.
-  serverTimeOffset=computeServerTimeOffset(S.snap.serverNowMs,Date.now());
+  const responseReceivedAt=Date.now();
+  serverTimeOffset=computeServerTimeOffset(S.snap.serverNowMs,requestStartedAt,responseReceivedAt);
   if(shouldShowCityHubOnStateChange(previousState,S.snap.state))S.tab='hub';
   // P1-07B: a full refresh() replaces S.snap wholesale (e.g. after travel/arrival/settlement) —
   // whatever the client was predicting before this is no longer trustworthy, so force a hard

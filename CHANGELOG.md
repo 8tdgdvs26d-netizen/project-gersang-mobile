@@ -568,3 +568,14 @@
 - 測試結果：405（上一round，內容完全不變）+ 1（新增Layer 2 test）= **406 tests passed, 0 failed**（連跑兩次確認唔flaky）。
 - 存檔影響：無。
 - Rollback基準：`main` @ `c69b9556b6b2a222abfe35976f4f36b9da666109`。
+
+## P4-03A Merge Gate Fix — Account for Snapshot Transit Time — 2026-09-22
+
+- **PR #55 Merge Gate Fix（純client-only，`server.mjs`／patrol formula／patrol speed／patrol route／encounter geometry／DB schema全部一個字冇改）**：Codex Review發現一個P2問題——`computeServerTimeOffset(serverNowMs,clientNowMs)`原本用`serverNowMs`（server喺response送出**之前**攞到嘅timestamp）直接同client嘅**收到response嗰刻**嘅`Date.now()`比較，即係將HTTP response嘅**成程單向transit time**都當做clock skew計埋落去。以呢隻monster嘅patrol speed（`0.02`px/ms）計，淨係2000ms嘅response delay就已經會讀出約40px嘅虛假visual lag——同`encounterRadius`一樣大，足以令client畫面上睇落好似player同monster撞埋一齊，但server嗰邊嘅真正authoritative position其實喺第二度（雖然真正encounter判定100%喺server用自己嘅`Date.now()`計，同呢個cosmetic bug完全無關，但畫面上嘅誤導本身已經唔可接受）。
+- 修正：`computeServerTimeOffset`改做三個參數`(serverNowMs,requestStartedAt,responseReceivedAt)`，用**request嘅midpoint**（`requestStartedAt+(responseReceivedAt-requestStartedAt)/2`——標準symmetric-latency近似法，假設去程同回程transit time大約相等）嚟estimate `serverNowMs`實際對應緊client邊一刻，取代直接用收到response嗰刻嘅時間。`refresh()`嘅wiring相應改做：send request之前攞`requestStartedAt=Date.now()`，response resolve之後攞`responseReceivedAt=Date.now()`，兩個都傳入`computeServerTimeOffset`。刻意**唔**建立clock sync subsystem——冇歷史RTT averaging，冇NTP-style multi-sample estimation，每次`refresh()`淨係用嗰一次request嘅midpoint，同之前一樣係一次性wholesale recompute（唔會累積drift）。
+- 新增`public/worldmonsters.js`／server端patrol計算／encounter判定**完全冇改**——呢個純粹係client cosmetic rendering嘅clock estimation修正，同game logic完全無關。
+- 新增`test/world-monster-patrol.test.mjs`嘅**P4-03A-M至P**（取代原本嘅F，因為function signature由2個參數變3個）：**M**（zero latency：request start同response receive一樣，offset依然準確reconstruct`serverNowMs`）、**N**（symmetric RTT：明確證明個helper用緊midpoint而唔係直接用response receipt time——用同一組數字算出嚟舊方法會錯1000ms，新方法啱）、**O**（clock skew+latency一齊出現：device clock偏咗幾個鐘再加非零RTT，`midpoint+offset`依然準確等於`serverNowMs`）、**P**（production wiring：讀`public/app.js`真實source，收窄去`refresh()`自己個function body，斷言`requestStartedAt`真係喺send request之前攞、`responseReceivedAt`真係喺response resolve之後攞、兩個都傳咗入`computeServerTimeOffset`，而且次序啱）。曾經用一個sed過嘅scratch copy模擬返舊wiring（`server.mjs`／production檔案冇碰過），確認P會正確變做fail。
+- 測試結果：406（上一round，內容除computeServerTimeOffset嘅signature/wiring之外完全不變）－1（移除舊F）＋4（新增M/N/O/P）= **409 tests passed, 0 failed**（連跑兩次確認唔flaky；`test/world-encounter.test.mjs`／`test/world-encounter-client-race.test.mjs`／movement race regression全部重新跑過都PASS）。
+- **Playwright真瀏覽器smoke test**：地圖正常load、monster patrol依然smooth（3秒內marker位置有變）、行去live position觸發encounter正常、reload正常、冇新console error（淨係嗰個同呢次改動完全無關嘅pre-existing`/favicon.ico`）。
+- 存檔影響：無。
+- Rollback基準：`main` @ `c69b9556b6b2a222abfe35976f4f36b9da666109`。
