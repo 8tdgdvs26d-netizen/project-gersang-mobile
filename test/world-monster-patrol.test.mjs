@@ -77,22 +77,26 @@ test('P4-03A-D: the patrol route does not enter any static obstacle and stays cl
   }
 });
 
-// P4-03A-H: pure differential proof that the encounter check has genuinely switched from a static
-// center to patrolPositionAt() — P4-03A Review Fix round 1. The original H (a decoy point outside the
-// patrol's reachable range) only proved an ordinary proximity miss: it would have passed identically
-// even if moveWorld() still used the OLD P4-02 static `position:{x:500,y:220}`, since that decoy was
-// far from BOTH the live position AND the old static point. This version instead constructs a
-// segment that is DESIGNED to hit the old static (500,220) reference point, then checks it against
-// the monster's true, live, dynamic position at a known, fully deterministic time — no server, no
-// sleep, no real clock at all, just patrolPositionAt(monster,knownTime) and the same
-// segmentEntersEncounterRadius() primitive moveWorld() itself uses. At the known time
-// `monster.patrolAnchorAt` the monster sits exactly at patrolA=(440,220), 60px from the old static
-// point — outside its 40px encounterRadius with a genuine (not boundary-exact) margin, specifically
-// BECAUSE the patrol route was widened from an initial 80px leg to 120px for exactly this reason (see
-// public/worldmonsters.js's own comment). If a regression ever reintroduced a hardcoded static
-// center, this test's own "wouldHitOldStatic" sanity assertion would still hold (proving the test
-// segment is a valid trap), while "actualResult" would flip to true — catching the regression.
-test('P4-03A-H: a segment built to hit the OLD static (500,220) reference point misses the monster\'s true live position at a known time — proving the check now uses patrolPositionAt, not a fixed static center',()=>{
+// P4-03A-H (Layer 1 — behaviour geometry): pure differential proof that the encounter check has
+// genuinely switched from a static center to patrolPositionAt() — P4-03A Review Fix round 1. The
+// original H (a decoy point outside the patrol's reachable range) only proved an ordinary proximity
+// miss: it would have passed identically even if moveWorld() still used the OLD P4-02 static
+// `position:{x:500,y:220}`, since that decoy was far from BOTH the live position AND the old static
+// point. This version instead constructs a segment that is DESIGNED to hit the old static (500,220)
+// reference point, then checks it against the monster's true, live, dynamic position at a known,
+// fully deterministic time — no server, no sleep, no real clock at all, just
+// patrolPositionAt(monster,knownTime) and the same segmentEntersEncounterRadius() primitive
+// moveWorld() itself uses. At the known time `monster.patrolAnchorAt` the monster sits exactly at
+// patrolA=(440,220), 60px from the old static point — outside its 40px encounterRadius with a
+// genuine (not boundary-exact) margin, specifically BECAUSE the patrol route was widened from an
+// initial 80px leg to 120px for exactly this reason (see public/worldmonsters.js's own comment). If a
+// regression ever reintroduced a hardcoded static center, this test's own "wouldHitOldStatic" sanity
+// assertion would still hold (proving the test segment is a valid trap), while "actualResult" would
+// flip to true — catching the regression IN THE GEOMETRY. This is deliberately paired with the
+// Layer 2 production-wiring test right below it: Layer 1 alone never touches server.mjs, so it cannot
+// by itself catch a regression where moveWorld()'s real encounter check silently stops calling
+// patrolPositionAt(m,now) at all — that is what Layer 2 exists to close (P4-03A Review Fix round 2).
+test('P4-03A-H (Layer 1): a segment built to hit the OLD static (500,220) reference point misses the monster\'s true live position at a known time — proving the check now uses patrolPositionAt, not a fixed static center',()=>{
   const knownTime=monster.patrolAnchorAt;
   const livePosition=patrolPositionAt(monster,knownTime);
   assert.deepEqual(livePosition,monster.patrolA,'at the anchor time, the monster is exactly at patrolA');
@@ -107,6 +111,29 @@ test('P4-03A-H: a segment built to hit the OLD static (500,220) reference point 
   assert.equal(wouldHitOldStatic,true,'sanity check: this segment must be a valid trap for a static (500,220) implementation');
   const actualResult=segmentEntersEncounterRadius(from,to,{...monster,position:livePosition});
   assert.equal(actualResult,false,'checked against the monster\'s real live dynamic position, this segment must MISS — proving the check no longer uses the old static center');
+});
+
+// P4-03A-H (Layer 2 — production wiring, P4-03A Review Fix round 2): the Layer 1 test above proves
+// the GEOMETRY differential (static center -> HIT, live patrol center -> MISS) by calling
+// segmentEntersEncounterRadius() directly — but that alone never touches server.mjs at all, so it
+// cannot by itself catch a regression where moveWorld()'s real encounter check silently stops calling
+// patrolPositionAt(m,now) (e.g. reverting to a hardcoded/static monster position, or to `m.position`
+// which no longer even exists on WORLD_MONSTER_DEFINITIONS). This reads server.mjs's actual source,
+// narrowly scoped to moveWorld()'s own function body only (not "patrolPositionAt appears somewhere in
+// this 500+ line file" — a much weaker claim that could pass even if the encounter check itself never
+// used it), and asserts the exact production wiring: patrolPositionAt(m,now) is what's actually
+// supplied as segmentEntersEncounterRadius()'s monster `position`. Together, Layer 1 + Layer 2 close
+// the loop — if a future edit reverts moveWorld() to a static center, THIS test fails immediately, on
+// the real production source, regardless of what Layer 1's own pure-geometry check would separately
+// report (and Layer 1 in turn proves that choice is behaviourally meaningful, not just cosmetic).
+test('P4-03A-H (Layer 2): moveWorld()\'s own encounter check is wired to pass patrolPositionAt(m,now) as segmentEntersEncounterRadius()\'s monster position',()=>{
+  const serverSource=readFileSync(new URL('../server.mjs',import.meta.url),'utf8');
+  const moveWorldStart=serverSource.indexOf('function moveWorld(');
+  assert.ok(moveWorldStart>=0,'moveWorld() must exist in server.mjs');
+  const nextFunctionStart=serverSource.indexOf('\nasync function api(',moveWorldStart);
+  assert.ok(nextFunctionStart>moveWorldStart,'expected to find the next top-level function after moveWorld() to bound its body, so this assertion stays scoped to moveWorld() itself');
+  const moveWorldBody=serverSource.slice(moveWorldStart,nextFunctionStart);
+  assert.ok(moveWorldBody.includes('segmentEntersEncounterRadius(current,{x:nextX,y:nextY},{...m,position:patrolPositionAt(m,now)})'),'moveWorld()\'s own encounter check must pass patrolPositionAt(m,now) as the monster position given to segmentEntersEncounterRadius() — a regression to a static/hardcoded position would not match this exact wiring, and this assertion would fail');
 });
 
 let child,base,dir,sessionId;
