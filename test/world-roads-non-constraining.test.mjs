@@ -10,9 +10,19 @@ import {MOVE_SPEED_RATE,MOVE_CATCHUP_CAP_MS} from '../public/movement.js';
 
 // P1-05 (test-only, no functional code change): "roads exist, but a road is not a track."
 // The 'ac' road connects starter-village{220,220} and hill-market{780,220} — since both
-// endpoints share y:220, the whole road is the line y=220, 220<=x<=780. x=400 sits on that
+// endpoints share y:220, the whole road is the line y=220, 220<=x<=780. x=250 sits on that
 // line, far away from both P1-04 obstacles (ridge-a/ridge-b both start at y>=386), so it's a
 // safe, deterministic point to test on-road / off-road / crossing without any obstacle overlap.
+//
+// P4-03C test-coordinate update (test-only, no functional code change) — this whole region was
+// originally x~=390-410 (see git history), chosen only against P1-04 obstacles since P4-02+
+// world-monster content did not exist yet. world-bandit-1's patrol route (x in [440,560], y=220)
+// plus its new aggroRadius(90) reaches down to x=350 at y=220 — x~=390-410 sat squarely inside
+// that zone, so a sequence of moves through this region could legitimately acquire aggro/CHASE
+// and (given enough evaluates) an actual encounter, cascading ERR_BATTLE_ACTIVE into every
+// subsequent test in this file. x=250 (distance >=190 from the patrol route, comfortably beyond
+// aggroRadius) restores this file's original intent — a point affected by nothing except roads
+// and P1-04 obstacles — without weakening any assertion below.
 let child,base,dir,sessionId;
 const request=async(path,options={})=>{const r=await fetch(base+path,{headers:{'content-type':'application/json'},...options});return r.json()};
 const post=(path,body)=>request(path,{method:'POST',body:JSON.stringify(body)});
@@ -29,37 +39,37 @@ test.before(async()=>{
 });
 test.after(async()=>{child?.kill();await rm(dir,{recursive:true,force:true})});
 
-test('test setup sanity: the chosen road-crossing region (x=400 on the ac road, y around 160-280) does not overlap any P1-04 obstacle',async()=>{
+test('test setup sanity: the chosen road-crossing region (x=250 on the ac road, y around 160-280) does not overlap any P1-04 obstacle',async()=>{
   const inflated=OBSTACLES.map(o=>inflateRect(o,PLAYER_COLLISION_RADIUS));
-  for(const point of [{x:400,y:220},{x:400,y:160},{x:400,y:170},{x:400,y:230},{x:390,y:220},{x:410,y:220}]){
+  for(const point of [{x:250,y:220},{x:250,y:160},{x:250,y:170},{x:250,y:230},{x:240,y:220},{x:260,y:220}]){
     for(const rect of inflated){
       assert.equal(pointInRect(point.x,point.y,rect),false,`point (${point.x},${point.y}) must be outside obstacle ${rect.id} for this test region to be obstacle-free`);
     }
   }
 });
 
-test('GET /api/roads confirms the ac road runs from starter-village{220,220} to hill-market{780,220} (both endpoints share y:220), so x=400,y=220 sits exactly on it',async()=>{
+test('GET /api/roads confirms the ac road runs from starter-village{220,220} to hill-market{780,220} (both endpoints share y:220), so x=250,y=220 sits exactly on it',async()=>{
   const roads=await request('/api/roads');
   const ac=roads.find(r=>r.id==='ac');
   const cities=await request('/api/cities');
   const from=cities.find(c=>c.id===ac.fromCityId),to=cities.find(c=>c.id===ac.toCityId);
   assert.equal(from.coordinates.y,220);
   assert.equal(to.coordinates.y,220);
-  assert.ok(from.coordinates.x<=400&&400<=to.coordinates.x,'x=400 must fall within the ac road\'s x range');
+  assert.ok(from.coordinates.x<=250&&250<=to.coordinates.x,'x=250 must fall within the ac road\'s x range');
 });
 
 test('road -> off-road: a legal move starting exactly on the ac road ends off-road with no special handling',async()=>{
-  setPosition(400,220,'IN_WORLD');
+  setPosition(250,220,'IN_WORLD');
   // P1-07D: wait comfortably past MOVE_CATCHUP_CAP_MS so the elapsed-time allowance is not the
   // limiting factor — this test is about roads having no special handling, not about the allowance
   // mechanics themselves (see the dedicated clamp test below for that).
   await wait(MOVE_CATCHUP_CAP_MS+100);
-  const moved=await post('/api/commands/world/move',envelope('roads-road-to-offroad',{targetX:400,targetY:120}));
+  const moved=await post('/api/commands/world/move',envelope('roads-road-to-offroad',{targetX:250,targetY:120}));
   assert.equal(moved.status,'ACCEPTED');
   assert.equal(moved.data.collided,false);
   // dy=-100 is within the full elapsed-time allowance after the wait above, so the accepted
   // candidate reaches the requested target exactly.
-  assert.deepEqual(moved.data.worldPosition,{x:400,y:120});
+  assert.deepEqual(moved.data.worldPosition,{x:250,y:120});
 });
 
 test('off-road -> off-road: a legal move between two points that are nowhere near any road works exactly like any other free move',async()=>{
@@ -72,25 +82,25 @@ test('off-road -> off-road: a legal move between two points that are nowhere nea
 });
 
 test('cross-road: a move whose path crosses the ac road (y=220) partway through is accepted exactly like any other move, with no road-crossing side effect',async()=>{
-  setPosition(400,170,'IN_WORLD');
+  setPosition(250,170,'IN_WORLD');
   await wait(MOVE_CATCHUP_CAP_MS+100);
   // dy=100 is within the full elapsed-time allowance after the wait above, so the accepted
-  // candidate reaches the requested target(400,270) exactly — which is past y=220, so this single
+  // candidate reaches the requested target(250,270) exactly — which is past y=220, so this single
   // move does cross the road.
-  const moved=await post('/api/commands/world/move',envelope('roads-cross-road',{targetX:400,targetY:270}));
+  const moved=await post('/api/commands/world/move',envelope('roads-cross-road',{targetX:250,targetY:270}));
   assert.equal(moved.status,'ACCEPTED');
   assert.equal(moved.data.collided,false);
-  assert.deepEqual(moved.data.worldPosition,{x:400,y:270});
+  assert.deepEqual(moved.data.worldPosition,{x:250,y:270});
   assert.ok(170<220&&220<270,'sanity: the road at y=220 must actually lie between the start and end y-coordinates');
 });
 
 test('landing exactly on a road never triggers collision by itself',async()=>{
-  setPosition(390,220,'IN_WORLD');
+  setPosition(240,220,'IN_WORLD');
   await wait(MOVE_CATCHUP_CAP_MS+100);
-  const moved=await post('/api/commands/world/move',envelope('roads-on-road-no-collision',{targetX:410,targetY:220}));
+  const moved=await post('/api/commands/world/move',envelope('roads-on-road-no-collision',{targetX:260,targetY:220}));
   assert.equal(moved.status,'ACCEPTED');
   assert.equal(moved.data.collided,false);
-  assert.deepEqual(moved.data.worldPosition,{x:410,y:220});
+  assert.deepEqual(moved.data.worldPosition,{x:260,y:220});
 });
 
 test('P1-04 obstacle collision continues to work unmodified: moving into an inflated obstacle is still blocked',async()=>{

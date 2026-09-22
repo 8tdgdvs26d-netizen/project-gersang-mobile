@@ -38,7 +38,21 @@ export const WORLD_MONSTER_DEFINITIONS = Object.freeze([
     // server restart with zero persistence (see P4-03 Audit §3).
     patrolAnchorAt: 0,
     encounterRadius: 40,
-    active: true
+    active: true,
+    // P4-03C — Aggro/Chase Prototype Parameters (see the approved P4-03C Audit/Design
+    // Clarification/Coding Order — not Canonical balance numbers, subject to Playtest re-tuning).
+    // aggroRadius(90) sits clearly outside encounterRadius(40) so a swept patrol/chase path always
+    // has room to acquire aggro before it can possibly also satisfy the tighter encounter check in
+    // the same sweep. chaseSpeed(0.08px/ms) is deliberately well under the player's own
+    // MOVE_SPEED_RATE (JOYSTICK_STEP_DISTANCE/JOYSTICK_SEND_INTERVAL_MS = 18/140 ~= 0.1286px/ms, see
+    // public/movement.js) — a chased player can always outrun the monster by actually moving away,
+    // so reaching a city is a reward for successfully evading, not the only escape valve (see the
+    // Final Design Clarification's Enter-City analysis). leashRadius(150) is measured from the fixed
+    // patrolA/patrolB midpoint (the patrol route's own center), not from the monster's live chase
+    // position — see chasePositionAt below and server.mjs's evaluateWorldMonsterAggroChase.
+    aggroRadius: 90,
+    chaseSpeed: 0.08,
+    leashRadius: 150
   })
 ]);
 
@@ -151,6 +165,39 @@ export function patrolSegmentsBetween(monster, fromTime, toTime) {
     segments.push({ from: p, to: p });
   }
   return segments;
+}
+
+// P4-03C — CHASE position: pure anchor+speed advance toward `targetPos`, capped at reaching it
+// exactly (never overshoots — the monster does not run past where the player was last seen). Same
+// purity contract as patrolPositionAt/patrolSegmentsBetween (no Date.now(), no DB, no DOM, no
+// mutable module state, no randomness): given the same (anchorPos, anchorAt, targetPos, chaseSpeed,
+// timeMs) it always returns the same {x,y}, on both Node (server.mjs, the authoritative caller) and
+// the browser (public/app.js's tickMovementFrame, cosmetic-only interpolation between polls — see
+// its own comment for why the anchor triple must be transmitted, not just the live position, per the
+// P4-03C Final Design Clarification's Authoritative Chase Sync analysis).
+//
+// Deliberately NOT built on patrolPositionAt's triangle-wave math — CHASE has a single, currently-
+// live (anchorPos -> targetPos) leg, not a fixed, canonical two-point route ping-ponging forever, so
+// there is no turnaround/cycle concept here at all, just a straight, distance-capped advance.
+export function chasePositionAt(anchorPos, anchorAt, targetPos, chaseSpeed, timeMs) {
+  if (!anchorPos || !Number.isFinite(anchorPos.x) || !Number.isFinite(anchorPos.y)) return null;
+  if (!targetPos || !Number.isFinite(targetPos.x) || !Number.isFinite(targetPos.y)
+    || !Number.isFinite(chaseSpeed) || chaseSpeed <= 0
+    || !Number.isFinite(anchorAt) || !Number.isFinite(timeMs)) {
+    return { x: anchorPos.x, y: anchorPos.y };
+  }
+  const dx = targetPos.x - anchorPos.x, dy = targetPos.y - anchorPos.y;
+  const distance = Math.hypot(dx, dy);
+  // Zero-distance target (monster already standing exactly where the player was last seen): stay
+  // put, not a division by zero.
+  if (distance === 0) return { x: anchorPos.x, y: anchorPos.y };
+  // A `timeMs` before `anchorAt` (should never happen from a real caller, but defensive exactly like
+  // patrolSegmentsBetween's own fromTime/toTime normalization) clamps to zero elapsed rather than
+  // reversing direction past the anchor.
+  const elapsedMs = Math.max(0, timeMs - anchorAt);
+  const advance = Math.min(distance, chaseSpeed * elapsedMs);
+  const ratio = advance / distance;
+  return { x: anchorPos.x + dx * ratio, y: anchorPos.y + dy * ratio };
 }
 
 // Closest-point-on-segment-to-circle-center check (standard swept-circle test), NOT an endpoint-only

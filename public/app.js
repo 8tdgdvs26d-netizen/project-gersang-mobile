@@ -14,7 +14,7 @@ import {nextFpsEma,nextTelemetryFrameDelta,predictionLeadDistance,nextMoveTiming
 // has already told it (via S.snap.worldMonsters) still exists — it never decides existence,
 // consumption, or encounter outcomes, which stay 100% server-authoritative (see tickMovementFrame's
 // monster-marker patch below).
-import {WORLD_MONSTER_DEFINITIONS,patrolPositionAt} from './worldmonsters.js';
+import {WORLD_MONSTER_DEFINITIONS,patrolPositionAt,chasePositionAt} from './worldmonsters.js';
 // P1-07B: same INFLATED_OBSTACLES construction as server.mjs's own (OBSTACLES.map(inflateRect)) —
 // used only as a presentation-only prediction clamp (see clampPredictedStep), never as the real
 // collision authority, which remains server.mjs's own segmentBlocked() over the same primitives.
@@ -362,6 +362,18 @@ function patchTelemetryOverlay(now,leadPx){
 const networkMoveCall=({x,y,moveSequence})=>command('/api/commands/world/move',{targetX:x,targetY:y,moveSequence});
 const guardedMoveCall=guardStaleGeneration(networkMoveCall,()=>movementGeneration);
 let movementRequestSequence=0,latestCompletedMovementSequence=0;
+// P4-03C — the serverNowMs of the last worldMonsters array actually applied to S.snap.worldMonsters,
+// shared by sendWorldMove and sendWorldHeartbeat's own sync steps below (see
+// shouldApplyWorldMonstersSync's own comment for why this is a separate staleness axis from
+// latestCompletedMovementSequence above).
+let lastWorldMonstersSyncAt=NaN;
+function applyWorldMonstersSync(data){
+  if(!S.snap||!data||!('worldMonsters' in data))return;
+  if(!shouldApplyWorldMonstersSync(data.worldMonsters,lastWorldMonstersSyncAt))return;
+  S.snap.worldMonsters=data.worldMonsters;
+  const appliedAt=data.worldMonsters?.[0]?.serverNowMs;
+  if(Number.isFinite(appliedAt))lastWorldMonstersSyncAt=appliedAt;
+}
 // P4-02 Merge Gate fix — pure, DOM/network-free extraction of the order-independent decision the
 // completion-reorder race fix depends on: does this world command response mean the server already
 // has an ACTIVE battle, regardless of which of two in-flight requests it belongs to or what order
@@ -376,6 +388,21 @@ let movementRequestSequence=0,latestCompletedMovementSequence=0;
 export function battleAlreadyActiveFromWorldResponse(r){
   if(!r)return false;
   return r.status==='ACCEPTED'?r.data?.encounterTriggered===true:r.errorCode==='ERR_BATTLE_ACTIVE';
+}
+// P4-03C — heartbeat and moveWorld responses can complete out of network order (same class of race
+// P4-02's completion-order guard already handles for worldPosition, see sendWorldMove's own
+// latestCompletedMovementSequence comment) — but that guard is about which request's PLAYER-movement
+// truth wins, a different concern from which response's WORLD-MONSTER truth is freshest. Every
+// monster entry in one response shares the same serverNowMs (the evaluate's own `now` — see
+// server.mjs's serializeWorldMonsters), so a single representative value is enough to decide whether
+// an incoming worldMonsters array is newer than what is already applied. An empty array (every
+// monster already consumed) has no serverNowMs of its own to compare — always applied, never treated
+// as stale, since there is nothing a newer response could possibly disagree with.
+export function shouldApplyWorldMonstersSync(candidateWorldMonsters,lastAppliedServerNowMs){
+  if(!Array.isArray(candidateWorldMonsters)||!candidateWorldMonsters.length)return true;
+  const candidateServerNowMs=candidateWorldMonsters[0]?.serverNowMs;
+  if(!Number.isFinite(candidateServerNowMs))return true;
+  return !Number.isFinite(lastAppliedServerNowMs)||candidateServerNowMs>=lastAppliedServerNowMs;
 }
 const sendWorldMove=async(target)=>{
   const requestSequence=++movementRequestSequence;
@@ -408,6 +435,11 @@ const sendWorldMove=async(target)=>{
     return;
   }
   const r=outcome.result;
+  // P4-03C — applied independently of every guard below (completion-order discard, `stale`
+  // generation, REJECTED/ACCEPTED): world-monster truth is a separate concern from player-movement
+  // truth, gated purely by its own serverNowMs-based staleness check (Coding Order §44/§45 — never
+  // delayed by, or allowed to delay, the existing battle-resync priority just below).
+  if(r?.status==='ACCEPTED')applyWorldMonstersSync(r.data);
   // P4-02 Merge Gate fix — a response reporting the server already has an ACTIVE battle (either this
   // very request just triggered one, or a DIFFERENT in-flight request already did and this one simply
   // bounced off the server's battleIsActive() guard) must resync the client no matter what order the
@@ -487,6 +519,9 @@ async function sendWorldHeartbeat(){
   worldHeartbeatInFlight=true;
   try{
     const r=await command('/api/commands/world/heartbeat',{});
+    // P4-03C — same independent, serverNowMs-gated sync as sendWorldMove's own (see
+    // shouldApplyWorldMonstersSync/applyWorldMonstersSync's comments).
+    if(r?.status==='ACCEPTED')applyWorldMonstersSync(r.data);
     // Same resync rule as sendWorldMove's own battleAlreadyActiveFromWorldResponse check: either this
     // heartbeat itself just triggered an encounter, or the server already has an ACTIVE battle from
     // some other in-flight request — either way, refresh() fetches fresh authoritative state (never
@@ -586,7 +621,15 @@ function tickMovementFrame(now){
     const definition=WORLD_MONSTER_DEFINITIONS.find(x=>x.id===monster.id);
     if(!definition)continue;
     const approxServerNow=Date.now()+serverTimeOffset;
-    const position=patrolPositionAt(definition,approxServerNow);
+    // P4-03C — CHASE-mode cosmetic interpolation: same pure-formula-recomputed-every-frame approach
+    // as PATROL's own patrolPositionAt call below, just using the server-supplied chase anchor
+    // triple (never invented/predicted client-side — see the P4-03C Final Design Clarification's
+    // Authoritative Chase Sync analysis for why this anchor data must be transmitted at all, not
+    // just the live position). Still 100% presentation-only: server authority is unaffected either
+    // way, this never decides existence/encounter/mode, only where the marker is drawn.
+    const position=monster.mode==='CHASE'
+      ?chasePositionAt(monster.chaseAnchorPos,monster.chaseAnchorAt,monster.lastKnownPlayerPos,definition.chaseSpeed,approxServerNow)
+      :patrolPositionAt(definition,approxServerNow);
     if(!position)continue;
     const node=document.querySelector(`[data-monster="${monster.id}"]`);
     if(!node)continue;
