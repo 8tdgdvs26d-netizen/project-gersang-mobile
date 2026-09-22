@@ -41,8 +41,8 @@ test('P4-02-A: world monster data contract has a stable id, level, deterministic
   assert.equal(typeof m.displayName,'string');
   assert.equal(m.level,1);
   assert.equal(m.encounterId,'bandit-patrol');
-  assert.deepEqual(m.patrolA,{x:460,y:220});
-  assert.deepEqual(m.patrolB,{x:540,y:220});
+  assert.deepEqual(m.patrolA,{x:440,y:220});
+  assert.deepEqual(m.patrolB,{x:560,y:220});
   assert.ok(Number.isFinite(m.patrolSpeed)&&m.patrolSpeed>0);
   assert.ok(Number.isFinite(m.patrolAnchorAt));
   assert.equal(m.encounterRadius,40);

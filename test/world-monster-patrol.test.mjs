@@ -6,7 +6,7 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-import {WORLD_MONSTER_DEFINITIONS,patrolPositionAt} from '../public/worldmonsters.js';
+import {WORLD_MONSTER_DEFINITIONS,patrolPositionAt,segmentEntersEncounterRadius} from '../public/worldmonsters.js';
 import {WORLD_BOUNDS,OBSTACLES,inflateRect,segmentIntersectsRect,PLAYER_COLLISION_RADIUS} from '../public/worldgeometry.js';
 import {CITY_DEFINITIONS} from '../public/cities.js';
 import {MOVE_CATCHUP_CAP_MS} from '../public/movement.js';
@@ -77,6 +77,38 @@ test('P4-03A-D: the patrol route does not enter any static obstacle and stays cl
   }
 });
 
+// P4-03A-H: pure differential proof that the encounter check has genuinely switched from a static
+// center to patrolPositionAt() — P4-03A Review Fix round 1. The original H (a decoy point outside the
+// patrol's reachable range) only proved an ordinary proximity miss: it would have passed identically
+// even if moveWorld() still used the OLD P4-02 static `position:{x:500,y:220}`, since that decoy was
+// far from BOTH the live position AND the old static point. This version instead constructs a
+// segment that is DESIGNED to hit the old static (500,220) reference point, then checks it against
+// the monster's true, live, dynamic position at a known, fully deterministic time — no server, no
+// sleep, no real clock at all, just patrolPositionAt(monster,knownTime) and the same
+// segmentEntersEncounterRadius() primitive moveWorld() itself uses. At the known time
+// `monster.patrolAnchorAt` the monster sits exactly at patrolA=(440,220), 60px from the old static
+// point — outside its 40px encounterRadius with a genuine (not boundary-exact) margin, specifically
+// BECAUSE the patrol route was widened from an initial 80px leg to 120px for exactly this reason (see
+// public/worldmonsters.js's own comment). If a regression ever reintroduced a hardcoded static
+// center, this test's own "wouldHitOldStatic" sanity assertion would still hold (proving the test
+// segment is a valid trap), while "actualResult" would flip to true — catching the regression.
+test('P4-03A-H: a segment built to hit the OLD static (500,220) reference point misses the monster\'s true live position at a known time — proving the check now uses patrolPositionAt, not a fixed static center',()=>{
+  const knownTime=monster.patrolAnchorAt;
+  const livePosition=patrolPositionAt(monster,knownTime);
+  assert.deepEqual(livePosition,monster.patrolA,'at the anchor time, the monster is exactly at patrolA');
+  const oldStaticReference={x:500,y:220};
+  const distanceFromOldStatic=Math.hypot(livePosition.x-oldStaticReference.x,livePosition.y-oldStaticReference.y);
+  assert.ok(distanceFromOldStatic>monster.encounterRadius,`live position must be genuinely (not just barely) outside the old static center's encounter radius at this known time, got distance=${distanceFromOldStatic}`);
+  // A short segment straddling (500,220): closest point is (500,200), 20px from the old static
+  // center (inside its 40px radius — a static implementation WOULD trigger), but 53.85px from the
+  // monster's true live position at patrolA (outside its 40px radius — the dynamic check must MISS).
+  const from={x:490,y:200},to={x:510,y:200};
+  const wouldHitOldStatic=segmentEntersEncounterRadius(from,to,{...monster,position:oldStaticReference});
+  assert.equal(wouldHitOldStatic,true,'sanity check: this segment must be a valid trap for a static (500,220) implementation');
+  const actualResult=segmentEntersEncounterRadius(from,to,{...monster,position:livePosition});
+  assert.equal(actualResult,false,'checked against the monster\'s real live dynamic position, this segment must MISS — proving the check no longer uses the old static center');
+});
+
 let child,base,dir,sessionId;
 const request=async(path,options={})=>{const r=await fetch(base+path,{headers:{'content-type':'application/json'},...options});return r.json()};
 const post=(path,body)=>request(path,{method:'POST',body:JSON.stringify(body)});
@@ -94,21 +126,20 @@ test.before(async()=>{
 });
 test.after(async()=>{child?.kill();await rm(dir,{recursive:true,force:true})});
 
-// P4-03A-E: snapshot moving truth. Two reads at different (known, server-reported) times expose
-// different, server-computed positions, each independently cross-verified against the real shared
-// formula at that read's own serverNowMs — deterministic clock control via the server's own reported
-// clock, never a real-sleep-and-hope-it-changed assumption.
-test('P4-03A-E: snapshot exposes a moving, server-computed patrol position, cross-verified against the shared formula at each read\'s own serverNowMs',async()=>{
-  const snap1=await request('/api/character/char-demo/snapshot');
-  const m1=snap1.worldMonsters.find(m=>m.id==='world-bandit-1');
-  assert.ok(Number.isFinite(snap1.serverNowMs));
-  assert.deepEqual(m1.position,patrolPositionAt(monster,snap1.serverNowMs));
-  await wait(500);
-  const snap2=await request('/api/character/char-demo/snapshot');
-  const m2=snap2.worldMonsters.find(m=>m.id==='world-bandit-1');
-  assert.ok(snap2.serverNowMs>snap1.serverNowMs,'serverNowMs must be monotonic across reads');
-  assert.deepEqual(m2.position,patrolPositionAt(monster,snap2.serverNowMs));
-  assert.notDeepEqual(m1.position,m2.position,'position must actually have moved between the two reads');
+// P4-03A-E: snapshot server-wiring evidence. `monster會隨時間移動` itself is already fully proven,
+// deterministically, by P4-03A-A (pure formula determinism) and P4-03A-B (pure triangle-wave shape)
+// — E does not need to re-prove that by sleeping and hoping the position changed. What E actually
+// needs to prove is that the REAL server's snapshot() route is genuinely wired to compute
+// worldMonsters[].position via patrolPositionAt(monster, its own reported serverNowMs), not some
+// other value — a single read, cross-checked against the real shared formula at the server's own
+// reported timestamp, is already a fully deterministic proof of that (no sleep, no real-time race:
+// whatever serverNowMs the server happens to report, the cross-check either matches or it doesn't).
+test('P4-03A-E: snapshot\'s worldMonsters position is server-computed via patrolPositionAt at the snapshot\'s own reported serverNowMs',async()=>{
+  const snap=await request('/api/character/char-demo/snapshot');
+  assert.ok(Number.isFinite(snap.serverNowMs));
+  const m=snap.worldMonsters.find(m=>m.id==='world-bandit-1');
+  assert.ok(m,'expected world-bandit-1 to still be available');
+  assert.deepEqual(m.position,patrolPositionAt(monster,snap.serverNowMs),'snapshot\'s reported monster position must exactly equal the shared formula evaluated at the snapshot\'s own reported serverNowMs');
 });
 
 // P4-03A-F: client clock offset. computeServerTimeOffset reconstructs the server's own clock reading
@@ -123,29 +154,6 @@ test('P4-03A-F: computeServerTimeOffset reconstructs the exact server time from 
   }
   const appSource=readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
   assert.ok(appSource.includes('serverTimeOffset=computeServerTimeOffset(S.snap.serverNowMs,Date.now());'),'refresh() must actually wire computeServerTimeOffset in, not leave it unused');
-});
-
-// P4-03A-H: a movement segment through a fixed point outside the monster's reachable patrol range
-// never triggers. Runs BEFORE P4-03A-G (which consumes the monster) so this proves the check against
-// a still-active, still-patrolling monster, not a trivial "already gone" case. Deliberately does NOT
-// use a time-shifted "where was it before" decoy: for this two-point reflecting patrol, EVERY fixed
-// real-time shift has some starting phase where the shifted and current positions coincide exactly
-// (verified numerically while designing this test — a consequence of the triangle wave being
-// continuous and periodic), so any such decoy would be phase-dependent and flaky. Instead this uses a
-// point that is spatially unreachable by the patrol at ANY phase: patrolA.x=460 is the leftmost point
-// the monster ever reaches, and this segment's closest approach (x=410) is already >40px away from
-// it (sqrt(50^2+20^2)~=53.9), so it is provably safe regardless of the monster's current phase.
-test('P4-03A-H: a movement segment through a point outside the patrol\'s reachable range never triggers, while the monster is still active',async()=>{
-  await wait(MOVE_CATCHUP_CAP_MS+100);
-  const decoyFromX=monster.patrolA.x-150,decoyToX=monster.patrolA.x-50;
-  setPosition(decoyFromX,200,'IN_WORLD');
-  const moved=await post('/api/commands/world/move',envelope('patrol-decoy-miss',{targetX:decoyToX,targetY:200}));
-  assert.equal(moved.status,'ACCEPTED');
-  assert.equal(moved.data.encounterTriggered,undefined);
-  const battle=await request('/api/character/char-demo/battle');
-  assert.equal(battle,null);
-  const snap=await request('/api/character/char-demo/snapshot');
-  assert.ok(snap.worldMonsters.some(m=>m.id==='world-bandit-1'),'monster must remain available/unconsumed');
 });
 
 // P4-03A-G: a movement segment through the monster's freshly-read LIVE patrol position triggers

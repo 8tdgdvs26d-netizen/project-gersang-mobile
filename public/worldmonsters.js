@@ -15,17 +15,23 @@ export const WORLD_MONSTER_DEFINITIONS = Object.freeze([
     // for a pre-existing battle template, not a second combat-content schema.
     encounterId: 'bandit-patrol',
     // P4-03A — deterministic two-point patrol, centered on the original P4-02 static spawn point
-    // (500,220): midpoint((460,220),(540,220)) === (500,220). Horizontal, on the same y as the
-    // original spot, so it stays exactly as far from every city entryRadius (all >=240px away) and
-    // every OBSTACLES rect (both start at y=400, i.e. 180px further down) as the original static
-    // position did — see test/world-monster-patrol.test.mjs for the automated data-validation proof
-    // (P4-03A-C/D), not eyeballed. 80px leg at a slow, deliberately unhurried patrol pace.
-    patrolA: Object.freeze({x: 460, y: 220}),
-    patrolB: Object.freeze({x: 540, y: 220}),
-    // px/ms. 80px leg / 0.02 = 4000ms one-way, 8000ms full A->B->A cycle — slow enough that ordinary
-    // request/HTTP latency (single-digit to low-double-digit ms in this environment) only ever moves
-    // the monster a fraction of a pixel between "read live position" and "act on it", so tests that
-    // react to a freshly observed live position (see P4-03A-G/H) never need to guess or sleep.
+    // (500,220): midpoint((440,220),(560,220)) === (500,220). Horizontal, on the same y as the
+    // original spot, so it stays exactly as far from every city entryRadius (all still comfortably
+    // clear — see test/world-monster-patrol.test.mjs's P4-03A-C/D automated data-validation proof,
+    // not eyeballed) and every OBSTACLES rect (both start at y=400, far below y=220) as the original
+    // static position did. Widened from an initial 80px leg to 120px (P4-03A Review Fix round 1):
+    // at the narrower width, the monster's own leftmost/rightmost reach (460/540) sat EXACTLY
+    // encounterRadius (40px) away from the old static (500,220) reference point, which could not
+    // reliably prove the encounter check had genuinely switched from a static to a dynamic center
+    // (see test/world-monster-patrol.test.mjs's P4-03A-H for the differential proof this margin
+    // exists to support). At 120px, patrolA/patrolB sit 60px from (500,220) — comfortably outside
+    // the 40px radius with a real margin, not a coincidental boundary value.
+    patrolA: Object.freeze({x: 440, y: 220}),
+    patrolB: Object.freeze({x: 560, y: 220}),
+    // px/ms. 120px leg / 0.02 = 6000ms one-way, 12000ms full A->B->A cycle — slow enough that
+    // ordinary request/HTTP latency (single-digit to low-double-digit ms in this environment) only
+    // ever moves the monster a fraction of a pixel between "read live position" and "act on it", so
+    // tests that react to a freshly observed live position (see P4-03A-G) never need to guess or sleep.
     patrolSpeed: 0.02,
     // Fixed content constant, not a runtime timestamp — patrolPositionAt(monster, now) is then a pure
     // function of `now` alone with no other state, so it is exactly reproducible after any reload or
