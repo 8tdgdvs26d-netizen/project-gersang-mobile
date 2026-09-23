@@ -22,23 +22,29 @@ import {shouldApplyWorldMonstersSync,nextWorldMonstersSyncWatermark} from '../pu
 
 const monster=WORLD_MONSTER_DEFINITIONS[0];
 const patrolCenter={x:(monster.patrolA.x+monster.patrolB.x)/2,y:(monster.patrolA.y+monster.patrolB.y)/2};
-// Far from the patrol route (y=220, x in [440,560]) AND from patrolCenter by more than leashRadius —
-// safely PATROL-only, no aggro, matching the established SAFE_FAR precedent from
-// test/world-monster-heartbeat.test.mjs.
+// Far from the patrol route (y=80, x in [440,560]) AND from patrolCenter by more than leashRadius(280)
+// — safely PATROL-only, no aggro, matching the established SAFE_FAR precedent from
+// test/world-monster-heartbeat.test.mjs. distance from patrolCenter(500,80) = 520px.
 const SAFE_FAR={x:500,y:600};
-// 70px perpendicular from the patrol line's midpoint (500,220): strictly between encounterRadius(40)
-// and aggroRadius(90), and well within leashRadius(150) of patrolCenter — the one fixed point this
-// whole file uses to acquire aggro/CHASE without ever accidentally also satisfying encounterRadius.
-const AGGRO_ONLY={x:500,y:290};
+// P4-04A — 75px perpendicular from the patrol line's midpoint (500,80): strictly between
+// encounterRadius(40) and aggroRadius(110) with a comfortable ~35px margin on each side, and well
+// within leashRadius(280) of patrolCenter — the one fixed point this whole file uses to acquire
+// aggro/CHASE without ever accidentally also satisfying encounterRadius. (Pre-P4-04A this was
+// {x:500,y:290}, 70px from the old patrolCenter(500,220)/aggroRadius(90) pair — recalculated for the
+// new geometry, not an arbitrary change.)
+const AGGRO_ONLY={x:500,y:155};
 
 // ============================================================================
 // A-B: pure content/geometry proofs — no server needed.
 // ============================================================================
 
 test('P4-03C-A: aggro/chase Prototype Parameters are present and correctly ordered',()=>{
-  assert.equal(monster.aggroRadius,90);
+  // P4-04A — World Threat Parameter/Placement Tuning: aggroRadius 90->110 and leashRadius 150->280,
+  // approved by the P4-04A Coding Order (see public/worldmonsters.js's own P4-04A comment and
+  // test/world-monster-tuning.test.mjs for the full geometric proof this retuning relies on).
+  assert.equal(monster.aggroRadius,110);
   assert.equal(monster.chaseSpeed,0.08);
-  assert.equal(monster.leashRadius,150);
+  assert.equal(monster.leashRadius,280);
   assert.ok(monster.aggroRadius>monster.encounterRadius,'aggroRadius must sit outside encounterRadius so a sweep can acquire aggro before it could also satisfy the tighter encounter check in the very same sweep');
 });
 
@@ -58,9 +64,13 @@ test('P4-03C-B: chasePositionAt — zero elapsed, partial advance, exact-target 
 
 // ============================================================================
 // I-K: obstacle-blocked chase — proven via pure geometry + the exact algorithm formula, since the
-// FIXED Prototype leashRadius(150) measured from the patrol center makes every real obstacle
+// FIXED Prototype leashRadius measured from the patrol center makes every real obstacle
 // geometrically unreachable by a leash-bounded chase target with today's content (proven as part of
-// I itself) — matching the P4-03C Audit's own documented finding, not a gap in coverage.
+// I itself, against whatever leashRadius/patrol content is currently live — see monster.leashRadius
+// and patrolCenter above) — matching the P4-03C Audit's own documented finding, not a gap in
+// coverage. Still holds after P4-04A's retune (leashRadius 150->280, patrol y 220->80): nearest
+// inflated obstacle is now 308.1px from the new patrolCenter(500,80), still comfortably beyond the
+// new leashRadius(280) — see test/world-monster-tuning.test.mjs for the full P4-04A geometric proof.
 // ============================================================================
 
 const INFLATED_OBSTACLES=OBSTACLES.map(r=>inflateRect(r,PLAYER_COLLISION_RADIUS));
@@ -69,7 +79,7 @@ const INFLATED_OBSTACLES=OBSTACLES.map(r=>inflateRect(r,PLAYER_COLLISION_RADIUS)
 // precedent already established for the client's own presentation-only obstacle clamp.
 const segmentBlocked=(x1,y1,x2,y2)=>INFLATED_OBSTACLES.some(rect=>pointInRect(x1,y1,rect)?pointInRect(x2,y2,rect):segmentIntersectsRect(x1,y1,x2,y2,rect));
 
-test('P4-03C-I: with the fixed Prototype leashRadius(150) measured from the patrol center, no inflated obstacle can ever actually sit inside a leash-bounded CHASE target — and the obstacle-blocked chase-resolve algorithm itself still freezes/rebases correctly if it ever did',()=>{
+test('P4-03C-I: with the fixed Prototype leashRadius measured from the patrol center, no inflated obstacle can ever actually sit inside a leash-bounded CHASE target — and the obstacle-blocked chase-resolve algorithm itself still freezes/rebases correctly if it ever did',()=>{
   for(const rect of INFLATED_OBSTACLES){
     const closestX=Math.max(rect.minX,Math.min(patrolCenter.x,rect.maxX));
     const closestY=Math.max(rect.minY,Math.min(patrolCenter.y,rect.maxY));
@@ -243,7 +253,7 @@ test('P4-03C-G: lastKnownPlayerPos updates to the freshest authoritative player 
   await resetWorldState(AGGRO_ONLY.x,AGGRO_ONLY.y,'IN_WORLD');
   const trigger=await pollHeartbeatUntil(r=>bandit(r)?.mode==='CHASE',{keyPrefix:'g-trigger'});
   assert.deepEqual(bandit(trigger).lastKnownPlayerPos,AGGRO_ONLY);
-  setPosition(520,300,'IN_WORLD'); // ~82.5px from patrolCenter — still comfortably within leashRadius(150)
+  setPosition(520,300,'IN_WORLD'); // ~220.9px from patrolCenter(500,80) — still comfortably within leashRadius(280)
   const after=await post('/api/commands/world/heartbeat',envelope(nextKey('g-move'),{}));
   const m=bandit(after);
   assert.equal(m.mode,'CHASE');
@@ -264,7 +274,7 @@ test('P4-03C-H: once CHASE, the monster catching up within encounterRadius opens
 test('P4-03C-M: the player moving beyond leashRadius (measured from the fixed patrol center) disengages CHASE back to PATROL',async()=>{
   await resetWorldState(AGGRO_ONLY.x,AGGRO_ONLY.y,'IN_WORLD');
   await pollHeartbeatUntil(r=>bandit(r)?.mode==='CHASE',{keyPrefix:'m-trigger'});
-  setPosition(SAFE_FAR.x,SAFE_FAR.y,'IN_WORLD'); // distance from patrolCenter = 380 > leashRadius(150)
+  setPosition(SAFE_FAR.x,SAFE_FAR.y,'IN_WORLD'); // distance from patrolCenter(500,80) = 520 > leashRadius(280)
   const disengaged=await post('/api/commands/world/heartbeat',envelope(nextKey('m-disengage'),{}));
   assert.equal(disengaged.status,'ACCEPTED');
   const m=bandit(disengaged);

@@ -14,20 +14,30 @@ export const WORLD_MONSTER_DEFINITIONS = Object.freeze([
     // Reuses the EXISTING server.mjs encounterDefinitions content — a world monster is a trigger
     // for a pre-existing battle template, not a second combat-content schema.
     encounterId: 'bandit-patrol',
-    // P4-03A — deterministic two-point patrol, centered on the original P4-02 static spawn point
-    // (500,220): midpoint((440,220),(560,220)) === (500,220). Horizontal, on the same y as the
-    // original spot, so it stays exactly as far from every city entryRadius (all still comfortably
-    // clear — see test/world-monster-patrol.test.mjs's P4-03A-C/D automated data-validation proof,
-    // not eyeballed) and every OBSTACLES rect (both start at y=400, far below y=220) as the original
-    // static position did. Widened from an initial 80px leg to 120px (P4-03A Review Fix round 1):
-    // at the narrower width, the monster's own leftmost/rightmost reach (460/540) sat EXACTLY
-    // encounterRadius (40px) away from the old static (500,220) reference point, which could not
-    // reliably prove the encounter check had genuinely switched from a static to a dynamic center
-    // (see test/world-monster-patrol.test.mjs's P4-03A-H for the differential proof this margin
-    // exists to support). At 120px, patrolA/patrolB sit 60px from (500,220) — comfortably outside
-    // the 40px radius with a real margin, not a coincidental boundary value.
-    patrolA: Object.freeze({x: 440, y: 220}),
-    patrolB: Object.freeze({x: 560, y: 220}),
+    // P4-03A — deterministic two-point patrol, originally centered on the P4-02 static spawn point
+    // (500,220): midpoint((440,220),(560,220)) === (500,220). Widened from an initial 80px leg to
+    // 120px (P4-03A Review Fix round 1): at the narrower width, the monster's own leftmost/rightmost
+    // reach (460/540) sat EXACTLY encounterRadius (40px) away from the old static (500,220) reference
+    // point, which could not reliably prove the encounter check had genuinely switched from a static
+    // to a dynamic center (see test/world-monster-patrol.test.mjs's P4-03A-H for the differential
+    // proof this margin exists to support). At 120px, patrolA/patrolB sit 60px from the route center —
+    // comfortably outside the 40px radius with a real margin, not a coincidental boundary value. The
+    // 120px leg width itself is unchanged by P4-04A below (only the y-coordinate moved).
+    //
+    // P4-04A — World Threat Parameter/Placement Tuning (approved P4-04A Coding Order). The original
+    // y=220 sat EXACTLY on the Starter Village(220,220)->Hill Market(780,220) direct trade route,
+    // which the P4-04 Micro Playtest proved guarantees a near-zero-warning encounter for any player
+    // simply travelling between the two cities (592ms to CHASE, 883ms total to Battle — roughly 291ms
+    // from CHASE start to Battle — with zero chance to notice/react). Shifted to y=80 — offset from
+    // the route by 140px, strictly greater than the new aggroRadius(110) below, so the aggro sweep
+    // can never geometrically reach the route line at all (a hard geometric guarantee, not a
+    // probability reduction). Still comfortably clear of
+    // every city entryRadius and every OBSTACLES rect at the new position too (obstacles start at
+    // y=400, far below y=80) — see test/world-monster-tuning.test.mjs for the full geometric proof
+    // (route clearance, city-entry clearance, obstacle clearance, world bounds, city-escape
+    // reachability).
+    patrolA: Object.freeze({x: 440, y: 80}),
+    patrolB: Object.freeze({x: 560, y: 80}),
     // px/ms. 120px leg / 0.02 = 6000ms one-way, 12000ms full A->B->A cycle — slow enough that
     // ordinary request/HTTP latency (single-digit to low-double-digit ms in this environment) only
     // ever moves the monster a fraction of a pixel between "read live position" and "act on it", so
@@ -41,18 +51,30 @@ export const WORLD_MONSTER_DEFINITIONS = Object.freeze([
     active: true,
     // P4-03C — Aggro/Chase Prototype Parameters (see the approved P4-03C Audit/Design
     // Clarification/Coding Order — not Canonical balance numbers, subject to Playtest re-tuning).
-    // aggroRadius(90) sits clearly outside encounterRadius(40) so a swept patrol/chase path always
+    // aggroRadius sits clearly outside encounterRadius(40) so a swept patrol/chase path always
     // has room to acquire aggro before it can possibly also satisfy the tighter encounter check in
     // the same sweep. chaseSpeed(0.08px/ms) is deliberately well under the player's own
     // MOVE_SPEED_RATE (JOYSTICK_STEP_DISTANCE/JOYSTICK_SEND_INTERVAL_MS = 18/140 ~= 0.1286px/ms, see
     // public/movement.js) — a chased player can always outrun the monster by actually moving away,
     // so reaching a city is a reward for successfully evading, not the only escape valve (see the
-    // Final Design Clarification's Enter-City analysis). leashRadius(150) is measured from the fixed
+    // Final Design Clarification's Enter-City analysis). leashRadius is measured from the fixed
     // patrolA/patrolB midpoint (the patrol route's own center), not from the monster's live chase
     // position — see chasePositionAt below and server.mjs's evaluateWorldMonsterAggroChase.
-    aggroRadius: 90,
+    //
+    // P4-04A — World Threat Parameter/Placement Tuning (approved P4-04A Coding Order, following the
+    // P4-04 Micro Playtest's findings): aggroRadius raised 90->110 (buffer over encounterRadius widens
+    // 50px->70px, giving a real ~336-544ms notice-to-encounter window for a player who deliberately
+    // approaches, instead of the marginal ~240-390ms the Playtest measured) and leashRadius raised
+    // 150->280 specifically so that CHASE->run-toward-city->enter-while-still-CHASE becomes a reachable
+    // decision at Starter Village/Hill Market (both now 265.1px from the new patrol center at (500,80)
+    // — unreachable at the old leash(150), reachable with margin at 280) without leash reaching far
+    // enough to make any inflated obstacle reachable either (nearest obstacle is 308.1px from the new
+    // patrol center — still safely beyond leash(280), preserving the P4-03C-I finding that
+    // obstacle-blocked CHASE cannot arise from realistic play with today's content). See
+    // test/world-monster-tuning.test.mjs for the full geometric proof.
+    aggroRadius: 110,
     chaseSpeed: 0.08,
-    leashRadius: 150
+    leashRadius: 280
   })
 ]);
 

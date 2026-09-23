@@ -651,3 +651,36 @@
 - Scope check：只改咗`server.mjs`（`advanceWorldChaseState`／`nextChaseStateProposal`／`worldStateRevisionCounter`／`evaluateWorldMonsterAggroChase`／`serializeWorldMonsters`／`snapshot`／`worldHeartbeat`／`moveWorld`／`exitCity`嘅proposal construction）、`public/app.js`（`lastWorldMonstersSyncAt`→`lastWorldMonstersSyncRevision`／`shouldApplyWorldMonstersSync`／`applyWorldMonstersSync`／`refresh()`）、`test/world-monster-aggro-chase.test.mjs`、`test/phase3-economy-consistency.test.mjs`。`aggroRadius=90`／`chaseSpeed=0.08`／`leashRadius=150`／`patrolA`／`patrolB`／`patrolSpeed`／`encounterRadius`數值完全冇改；`public/worldmonsters.js`一隻字冇改；DB schema冇改；`test/world-roads-non-constraining.test.mjs`今round冇再碰；battle邏輯（`triggerWorldMonsterBattle`）／heartbeat cadence／Model A movement semantics全部冇改。
 - 存檔影響：無schema變動。
 - Rollback基準：`main` @ `16753b03685318dac5c66ea8d0699e209c191383`；本round起點PR #57 head `daf6cb7f7041bed454a0e02b112155811207245d`（Ready Gate approved嗰個SHA）。
+
+## P4-04 — 2026-09-23 — World Threat Micro Playtest（純Read-only playtest，唔改任何code）
+
+- **目標**：跟approved嘅P4-04 Coding Order，驗證「見到怪→巡邏→Aggro→CHASE→玩家逃/避/入城/被追到→Battle」呢條世界威脅loop係咪已經值得保留、俾玩家理解同預測。今round**唔加任何Monster AI、唔加Battle功能、唔加新怪物、唔改任何code**，純粹用一個HTTP-level scratchpad driver（模擬真實client cadence）對住真正spawn緊嘅`server.mjs`跑8個Coding Order指定嘅scenario，加一個額外嘅「完全普通玩家由啟步城行去開拓城」對照組。
+- **Baseline**：`main` @ `f61f838a018a7c799dd4cda925e3654e8530518d`（P4-03C merge commit），467/467 tests passed，冇任何code改動。
+- **8個scenario全部real-server跑**：企定觀察巡邏（PASS）、主動接近aggro（PASS）、CHASE觸發（PASS）、直線逃跑甩怪（PASS，728ms內disengage）、唔逃俾捉到開戰（PASS，611ms內開戰，一次過）、被CHASE時入城（PASS WITH ISSUE——entry本身冇被擋，但leash永遠早過城門release，「入城避怪」呢個決策現實中完全冇機會發生）、CHASE期間reload（PASS，state完整保留）、CHASE期間用obstacle遮擋（NOT TESTABLE，同P4-03C-I已有嘅幾何證明一致，obstacle永遠喺leash半徑以外）。
+- **關鍵額外發現（未列入原定8個scenario，但直接觸發咗P4-04A）**：用一個完全普通、冇刻意繞開嘅玩家行為（joystick一直指向開拓城,由啟步城出發）做測試,發現**592ms觸發CHASE、883ms（未夠1秒）就被迫開戰**,玩家全程冇任何主動反應機會。根本原因：monster patrol中心(500,220)幾乎坐正正響啟步城(220,220)去開拓城(780,220)嘅直線捷徑上(同一個y=220)。
+- **Parameter Review**：aggroRadius(90)分類**太細**（同encounterRadius(40)差距太窄,喺正常移動速度下只夠約300-400ms反應窗）；chaseSpeed(0.08)分類**合理**（玩家一react就實逃得甩,已實測）；leashRadius(150)分類**合理，但同城市佈局有結構性衝突**（4個城市嘅entryRadius邊界全部遠過leashRadius,令「入城避怪」呢個設計意圖上嘅逃生選項現時完全用唔著）。
+- **Recommendation：PHASE 4 SAFE TO CLOSE**——Section 7嘅10項Pass Criteria全部滿足,Section 8嘅FAIL Conditions一項都冇觸發,但強烈建議喺Phase 5之前優先處理上面兩個Parameter Tuning發現（呢個直接引出咗跟住嘅P4-04A Tuning）。
+- 存檔影響：無。冇改任何檔案（純HTTP-level scratchpad playtest，冇commit）。
+- Rollback基準：`main` @ `f61f838a018a7c799dd4cda925e3654e8530518d`（同上一round，今round冇新增commit）。
+
+## P4-04A — 2026-09-23 — World Threat Parameter / Placement Tuning
+
+- **目標**：跟approved嘅P4-04A Coding Order,修正P4-04 Micro Playtest發現嘅兩個player-value問題：(1) 普通商路行程同monster patrol corridor重疊,產生幾乎零預警嘅遭遇戰；(2) 現有leash幾何令「CHASE狀態下入城逃生」呢個決策喺現有map content下不可能發生。**只調Prototype content數值，冇新gameplay系統，冇DB schema改動。**
+- **`public/worldmonsters.js`content數值改動**（3個，全部經Design Gate分析批准）：
+  - `patrolA`由`(440,220)`改做`(440,80)`，`patrolB`由`(560,220)`改做`(560,80)`——搬離啟步城↔開拓城直線捷徑(y=220)140px，clearance(140-新aggroRadius110=30px)確保捷徑幾何上**永遠唔會**入aggro範圍（幾何事實,唔係機率降低）。
+  - `aggroRadius`由`90`加到`110`——buffer由50px加到70px，俾刻意接近嘅玩家有更實在嘅336-544ms通知窗口（Design Gate分析：單靠加大aggroRadius但唔搬patrol嘅Option B需要207px先有意義,反而會令捷徑保證接觸問題更嚴重；搬patrol嘅Option A單獨已解決核心問題；今次揀Option C:細幅搬移+適度aggro微調）。
+  - `leashRadius`由`150`加到`280`——令啟步城／開拓城嘅entryRadius邊界（新patrol中心量度都係265.1px）首次落入leash範圍之內，令「CHASE→跑向城→入城時仍然CHASE」成為真正可行嘅決策；obstacle距新patrol中心308.1px，依然喺新leash(280)之外，P4-03C-I嘅obstacle-unreachable finding維持不變。
+  - `chaseSpeed`（0.08）／`encounterRadius`（40）**維持不變**——跟Coding Order明確要求，P4-04 Playtest已證實呢兩個數值functionally合理，冇證據要求改。
+- **新測試`test/world-monster-tuning.test.mjs`（P4-04A-A至G，7個）**：A確認approved數值精確；B用真正segment-to-segment最短距離演算法（唔係假設嘅offset）證明捷徑同aggro掃描永遠唔相交；C確認patrol segment完全喺WORLD_BOUNDS之內；D確認patrol route冇同任何城市entryRadius重疊；E確認patrol route冇入任何inflated obstacle；F證明leashRadius(280)令啟步城/開拓城首次geometrically reachable-while-CHASE（同時記錄港口城/躍動城依然喺leash範圍外,呢個係刻意，唔係要求全部城市都reachable）；G複核P4-03C-I嘅obstacle-vs-leash finding喺新數值下依然成立。
+- **既有test更新**（locked老數值,跟Coding Order §6明確批准）：`test/world-encounter.test.mjs`嘅P4-02-A、`test/world-monster-aggro-chase.test.mjs`嘅P4-03C-A（數值assertion）；`test/world-monster-aggro-chase.test.mjs`嘅`AGGRO_ONLY`fixture由`(500,290)`（相對舊patrol中心70px,舊aggroRadius90之內）重新計算做`(500,155)`（相對新patrol中心75px,新aggroRadius110之內,margin對稱~35px），同幾個stale嘅距離註解一併更新——`SAFE_FAR`／encounter/battle/reload/idempotency嘅行為assertion全部一個字冇改，純粹因為monster幾何搬咗位而要重新計算fixture座標，同P1-05嗰次道路座標搬遷屬於同一類「唔削弱assertion,純粹搬fixture座標」嘅改動。
+- **HTTP gameplay驗證（真server,真實client cadence，Coding Order §7 Scenario A-E全部跑）**：
+  - **A（普通商路行程）**：啟步城exitPoint直行去開拓城,173個tick全程PATROL,零aggro,零battle——保證接觸問題徹底解決。
+  - **B（刻意接近）**：aggro喺78.3px（patrol中心量度）觸發,冇即時開戰。
+  - **C（掉頭逃走）**：CHASE後1591ms自然disengage,全程未被捕。
+  - **D（企定唔郁）**：aggro後611ms開戰,一次過,`world_monster_encounters`只有1行。
+  - **E（入城逃生，mandatory scenario）**：CHASE觸發後全速跑向啟步城,1157ms踏入entryRadius**嗰一刻monster依然CHASE**,`enterCity`ACCEPTED,`exitCity`後monster正確reset做PATROL——leashRadius加大呢個改動嘅主要目的首次喺真server上實測confirm。
+- **測試結果**：467（P4-03C baseline）＋7（新`world-monster-tuning.test.mjs`）＝**474 tests passed, 0 failed**。
+- Scope check：冇新AI state（依然淨係PATROL/CHASE兩態）、冇pathfinding、冇LOS、冇新monster、冇DB schema改動、冇改battle系統、冇加任何UI polish（CHASE icon/顏色/警示/音效/動畫全部維持Phase 8 debt，今round冇碰）。改動檔案：`public/worldmonsters.js`、`test/world-monster-tuning.test.mjs`（新增）、`test/world-encounter.test.mjs`、`test/world-monster-aggro-chase.test.mjs`、`CHANGELOG.md`。
+- **已知限制（如實記錄，P4-04B真人playtest先可以confirm）**：336-544ms嘅反應窗口喺真實mobile觸控延遲下係咪足夠,1.2秒「跑去城」嘅節奏感受,patrol搬去(500,80)之後喺實際world map畫面上嘅顯眼程度——呢啲全部係主觀體驗判斷,今round淨係用HTTP timing數據支持,唔可以單靠數學宣稱「感覺岩」。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `f61f838a018a7c799dd4cda925e3654e8530518d`。
