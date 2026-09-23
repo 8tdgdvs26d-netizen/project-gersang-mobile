@@ -564,6 +564,93 @@ test('renderWorldMapHtml renders the P1-07 Root Cause Measurement Test overlay i
   }
 });
 
+// --- P4-04B2: 6 more overlay data-point ids (Recent Movement Anomaly), purely additive to the
+// existing shell above (neither earlier test is touched — this only adds new coverage). ---
+
+test('renderWorldMapHtml renders the P4-04B2 Recent Movement Anomaly overlay ids, appended after the existing P1-07 Root Cause Measurement Test ones, each starting as a placeholder',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  const newIds=['telemetry-recent-freeze','telemetry-recent-lead','telemetry-recent-rtt','telemetry-recent-gap','telemetry-recent-inflight','telemetry-recent-age'];
+  for(const id of newIds){
+    assert.ok(html.includes(`id="${id}"`),`expected the overlay shell to include #${id}`);
+    assert.ok(html.indexOf(`id="${id}"`)>html.indexOf('id="telemetry-hardresets"'),`expected #${id} to be appended after the existing P1-07 Root Cause Measurement Test ids, never inserted between them`);
+  }
+});
+
+// --- P4-04B2 Mobile Telemetry Overflow Fix — display/layout-only: a narrow-viewport 2-column
+// reflow of the SAME 23 overlay fields (no field removed, no accordion, no scrolling required). The
+// markup (public/worldmap.js) is unchanged this round; only public/styles.css gained a mobile media
+// query, so these tests verify (1) all 23 telemetry ids still render exactly once each — nothing
+// removed — and (2) the responsive layout rule itself exists in styles.css. ---
+
+test('P4-04B2 Mobile Telemetry Overflow Fix: all 23 telemetry overlay ids — the same set from P1-07C/P1-07/P4-04B2 — still render, each exactly once, none removed',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  const allIds=['telemetry-fps','telemetry-rtt','telemetry-gap','telemetry-lead','telemetry-inflight','telemetry-throttled','telemetry-collided','telemetry-suspended','telemetry-status','telemetry-errorcode','telemetry-leadcaphit','telemetry-capfrozen','telemetry-frozen-current','telemetry-frozen-total','telemetry-frozen-ratio','telemetry-correction','telemetry-hardresets','telemetry-recent-freeze','telemetry-recent-lead','telemetry-recent-rtt','telemetry-recent-gap','telemetry-recent-inflight','telemetry-recent-age'];
+  assert.equal(allIds.length,23,'sanity check on the expected field count itself');
+  for(const id of allIds){
+    const matches=html.split(`id="${id}"`).length-1;
+    assert.equal(matches,1,`expected #${id} to render exactly once, found ${matches}`);
+  }
+});
+
+test('P4-04B2 Mobile Telemetry Overflow Fix: joystick and Follow/Full Map toggle controls remain present and unaffected by the overlay layout change',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  assert.ok(html.includes('id="joystick-base"'));
+  assert.ok(html.includes('id="joystick-knob"'));
+  assert.ok(html.includes('id="map-view-toggle"'));
+});
+
+test('P4-04B2 Mobile Telemetry Overflow Fix: styles.css defines a narrow-viewport responsive 2-column grid for .telemetry-overlay, never removing the base (wider-screen) rule',async()=>{
+  const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+  const baseRuleIndex=css.indexOf('.telemetry-overlay{');
+  assert.ok(baseRuleIndex>=0,'the existing single-column base rule must still be present, unchanged, for wider screens');
+  const mediaMatch=css.match(/@media\(max-width:\d+px\)\{\.telemetry-overlay\{[^}]*display:grid[^}]*\}/);
+  assert.ok(mediaMatch,'expected a narrow-viewport media query switching .telemetry-overlay to a grid layout');
+  assert.match(mediaMatch[0],/grid-template-columns:repeat\(2,/,'expected exactly 2 columns, not a collapse/accordion or single column');
+  assert.doesNotMatch(mediaMatch[0],/overflow(?:-y)?:\s*(auto|scroll)/,'the mobile fix must not rely on internal scrolling to see the full snapshot');
+});
+
+// --- P4-04B2 Mobile Telemetry / Control Collision Fix — the 2-column reflow above widened the
+// overlay enough to visually cover the joystick/knob at narrow widths (pointer-events:none kept
+// touches working, but Charlie could no longer SEE the joystick while holding it). Fix: lift the
+// overlay clear of the joystick's footprint and move the Follow/Full Map toggle into the now-empty
+// bottom-right corner. Display/layout-only — no markup or JS changed this round either. ---
+
+test('P4-04B2 Mobile Telemetry / Control Collision Fix: the narrow-viewport rule lifts .telemetry-overlay to bottom:128px, clear of the joystick\'s bottom:14px+104px footprint',async()=>{
+  const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+  const mediaMatch=css.match(/@media\(max-width:\d+px\)\{\.telemetry-overlay\{[^}]*display:grid[^}]*\}/);
+  assert.ok(mediaMatch,'expected the narrow-viewport telemetry grid rule to still exist');
+  assert.match(mediaMatch[0],/bottom:128px/,'expected the overlay to be lifted to bottom:128px, clear of the joystick, not left at the base bottom:14px');
+});
+
+test('P4-04B2 Mobile Telemetry / Control Collision Fix: the narrow-viewport rule moves .map-view-toggle from top-right down to bottom-right, out of the telemetry overlay\'s way',async()=>{
+  const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+  // Anchored specifically to the telemetry overlay's own narrow-viewport media query (there is an
+  // unrelated, pre-existing @media(max-width:420px) block elsewhere in the file for backpack/storage
+  // layout — a generic "any @media block" match would find that one first instead).
+  const mediaMatch=css.match(/@media\(max-width:\d+px\)\{\.telemetry-overlay\{[^]*?\}\}/);
+  assert.ok(mediaMatch,'expected the narrow-viewport media query block to exist');
+  assert.match(mediaMatch[0],/\.map-view-toggle\{[^}]*top:auto[^}]*bottom:14px[^}]*right:10px[^}]*\}/,'expected .map-view-toggle to switch to bottom:14px;right:10px (top:auto) on narrow screens');
+});
+
+test('P4-04B2 Mobile Telemetry / Control Collision Fix: .map-view-toggle\'s base (wider-screen) rule is unchanged — top:10px;right:10px, not touched by the narrow-viewport override',async()=>{
+  const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+  assert.match(css,/\.map-view-toggle\{position:absolute;top:10px;right:10px/,'expected the existing wider-screen .map-view-toggle rule to remain exactly as before');
+});
+
+test('P4-04B2 Mobile Telemetry / Control Collision Fix: .joystick\'s base positioning (left:14px, bottom:14px, unchanged dimensions) is untouched — no narrow-viewport override exists for it',async()=>{
+  const css=await readFile(new URL('../public/styles.css',import.meta.url),'utf8');
+  assert.match(css,/\.joystick\{position:absolute;left:14px;bottom:14px;width:104px;height:104px/,'expected the existing .joystick base rule to remain exactly as before');
+  const mediaMatch=css.match(/@media\(max-width:\d+px\)\{\.telemetry-overlay\{[^]*?\}\}/);
+  assert.ok(mediaMatch);
+  assert.doesNotMatch(mediaMatch[0],/\.joystick\{/,'the joystick must not be overridden by any narrow-viewport rule — its behaviour is unchanged');
+});
+
 // =====================================================================================
 // P2-07 City Hub Navigation — IN_CITY must default directly to City Hub, never require a
 // separate "進入城市" step from the World Map. See CHANGELOG.md P2-07 City Hub Navigation entry

@@ -6,7 +6,7 @@ import {computeJoystickInput,clampJoystickKnob,easeTowards,shouldSendJoystickMov
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). Read-only instrumentation of
 // the existing movement path above; nothing in this import or the code that uses it changes any
 // movement/joystick/prediction/reconciliation/camera behavior.
-import {nextFpsEma,nextTelemetryFrameDelta,predictionLeadDistance,nextMoveTiming,formatMs,formatFlag,formatLeadReadout,TELEMETRY_OVERLAY_PATCH_INTERVAL_MS,isNearLeadCap,isCapFrozenFrame,nextCapFrozenStreakMs,capFrozenRatio,formatPercent,formatPx,formatCount} from './telemetry.js';
+import {nextFpsEma,nextTelemetryFrameDelta,predictionLeadDistance,nextMoveTiming,formatMs,formatFlag,formatLeadReadout,TELEMETRY_OVERLAY_PATCH_INTERVAL_MS,isNearLeadCap,isCapFrozenFrame,nextCapFrozenStreakMs,capFrozenRatio,formatPercent,formatPx,formatCount,shouldCommitFreezeEvent,buildRecentEvent,isRecentEventStale,formatEventAge,isFreezeEventStart,maxIfTracking} from './telemetry.js';
 // P4-03A — cosmetic-only: WORLD_MONSTER_DEFINITIONS/patrolPositionAt are the same shared, DOM-free
 // content module server.mjs imports (already the established pattern — public/bus.js already
 // imports CITY_DEFINITIONS from ./cities.js directly into the client bundle the same way). The
@@ -308,6 +308,17 @@ let telemetryFpsEma=null,telemetryLastFrameTimestamp=null,telemetryLastOverlayPa
 // reconciliation/network code — only patchTelemetryOverlay and the tail of tickMovementFrame below
 // read/write these.
 let telemetryCapFrozenCurrentMs=0,telemetryCapFrozenTotalMs=0,telemetryActiveMovementTotalMs=0,telemetryHardResetCount=0,telemetryLastCorrectionDistance=null,telemetryLastCapFrozen=false;
+// P4-04B2 Draft Review Fix — Recent Movement Anomaly retention state. Peak values are scoped
+// STRICTLY to the current cap-freeze event's own window: they are cleared the instant a new freeze
+// STARTS (not merely when the previous event is committed) and only accumulate while
+// `telemetryFreezeEventTrackingActive` is true, so a spike that happened outside any freeze can never
+// contaminate a later freeze event's reported peaks. A response that completes and lands while
+// tracking is still active (including the very response whose arrival un-freezes prediction, if it
+// completes before the frame that detects freeze end) is legitimately included; a response landing
+// AFTER the event has already been committed is never retroactively associated with it.
+// `telemetryRecentEvent` is the single retained snapshot the overlay reads — memory-only, cleared on
+// reload, no history list, never fed back into movement/prediction/reconciliation/network decisions.
+let telemetryRecentPeakLeadPx=null,telemetryRecentPeakRttMs=null,telemetryRecentPeakGapMs=null,telemetryRecentPeakInFlight=null,telemetryRecentEvent=null,telemetryFreezeEventTrackingActive=false;
 // Single call site for all three /world/move completion paths (ACCEPTED, REJECTED, a thrown
 // network/command exception) so RTT/response-gap timing is computed identically every time — see
 // P1-07C Merge Gate direction. throttled/collided are explicitly nulled on REJECTED/ERROR so the
@@ -316,6 +327,11 @@ function recordMoveTelemetry({status,errorCode,throttled,collided,startedAt}){
   const timing=nextMoveTiming(startedAt,performance.now(),telemetryLastCompletedAt);
   telemetryLastRttMs=timing.rttMs;telemetryLastResponseGapMs=timing.responseGapMs;telemetryLastCompletedAt=timing.completedAt;
   telemetryLastStatus=status;telemetryLastErrorCode=errorCode;telemetryLastThrottled=throttled;telemetryLastCollided=collided;
+  // P4-04B2 Draft Review Fix — RTT/response-gap peaks must belong to the CURRENT freeze event only:
+  // maxIfTracking never accumulates a reading while no freeze event is being tracked, so an unrelated
+  // spike from long before (or after) the freeze can never be misattributed to it.
+  telemetryRecentPeakRttMs=maxIfTracking(telemetryFreezeEventTrackingActive,telemetryRecentPeakRttMs,timing.rttMs);
+  telemetryRecentPeakGapMs=maxIfTracking(telemetryFreezeEventTrackingActive,telemetryRecentPeakGapMs,timing.responseGapMs);
 }
 // P1-07C: FPS/lead are computed every frame (see tickMovementFrame); only this DOM write is
 // throttled to TELEMETRY_OVERLAY_PATCH_INTERVAL_MS, so the debug overlay itself doesn't add
@@ -344,6 +360,17 @@ function patchTelemetryOverlay(now,leadPx){
   set('#telemetry-frozen-ratio',formatPercent(capFrozenRatio(telemetryCapFrozenTotalMs,telemetryActiveMovementTotalMs)));
   set('#telemetry-correction',formatPx(telemetryLastCorrectionDistance));
   set('#telemetry-hardresets',formatCount(telemetryHardResetCount));
+  // P4-04B2 — Recent Movement Anomaly: shows the latest committed freeze event for
+  // RECENT_EVENT_RETENTION_MS (5s) after it ends, so a real-device screenshot taken shortly after
+  // noticing a stutter still captures the evidence. Stale/absent event: every field reads '–'.
+  const eventStale=isRecentEventStale(telemetryRecentEvent,now);
+  const event=eventStale?null:telemetryRecentEvent;
+  set('#telemetry-recent-freeze',formatMs(event?.freezeDurationMs));
+  set('#telemetry-recent-lead',formatPx(event?.peakLeadPx));
+  set('#telemetry-recent-rtt',formatMs(event?.peakRttMs));
+  set('#telemetry-recent-gap',formatMs(event?.peakGapMs));
+  set('#telemetry-recent-inflight',formatCount(event?.maxInFlight));
+  set('#telemetry-recent-age',event?formatEventAge(event,now):'–');
 }
 // P1-07A: sendWorldMove is data-only — it updates the authoritative S.snap and nothing else.
 // All on-screen presentation (hero marker position, camera viewBox) is owned exclusively by
@@ -695,6 +722,11 @@ function tickMovementFrame(now){
   // is no active input to project an "ahead" direction onto (movementDivergence's own fallback).
   const telemetryAheadBefore=joystickInput.active?movementDivergence(predictedPosition,serverPos,joystickInput).ahead:null;
   const telemetryActiveThisFrame=joystickInput.active&&!notYetInWorld&&!resetPending&&!predictionSuspended;
+  // P4-04B2 Cap-Freeze Branch Attribution Fix — set to true ONLY inside the branch below that
+  // actually calls advancePredictedPosition(). A reconciliation-band correction (dangerousAhead/
+  // dangerousLateral, just below) runs easeTowards() instead and must never be mistaken for a
+  // cap-limited advance step, however large the hypothetical forward step would have been.
+  let predictionAdvanceBranchRan=false;
   if(notYetInWorld||resetPending){
     predictedPosition={...serverPos};
     predictionSuspended=false;
@@ -719,6 +751,7 @@ function tickMovementFrame(now){
     }else if(joystickActive&&shouldSendJoystickMove(S.mapView,joystickInput.active)){
       const candidate=advancePredictedPosition(predictedPosition,serverPos,joystickInput,dt,PREDICTION_VELOCITY,MAX_PREDICTION_LEAD);
       predictedPosition=clampPredictedStep(predictedPosition,candidate,WORLD_BOUNDS,INFLATED_OBSTACLES);
+      predictionAdvanceBranchRan=true;
     }
   }
   // P1-07 Root Cause Measurement Test — captured AFTER the branch tree above has fully settled
@@ -727,11 +760,44 @@ function tickMovementFrame(now){
   // never a proxy from proximity alone. Read-only: isCapFrozenFrame only classifies; it changes
   // nothing above.
   const telemetryAheadAfter=joystickInput.active?movementDivergence(predictedPosition,serverPos,joystickInput).ahead:null;
-  const telemetryCapFrozenThisFrame=isCapFrozenFrame({active:telemetryActiveThisFrame,aheadBefore:telemetryAheadBefore,aheadAfter:telemetryAheadAfter,maxLead:MAX_PREDICTION_LEAD});
+  // P4-04B2 — forwardStepPx: the exact forward-step contribution (magnitude*velocity*dt) this
+  // frame's advancePredictedPosition call would integrate — mathematically identical to production's
+  // own aheadCandidate math (see telemetry.js's isCapFrozenFrame comment), not a re-derived proxy.
+  // P4-04B2 Cap-Freeze Branch Attribution Fix — gated on predictionAdvanceBranchRan, not
+  // joystickInput.active: a reconciliation-band correction (dangerousAhead/dangerousLateral) also
+  // runs with joystick active, but never calls advancePredictedPosition, so this hypothetical step
+  // must not exist for that frame at all (null, exactly like an inactive frame).
+  const telemetryForwardStepPx=predictionAdvanceBranchRan?joystickInput.magnitude*PREDICTION_VELOCITY*dt:null;
+  // P4-04B2 Cap-Freeze Branch Attribution Fix — telemetryActiveThisFrame alone (joystick active +
+  // not suspended/resetting) is NOT sufficient to classify cap-freeze: it says nothing about which
+  // branch above actually ran. Only a frame whose advance branch actually executed can be a genuine
+  // cap freeze; a reconciliation-band correction is a structurally different code path and must
+  // never be attributed to MAX_PREDICTION_LEAD. telemetryActiveThisFrame itself is untouched — it
+  // still gates telemetryActiveMovementTotalMs (the frozen-ratio denominator) exactly as before.
+  const telemetryCapDetectionActive=telemetryActiveThisFrame&&predictionAdvanceBranchRan;
+  const telemetryCapFrozenThisFrame=isCapFrozenFrame({active:telemetryCapDetectionActive,aheadBefore:telemetryAheadBefore,aheadAfter:telemetryAheadAfter,maxLead:MAX_PREDICTION_LEAD,forwardStepPx:telemetryForwardStepPx});
+  const telemetryPreviousStreakMs=telemetryCapFrozenCurrentMs;
   telemetryCapFrozenCurrentMs=nextCapFrozenStreakMs(telemetryCapFrozenCurrentMs,telemetryCapFrozenThisFrame,dt);
   if(telemetryCapFrozenThisFrame)telemetryCapFrozenTotalMs+=dt;
   if(telemetryActiveThisFrame)telemetryActiveMovementTotalMs+=dt;
   telemetryLastCapFrozen=telemetryCapFrozenThisFrame;
+  // P4-04B2 Draft Review Fix — Recent Movement Anomaly: peaks are scoped to the freeze event's own
+  // window, never a window between retained events. Freeze START (previous streak 0 -> next streak
+  // >0): clear the peak trackers and begin tracking, so this same frame's own lead/in-flight reading
+  // (captured further below) is the first sample of the new event, and no metric from before the
+  // freeze can leak in. Freeze END (previous streak >0 -> next streak 0, via shouldCommitFreezeEvent):
+  // commit the retained event from the peaks accumulated ONLY while tracking was active, then stop
+  // tracking — a response landing after this point is never retroactively folded into the committed
+  // event (see telemetry.js's own header comment for why hard-reset count is deliberately not part of
+  // this snapshot).
+  if(isFreezeEventStart(telemetryPreviousStreakMs,telemetryCapFrozenCurrentMs)){
+    telemetryFreezeEventTrackingActive=true;
+    telemetryRecentPeakLeadPx=null;telemetryRecentPeakRttMs=null;telemetryRecentPeakGapMs=null;telemetryRecentPeakInFlight=null;
+  }
+  if(shouldCommitFreezeEvent(telemetryPreviousStreakMs,telemetryCapFrozenCurrentMs)){
+    telemetryRecentEvent=buildRecentEvent({freezeDurationMs:telemetryPreviousStreakMs,peakLeadPx:telemetryRecentPeakLeadPx,peakRttMs:telemetryRecentPeakRttMs,peakGapMs:telemetryRecentPeakGapMs,maxInFlight:telemetryRecentPeakInFlight,now});
+    telemetryFreezeEventTrackingActive=false;
+  }
   const distanceForDebt=Math.hypot(predictedPosition.x-serverPos.x,predictedPosition.y-serverPos.y);
   catchUpDebt=nextCatchUpDebt(catchUpDebt,distanceForDebt,MAX_PREDICTION_LEAD,predictionSuspended||!joystickInput.active||notYetInWorld||resetPending);
 
@@ -765,7 +831,15 @@ function tickMovementFrame(now){
   const rawTelemetryDt=nextTelemetryFrameDelta(telemetryLastFrameTimestamp,now);
   telemetryLastFrameTimestamp=now;
   if(rawTelemetryDt!=null)telemetryFpsEma=nextFpsEma(telemetryFpsEma,rawTelemetryDt);
-  patchTelemetryOverlay(now,predictionLeadDistance(predictedPosition,serverPos));
+  const telemetryLeadPx=predictionLeadDistance(predictedPosition,serverPos);
+  // P4-04B2 Draft Review Fix — peak-hold ONLY while a freeze event is actively being tracked (never
+  // gated on telemetryCapFrozenThisFrame alone, since in-flight count can keep rising for a couple of
+  // frames after the freeze branch itself goes false but before shouldCommitFreezeEvent fires — but
+  // never outside an active event, or an unrelated lead/in-flight reading from between events would
+  // contaminate the next event's reported peaks).
+  telemetryRecentPeakLeadPx=maxIfTracking(telemetryFreezeEventTrackingActive,telemetryRecentPeakLeadPx,telemetryLeadPx);
+  telemetryRecentPeakInFlight=maxIfTracking(telemetryFreezeEventTrackingActive,telemetryRecentPeakInFlight,telemetryMoveInFlightCount);
+  patchTelemetryOverlay(now,telemetryLeadPx);
 }
 async function boot(){const s=await post('/api/session/open',{accountId:'account-demo'});S.sessionId=s.sessionId;[S.cities,S.roads,S.encounters]=await Promise.all([req('/api/cities'),req('/api/roads'),req('/api/battle/encounters')]);await refresh();setInterval(updateTravelProgress,250);setInterval(async()=>{if(S.tab==='battle'&&S.battle?.status==='ACTIVE')try{const next=await req('/api/character/char-demo/battle'),ended=next?.status!=='ACTIVE';setBattle(next);if(ended)await refresh();else if(!S.battlePanDragging)render()}catch{}},600);
   // P4-03B — same "one eternal setInterval + internal gate" style as the two intervals above (never
