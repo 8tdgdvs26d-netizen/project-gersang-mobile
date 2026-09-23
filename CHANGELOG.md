@@ -741,3 +741,19 @@
 - Scope check：`dangerousAhead`／`dangerousLateral`／`easeTowards`／`reconciliationSmoothingMs`／`advancePredictedPosition`／`MAX_PREDICTION_LEAD`／`PREDICTION_VELOCITY`／joystick cadence／movement rate／server movement／monster chase／DB／API／Battle／retained-event correlation-window邏輯／mobile telemetry CSS layout全部一個字都冇改——今round純粹係telemetry attribution修正,冇改任何gameplay branch selection邏輯本身。
 - 存檔影響：無schema變動。
 - Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`（同P4-04B2一致，呢round淨係fix-on-top）。
+
+## P4-04B2 Mobile Telemetry / Control Collision Fix — 2026-09-23 — Overlay vs Joystick Visual Collision
+
+- **目標**：修正`chatgpt-codex-connector[bot]`喺PR #59 Ready Gate之後提出嘅第三個P2 finding——`P4-04B2 Mobile Telemetry Overflow Fix`加嘅2欄grid令overlay闊度大增,而佢同joystick一樣都係`bottom:14px`錨點、`z-index:2`,喺DOM順序又排喺joystick之後,結果窄屏(例如390px)底下overlay嘅深色background會疊喺joystick(包括knob)上面。`pointer-events:none`令touch事件冇問題,但Charlie揸住joystick逃走嗰陣**望唔到**個joystick,妨礙佢做CHASE測試同截圖證據。
+- **已獨立驗證finding**：Joystick佔x:[14,118]px、y(bottom):[14,118]px;2欄grid嘅自然闊度(用placeholder文字估計)大約230-270px,right:10px錨點底下left edge落喺~68-88px左右,同joystick knob(footprint x:[44,88])有horizontal重疊,垂直方向(overlay bottom:14至~211px)完全覆蓋成個joystick高度(14-118px)——finding屬實。
+- **修正方式（純CSS/layout,冇改任何markup/JS）**：
+  - `.telemetry-overlay`喺`@media(max-width:480px)`底下加`bottom:128px`(由原本`bottom:14px`挪高),令佢完全脫離joystick嘅`bottom:14px+104px`(即最高到118px)footprint,兩者之間留返10px間隙。用390px viewport計:World Map高度≈338px,overlay挪高後仲需要嘅垂直空間係128(inset)+197(overlay自身高度)=325px,距離map頂部仲有338-325=13px margin,唔會頂部clip。
+  - `.map-view-toggle`(Follow/全圖切換掣)喺同一個media query入面由原本`top:10px;right:10px`改做`top:auto;bottom:14px;right:10px`,由top-right移去bottom-right個「已經冇嘢用」嘅角落——咁樣窄屏底下就有三個清楚分開嘅UI區域:telemetry喺上面、joystick喺bottom-left、toggle喺bottom-right,三者唔會重疊。闊屏(>480px)嘅`.map-view-toggle`原本`top:10px;right:10px`規則完全冇改。
+  - Joystick(`.joystick`)本身嘅CSS(`left:14px;bottom:14px;width:104px;height:104px`)完全冇改,冇任何新media query override佢。
+  - 冇縮字體、冇刪field、冇accordion、冇internal scrolling、冇淨靠加z-index、冇令overlay匿喺joystick後面——跟返order嘅「Do NOT Solve This By」清單。
+- **新測試**（`test/worldmap.test.mjs`,4條）：(1)斷言窄屏media query入面`.telemetry-overlay`有`bottom:128px`;(2)斷言同一個media query入面`.map-view-toggle`轉做`top:auto;bottom:14px;right:10px`;(3)斷言`.map-view-toggle`嘅闊屏base rule(`top:10px;right:10px`)完全冇改;(4)斷言`.joystick`嘅base rule(`left:14px;bottom:14px;width:104px;height:104px`)完全冇改,而且窄屏media query入面冇任何`.joystick{`嘅override。原有嘅mobile-overflow測試(23個field存在、2欄grid、冇internal scrolling)全部冇削弱。
+- **測試結果**：504（P4-04B2 Cap-Freeze Branch Attribution Fix baseline）＋4（新增）＝**508 tests passed, 0 failed**，連跑兩次確認唔flaky。Focused（`test/movement.test.mjs`/`test/telemetry.test.mjs`/`test/worldmap.test.mjs`）：263/263 pass。
+- **改動檔案**：`public/styles.css`(`.telemetry-overlay`嘅mobile rule加`bottom:128px`、`.map-view-toggle`加mobile override)、`test/worldmap.test.mjs`(4條新測試)。**`public/app.js`、`public/telemetry.js`、`public/worldmap.js`(markup)、`public/movement.js`、`server.mjs`今round完全冇改**——冇任何JS或gameplay邏輯改動。
+- Scope check：movement／prediction／`isCapFrozenFrame`／branch-attribution邏輯／Recent Event邏輯／telemetry數值／FPS計算／networking／reconciliation／monster chase／server／DB／API／Battle全部一個字都冇改——今round純粹係responsive presentation改動。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`（同P4-04B2一致，呢round淨係fix-on-top）。
