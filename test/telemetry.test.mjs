@@ -23,7 +23,9 @@ import {
   shouldCommitFreezeEvent,
   buildRecentEvent,
   isRecentEventStale,
-  formatEventAge
+  formatEventAge,
+  isFreezeEventStart,
+  maxIfTracking
 } from '../public/telemetry.js';
 
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). All DOM-free pure functions,
@@ -364,4 +366,117 @@ test('isRecentEventStale: a custom retention window is honored',()=>{
 test('formatEventAge: formats the elapsed time since the event as "N.Ns ago"',()=>{
   const event=buildRecentEvent({freezeDurationMs:620,peakLeadPx:49.3,peakRttMs:640,peakGapMs:710,maxInFlight:5,now:10000});
   assert.equal(formatEventAge(event,12100),'2.1s ago');
+});
+
+// --- P4-04B2 Draft Review Fix — freeze-event-scoped peak tracking (correlation-window fix) ---
+
+test('isFreezeEventStart: previous streak 0 -> next streak >0 is a freeze start',()=>{
+  assert.equal(isFreezeEventStart(0,16.67),true);
+});
+
+test('isFreezeEventStart: mid-freeze (previous>0, next still >0) is never a start',()=>{
+  assert.equal(isFreezeEventStart(600,616.67),false);
+});
+
+test('isFreezeEventStart: never-frozen frames (both 0) are never a start',()=>{
+  assert.equal(isFreezeEventStart(0,0),false);
+});
+
+test('isFreezeEventStart: freeze end (previous>0, next===0) is never a start',()=>{
+  assert.equal(isFreezeEventStart(620,0),false);
+});
+
+test('maxIfTracking: while not tracking, no candidate is ever recorded, however large',()=>{
+  assert.equal(maxIfTracking(false,null,800),null);
+  assert.equal(maxIfTracking(false,50,800),50);
+});
+
+test('maxIfTracking: while tracking, a present candidate raises (or sets) the peak',()=>{
+  assert.equal(maxIfTracking(true,null,180),180);
+  assert.equal(maxIfTracking(true,120,180),180);
+  assert.equal(maxIfTracking(true,220,180),220);
+});
+
+test('maxIfTracking: a null/undefined candidate never overwrites an existing peak, even while tracking',()=>{
+  assert.equal(maxIfTracking(true,150,null),150);
+  assert.equal(maxIfTracking(true,150,undefined),150);
+});
+
+test('P4-04B2 Draft Review Fix — contamination regression: an unrelated RTT spike from before a freeze must NOT appear in that freeze\'s retained event',()=>{
+  // Mirrors app.js's own event-window state machine step-by-step, using only the pure exported
+  // predicates/helpers (isFreezeEventStart / maxIfTracking / shouldCommitFreezeEvent / buildRecentEvent)
+  // — proves the FULL sequence is contamination-free, not just each piece in isolation. Matches the
+  // exact scenario from the P4-04B2 Draft Review Fix order: unrelated RTT 800ms occurs well before a
+  // freeze; the freeze's own RTT is only 180ms; the retained event must report 180ms, never 800ms.
+  let trackingActive=false,peakRttMs=null,previousStreakMs=0,recentEvent=null;
+
+  // 1. event tracking inactive.
+  assert.equal(trackingActive,false);
+
+  // 2. an unrelated 800ms RTT lands while nothing is frozen — must never be retained.
+  peakRttMs=maxIfTracking(trackingActive,peakRttMs,800);
+  assert.equal(peakRttMs,null);
+
+  // 3. freeze starts (previous streak 0 -> next streak >0): clear peaks, begin tracking.
+  const streakAfterStart=16.67;
+  if(isFreezeEventStart(previousStreakMs,streakAfterStart)){trackingActive=true;peakRttMs=null}
+  previousStreakMs=streakAfterStart;
+  assert.equal(trackingActive,true);
+  assert.equal(peakRttMs,null,'the unrelated 800ms spike must be cleared, not carried into the freeze');
+
+  // 4. during the freeze, a legitimate RTT=180ms lands.
+  peakRttMs=maxIfTracking(trackingActive,peakRttMs,180);
+  assert.equal(peakRttMs,180);
+
+  // 5. freeze ends (previous streak >0 -> next streak 0): commit the retained event, stop tracking.
+  if(shouldCommitFreezeEvent(previousStreakMs,0)){
+    recentEvent=buildRecentEvent({freezeDurationMs:previousStreakMs,peakLeadPx:null,peakRttMs,peakGapMs:null,maxInFlight:null,now:99999});
+    trackingActive=false;
+  }
+
+  // 6. the retained event's Peak RTT must be 180ms, NOT 800ms.
+  assert.ok(recentEvent);
+  assert.equal(recentEvent.peakRttMs,180);
+});
+
+test('P4-04B2 Draft Review Fix: peaks reset at the start of every new freeze event — a second freeze never inherits the first freeze\'s peaks',()=>{
+  let trackingActive=false,peakRttMs=null,previousStreakMs=0;
+
+  // First freeze: peak RTT 900ms.
+  if(isFreezeEventStart(previousStreakMs,10)){trackingActive=true;peakRttMs=null}
+  previousStreakMs=10;
+  peakRttMs=maxIfTracking(trackingActive,peakRttMs,900);
+  assert.equal(peakRttMs,900);
+
+  // First freeze ends.
+  if(shouldCommitFreezeEvent(previousStreakMs,0))trackingActive=false;
+  previousStreakMs=0;
+
+  // Between events: readings must not accumulate (not tracking) — the stale 900 is untouched here,
+  // it is cleared only at the NEXT freeze start per isFreezeEventStart's own contract.
+  peakRttMs=maxIfTracking(trackingActive,peakRttMs,999);
+  assert.equal(peakRttMs,900);
+
+  // Second freeze starts — must clear the stale peak inherited from the first freeze.
+  if(isFreezeEventStart(previousStreakMs,12)){trackingActive=true;peakRttMs=null}
+  previousStreakMs=12;
+  assert.equal(peakRttMs,null,'second freeze must not inherit the first freeze\'s peak RTT');
+
+  // Second freeze's own, much lower RTT.
+  peakRttMs=maxIfTracking(trackingActive,peakRttMs,150);
+  assert.equal(peakRttMs,150);
+});
+
+test('P4-04B2 Draft Review Fix: lead/in-flight peaks outside an active freeze event are ignored for the event snapshot, exactly like RTT/gap',()=>{
+  let trackingActive=false,peakLeadPx=null,peakInFlight=null;
+  peakLeadPx=maxIfTracking(trackingActive,peakLeadPx,49.3);
+  peakInFlight=maxIfTracking(trackingActive,peakInFlight,4);
+  assert.equal(peakLeadPx,null);
+  assert.equal(peakInFlight,null);
+
+  trackingActive=true;
+  peakLeadPx=maxIfTracking(trackingActive,peakLeadPx,30.2);
+  peakInFlight=maxIfTracking(trackingActive,peakInFlight,2);
+  assert.equal(peakLeadPx,30.2);
+  assert.equal(peakInFlight,2);
 });

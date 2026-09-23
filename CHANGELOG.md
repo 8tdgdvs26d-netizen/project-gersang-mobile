@@ -706,3 +706,15 @@
 - **未有斷言呢個mechanism就係Charlie嗰次real-device事故嘅確認成因**——burst stall只係P4-04B1證明嘅reproducible failure mode，需要等呢round嘅telemetry fix部署之後、Charlie真機截圖返嚟先可以確認。冇提及`lastWorldMoveAt`process-global做過呢次事故嘅成因（純粹未來multi-character技術債務，同今次單人測試冇證據關聯）。
 - 存檔影響：無schema變動。
 - Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`。
+
+## P4-04B2 Draft Review Fix — 2026-09-23 — Recent Movement Event Correlation Window
+
+- **目標**：跟GPT/Charlie嘅Draft Review Fix指示，修正Recent Movement Anomaly嘅peak trackers（尖峰超前／延遲／間隔／請求中）會跨越「兩個retained event之間嘅任意窗口」累積嘅問題——即一個發生喺freeze之前好耐嘅unrelated RTT/gap/in-flight spike，有可能被錯誤歸咎去之後先發生嘅freeze event，令截圖產生誤導（例：freeze前20秒有一個unrelated 800ms RTT，實際freeze期間RTT淨係180ms，但retained event可能錯誤顯示Peak RTT=800ms）。**Part A（`isCapFrozenFrame`嘅cap-freeze predicate）今round完全冇改**——只改Part B嘅peak-window邏輯。
+- **修正方式**：peak值而家嚴格限定喺「current freeze event自己嘅窗口」入面，唔再係「兩個retained event之間」。新增兩個pure function（`public/telemetry.js`）：`isFreezeEventStart(previousStreakMs,nextStreakMs)`（`shouldCommitFreezeEvent`嘅鏡像，判斷streak 0→>0嘅freeze開始一刻）同`maxIfTracking(trackingActive,previousPeak,candidate)`（每個peak讀數必經嘅單一gate，只有tracking啟動緊先會記錄）。App.js（`tickMovementFrame`／`recordMoveTelemetry`）新增最小追蹤狀態`telemetryFreezeEventTrackingActive`（一個boolean）：freeze開始（previous streak=0 → next streak>0）就清空四個peak tracker並啟動追蹤；freeze期間（`trackingActive`為true）先會累積lead／RTT／response gap／in-flight嘅peak；freeze結束（`shouldCommitFreezeEvent`為true）就用追蹤緊嘅peak值build`telemetryRecentEvent`，然後停止追蹤。令prediction解凍嗰個response如果喺偵測到freeze end嗰個frame之前完成,會啱啱好落喺追蹤窗口入面,合理咁被計入;但喺event已經commit咗之後先到嘅response,唔會再被追溯歸入嗰個已經close咗嘅event。`recordMoveTelemetry()`唔會再喺冇tracking緊嘅時候累積RTT／gap（之前嘅版本冇呢個限制）。
+- **改正咗嘅誤導comment**：移除／改正咗聲稱peak值會「跨whatever window elapses between retained events」保留嘅wording,同埋暗示freeze event committed之後先到嘅response都會被歸入嗰個event嘅wording。而家準確咁講：peak metrics淨係嚟自freeze event自己個窗口。
+- **新測試**（`test/telemetry.test.mjs`）：`isFreezeEventStart`嘅4條predicate測試、`maxIfTracking`嘅3條gate測試,加埋核心嘅contamination regression——完全跟order要求嘅6個步驟（tracking inactive → unrelated RTT=800ms → freeze start → freeze期間RTT=180ms → freeze end → 斷言retained event嘅Peak RTT係180ms,唔係800ms）,再加「peak喺每個新freeze開始時reset,第二個freeze唔會繼承第一個嘅peak」同「lead／in-flight喺freeze之外都會被忽略」兩條測試,合共10條新測試。原有7條`isCapFrozenFrame`測試同全部Part B測試維持不變（semantically intact，冇削弱任何assertion）。
+- **測試結果**：487（P4-04B2 baseline）＋10（新增）＝**497 tests passed, 0 failed**，連跑兩次確認唔flaky。
+- **改動檔案**：`public/telemetry.js`（新增兩個pure function）、`public/app.js`（新增`telemetryFreezeEventTrackingActive`state+改用新pure function嘅call site，comment更正）、`test/telemetry.test.mjs`（10條新測試）。**`public/worldmap.js`／`server.mjs`／`public/movement.js`今round完全冇改**。
+- Scope check：`git diff`確認`isCapFrozenFrame`／`isNearLeadCap`／`nextCapFrozenStreakMs`（Part A approved嘅predicate）一個字都冇改；`predictedPosition`／`earnedPosition`／`advancePredictedPosition`／movement.js／server.mjs／DB／AI／Battle全部冇touch。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`（同P4-04B2一致，呢round淨係fix-on-top）。

@@ -189,3 +189,27 @@ export function isRecentEventStale(event,now,retentionMs=RECENT_EVENT_RETENTION_
 export function formatEventAge(event,now){
   return`${((now-event.recordedAt)/1000).toFixed(1)}s ago`;
 }
+
+// --- P4-04B2 Draft Review Fix — freeze-event-scoped peak tracking (read-only, diagnostic-only) ---
+//
+// The original Recent Movement Anomaly cut let peak trackers accumulate across whatever WINDOW
+// elapsed between retained events, not the freeze event itself — an unrelated RTT/gap/in-flight spike
+// from long before (or after) a freeze could be misattributed to it. These two pure predicates bound
+// the exact window a freeze event's peak samples may legitimately be drawn from: `isFreezeEventStart`
+// is the mirror of `shouldCommitFreezeEvent` above (start vs. end of the same streak transition), and
+// `maxIfTracking` is the single gate every peak sample (lead/RTT/gap/in-flight) passes through. The
+// caller (app.js) still owns the actual tracking-active flag and peak values as plain module-level
+// state — these are only the decision functions, kept here and pure so the correlation-window fix is
+// regression-tested directly rather than only exercised through app.js's DOM wiring.
+
+// Freeze START: was not frozen (streak 0), just became frozen (streak >0) this frame.
+export function isFreezeEventStart(previousStreakMs,nextStreakMs){
+  return previousStreakMs===0&&nextStreakMs>0;
+}
+
+// Record a candidate peak reading only while a freeze event is actively being tracked, and only if
+// the reading itself is present (mirrors the existing `timing.rttMs!=null` style null-guards).
+export function maxIfTracking(trackingActive,previousPeak,candidate){
+  if(!trackingActive||candidate==null)return previousPeak;
+  return Math.max(previousPeak??0,candidate);
+}
