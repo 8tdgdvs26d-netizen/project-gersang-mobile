@@ -234,7 +234,10 @@ test('predictionVelocity: computes correctly for arbitrary step/interval inputs'
 // --- Prototype Parameter locks ---
 
 test('P1-07B reconciliation constants are locked at their currently-approved values',()=>{
-  assert.equal(MAX_PREDICTION_LEAD,50);
+  // P4-04B3 Prediction Lead Cap Controlled Experiment — MAX_PREDICTION_LEAD only: 50 -> 80, per
+  // Charlie's real-device telemetry evidence (see CHANGELOG.md). The other three constants are
+  // explicitly untouched this round and remain locked at their prior values.
+  assert.equal(MAX_PREDICTION_LEAD,80);
   assert.equal(RECONCILE_SMOOTHING_MS,40);
   assert.equal(RECONCILE_STRONG_SMOOTHING_MS,40);
   assert.equal(RECONCILE_HARD_RESET_DISTANCE,54);

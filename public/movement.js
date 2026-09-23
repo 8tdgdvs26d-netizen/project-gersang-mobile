@@ -34,7 +34,12 @@ export const JOYSTICK_SEND_INTERVAL_MS=140;
 // How far (px) the predicted position may lead the last confirmed serverPosition. Prediction
 // self-caps at this distance and simply stops advancing (waits for the server to catch up) —
 // this is normal, expected lead, not an error, and must never actively pull the prediction back.
-export const MAX_PREDICTION_LEAD=50;
+// P4-04B3 — Prediction Lead Cap Controlled Experiment: 50 -> 80, per Charlie's real-device
+// telemetry (peak response gap 377ms at ~128.6px/s prediction velocity ≈48.5px, closely matching
+// the observed 48.0px peak lead immediately below the old 50px cap). A single-constant change only
+// — see CHANGELOG.md's P4-04B3 entry for the full evidence and for the RECONCILE_HARD_RESET_DISTANCE
+// interaction this experiment surfaced (that constant is deliberately left untouched this round).
+export const MAX_PREDICTION_LEAD=80;
 // Correction smoothing (ms) used only while actively reconciling (see reconciliationSmoothingMs)
 // and the current divergence is still within MAX_PREDICTION_LEAD.
 export const RECONCILE_SMOOTHING_MS=40;
