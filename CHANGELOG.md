@@ -718,3 +718,15 @@
 - Scope check：`git diff`確認`isCapFrozenFrame`／`isNearLeadCap`／`nextCapFrozenStreakMs`（Part A approved嘅predicate）一個字都冇改；`predictedPosition`／`earnedPosition`／`advancePredictedPosition`／movement.js／server.mjs／DB／AI／Battle全部冇touch。
 - 存檔影響：無schema變動。
 - Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`（同P4-04B2一致，呢round淨係fix-on-top）。
+
+## P4-04B2 Mobile Telemetry Overflow Fix — 2026-09-23 — Responsive 2-Column Overlay
+
+- **目標**：修正`chatgpt-codex-connector[bot]`喺PR #59 Ready Gate之後提出嘅P2 finding——喺窄手機viewport（例：390px）,World Map容器高度約338px,但telemetry overlay已經有23行,以單column堆疊需要約366px,而overlay係`bottom`錨點向上疊,超出咗嘅部分（頂部,即FPS等頭幾行）會俾`.map-scroll`嘅`overflow:auto`頂部clip咗,睇唔到。因為呢個overlay整個P4-04B2 workstream嘅目的就係俾Charlie做real-device screenshot診斷,睇唔到FPS呢啲關鍵讀數會削弱成個workstream嘅價值,所以判斷做completion blocker,要修。
+- **已獨立驗證finding**：跟`public/styles.css`實際數值計過——`.shell`(max-width 560,padding 12px×2)+`.card`(padding14px×2)後,390px viewport下`.map-scroll`淨返約338px闊,`.world-map`因`aspect-ratio:1/1`都係~338px高;23行×15.4px(11px/1.4 line-height)+12px padding≈366px——同Codex嘅估算一致。
+- **修正方式（純CSS/layout,冇改任何markup/JS）**：`public/styles.css`加一個`@media(max-width:480px)`,窄屏底下將`.telemetry-overlay`由單column block stacking改做**CSS Grid 2欄×12列**（`grid-auto-flow:column;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(12,auto)`）——23個field原封不動,冇刪任何一個,冇accordion/collapse互動,冇internal scrolling。2欄×12列淨係需要大約12×15.4px+12px padding≈197px高,喺338px嘅高度預算入面仲有成140px margin,肯定唔會頂部或底部clip。每個row(`.telemetry-overlay>div`)加咗`overflow:hidden;text-overflow:ellipsis;white-space:nowrap`,連同`max-width:calc(100% - 20px)`令overlay闊度受container約束——正常field(label+短數值)喺~150px嘅單column闊度內完全夠位,唔需要ellipsis;淨係極端長字串(例如`#telemetry-errorcode`嗰種未bound嘅raw error message)先會被truncate,呢個係existing行為喺窄屏底下本身已經有嘅edge case,而家順便令佢更加安全。**冇縮細字體**——11px font size完全冇改,純粹靠2欄reflow就已經有充分margin。闊屏(>480px)嘅單column規則完全冇改,行為同之前一樣。
+- **新測試**（`test/worldmap.test.mjs`）：(1)23個telemetry id逐一斷言喺`renderWorldMapHtml`輸出入面**啱啱好出現一次**——證明冇field被刪走；(2)joystick base/knob同map-view-toggle三個控制項斷言存在——證明冇被今round影響；(3)讀`public/styles.css`,斷言`.telemetry-overlay`嘅base(單column)rule仍然存在、有一個窄屏media query將佢轉做`display:grid`、確實係2欄（`grid-template-columns:repeat(2,`）、而且冇靠`overflow:auto/scroll`嚟解決（即冇internal scrolling）。合共3條新測試。
+- **測試結果**：497（P4-04B2 Draft Review Fix baseline）＋3（新增）＝**500 tests passed, 0 failed**，連跑兩次確認唔flaky。Focused（`test/movement.test.mjs`/`test/telemetry.test.mjs`/`test/worldmap.test.mjs`）：255/255 pass。
+- **改動檔案**：`public/styles.css`（加一個media query block，8行）、`test/worldmap.test.mjs`（3條新測試）。**`public/worldmap.js`（markup）、`public/app.js`、`public/telemetry.js`、`server.mjs`、`public/movement.js`今round完全冇改**——`git diff --stat`確認呢round淨係touch咗嗰兩個檔案。
+- Scope check：`isCapFrozenFrame`／`MAX_PREDICTION_LEAD`／FPS計算／prediction velocity／movement rate／joystick cadence／server movement allowance／reconciliation／chaseSpeed／monster logic／server API／DB／Battle／telemetry event-window邏輯（`isFreezeEventStart`/`maxIfTracking`）／telemetry retained values全部一個字都冇改——今round純粹係display/layout fix。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`（同P4-04B2一致，呢round淨係fix-on-top）。
