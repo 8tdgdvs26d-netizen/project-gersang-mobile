@@ -27,10 +27,11 @@ export const WORLD_MONSTER_DEFINITIONS = Object.freeze([
     // P4-04A — World Threat Parameter/Placement Tuning (approved P4-04A Coding Order). The original
     // y=220 sat EXACTLY on the Starter Village(220,220)->Hill Market(780,220) direct trade route,
     // which the P4-04 Micro Playtest proved guarantees a near-zero-warning encounter for any player
-    // simply travelling between the two cities (592ms from CHASE start to forced Battle, with zero
-    // chance to notice/react). Shifted to y=80 — offset from the route by 140px, strictly greater than
-    // the new aggroRadius(110) below, so the aggro sweep can never geometrically reach the route line
-    // at all (a hard geometric guarantee, not a probability reduction). Still comfortably clear of
+    // simply travelling between the two cities (592ms to CHASE, 883ms total to Battle — roughly 291ms
+    // from CHASE start to Battle — with zero chance to notice/react). Shifted to y=80 — offset from
+    // the route by 140px, strictly greater than the new aggroRadius(110) below, so the aggro sweep
+    // can never geometrically reach the route line at all (a hard geometric guarantee, not a
+    // probability reduction). Still comfortably clear of
     // every city entryRadius and every OBSTACLES rect at the new position too (obstacles start at
     // y=400, far below y=80) — see test/world-monster-tuning.test.mjs for the full geometric proof
     // (route clearance, city-entry clearance, obstacle clearance, world bounds, city-escape

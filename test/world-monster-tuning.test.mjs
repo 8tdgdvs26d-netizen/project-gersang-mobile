@@ -24,11 +24,36 @@ function pointToSegmentDistance(px,py,x1,y1,x2,y2){
   const closestX=x1+t*dx,closestY=y1+t*dy;
   return Math.hypot(px-closestX,py-closestY);
 }
+// Standard orientation/on-segment primitives (classic computational-geometry segment-intersection
+// test — see e.g. Cormen et al.), used ONLY to detect whether two segments cross at an interior
+// point, which the four-endpoint-projection distance formula below cannot by itself detect (two
+// segments can cross with all four endpoints still away from the opposite segment).
+function orientation(px,py,qx,qy,rx,ry){
+  const val=(qy-py)*(rx-qx)-(qx-px)*(ry-qy);
+  if(val===0)return 0;
+  return val>0?1:2;
+}
+function onSegment(px,py,qx,qy,rx,ry){
+  return qx<=Math.max(px,rx)&&qx>=Math.min(px,rx)&&qy<=Math.max(py,ry)&&qy>=Math.min(py,ry);
+}
+function segmentsIntersect(x1,y1,x2,y2,x3,y3,x4,y4){
+  const o1=orientation(x1,y1,x2,y2,x3,y3),o2=orientation(x1,y1,x2,y2,x4,y4);
+  const o3=orientation(x3,y3,x4,y4,x1,y1),o4=orientation(x3,y3,x4,y4,x2,y2);
+  if(o1!==o2&&o3!==o4)return true;
+  if(o1===0&&onSegment(x1,y1,x3,y3,x2,y2))return true;
+  if(o2===0&&onSegment(x1,y1,x4,y4,x2,y2))return true;
+  if(o3===0&&onSegment(x3,y3,x1,y1,x4,y4))return true;
+  if(o4===0&&onSegment(x3,y3,x2,y2,x4,y4))return true;
+  return false;
+}
 // The minimum distance between two 2D line segments is always attained either at a crossing point
-// (distance 0) or at one of the four endpoint-vs-opposite-segment closest points — a standard,
-// well-established computational-geometry result, not an approximation specific to this file's two
-// (here, axis-aligned/parallel) segments.
+// (distance 0 — checked FIRST via segmentsIntersect, since two segments can cross at an interior
+// point while all four endpoints remain away from the opposite segment, which the endpoint-
+// projection method below cannot detect on its own) or, when they do not cross, at one of the four
+// endpoint-vs-opposite-segment closest points — a standard, well-established computational-geometry
+// result.
 function segmentToSegmentDistance(ax1,ay1,ax2,ay2,bx1,by1,bx2,by2){
+  if(segmentsIntersect(ax1,ay1,ax2,ay2,bx1,by1,bx2,by2))return 0;
   return Math.min(
     pointToSegmentDistance(ax1,ay1,bx1,by1,bx2,by2),
     pointToSegmentDistance(ax2,ay2,bx1,by1,bx2,by2),
@@ -150,4 +175,20 @@ test('P4-04A-G: obstacle-blocked CHASE remains geometrically unreachable under t
     const distance=Math.hypot(closestX-patrolCenter.x,closestY-patrolCenter.y);
     assert.ok(distance>monster.leashRadius,`obstacle closest point sits ${distance}px from the new patrol center, expected strictly beyond the new leashRadius(${monster.leashRadius})`);
   }
+});
+
+// ============================================================================
+// Draft Review Fix — segmentToSegmentDistance must detect an interior crossing, not just rely on
+// the four-endpoint-projection distances (which alone would wrongly report a nonzero minimum
+// distance for two segments that cross with all four endpoints away from the opposite segment).
+// ============================================================================
+
+test('P4-04A-H: segmentToSegmentDistance returns exactly 0 for two segments crossing at an interior point (neither endpoint touches the opposite segment)',()=>{
+  // A: (0,0) -> (10,0), a horizontal segment. B: (5,-5) -> (5,5), a vertical segment crossing A's
+  // interior at (5,0) — none of A's or B's four endpoints lie on the opposite segment, so the plain
+  // four-endpoint-projection formula alone (pre-fix) would have returned a nonzero minimum distance
+  // despite the segments genuinely crossing.
+  assert.equal(segmentToSegmentDistance(0,0,10,0,5,-5,5,5),0);
+  // Sanity: the same two segments shifted apart (B moved to x=15, well clear of A) must NOT report 0.
+  assert.ok(segmentToSegmentDistance(0,0,10,0,15,-5,15,5)>0,'two genuinely non-crossing, non-touching segments must not report a zero distance');
 });
