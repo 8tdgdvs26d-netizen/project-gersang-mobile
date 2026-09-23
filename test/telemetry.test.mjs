@@ -27,6 +27,7 @@ import {
   isFreezeEventStart,
   maxIfTracking
 } from '../public/telemetry.js';
+import {movementDivergence,MAX_PREDICTION_LEAD} from '../public/movement.js';
 
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). All DOM-free pure functions,
 // same testing convention as movement.js. None of this feeds back into movement/prediction/
@@ -479,4 +480,61 @@ test('P4-04B2 Draft Review Fix: lead/in-flight peaks outside an active freeze ev
   peakInFlight=maxIfTracking(trackingActive,peakInFlight,2);
   assert.equal(peakLeadPx,30.2);
   assert.equal(peakInFlight,2);
+});
+
+// --- P4-04B2 Cap-Freeze Branch Attribution Fix ---
+//
+// app.js's tickMovementFrame can take a structurally different branch — a reconciliation-band
+// correction (dangerousAhead/dangerousLateral -> easeTowards) — instead of the actual
+// advancePredictedPosition() call, while joystick input stays active. Before this fix, app.js passed
+// `active:telemetryActiveThisFrame` into isCapFrozenFrame() regardless of which branch ran, so a
+// reconciliation frame could be misclassified as a genuine MAX_PREDICTION_LEAD cap freeze. The fix
+// (app.js only, a new `predictionAdvanceBranchRan` local + `telemetryCapDetectionActive =
+// telemetryActiveThisFrame && predictionAdvanceBranchRan`) means isCapFrozenFrame's OWN `active` guard
+// (already exhaustively tested above) is now what protects against the false positive — these tests
+// prove that guard against the exact reconciliation scenario the review flagged, not a redesign of
+// isCapFrozenFrame itself, which is untouched this round.
+
+test('P4-04B2 Cap-Freeze Branch Attribution Fix: setup sanity check — aheadBefore≈49.3 combined with a large lateral divergence is exactly the dangerousLateral condition app.js checks, which routes to the reconciliation branch (never advancePredictedPosition)',()=>{
+  const input={active:true,dirX:1,dirY:0};
+  const predicted={x:49.3,y:60},server={x:0,y:0}; // dx=49.3 (ahead), dy=60 (lateral, since dir is +x)
+  const divergence=movementDivergence(predicted,server,input);
+  assert.ok(Math.abs(divergence.ahead-49.3)<1e-9,`expected ahead≈49.3, got ${divergence.ahead}`);
+  assert.equal(divergence.lateral,60);
+  const catchUpDebt=0; // no legitimate catch-up budget in this scenario
+  const dangerousAhead=divergence.ahead>MAX_PREDICTION_LEAD;
+  const dangerousLateral=divergence.lateral>MAX_PREDICTION_LEAD+catchUpDebt;
+  assert.equal(dangerousAhead,false,'ahead alone (49.3) must NOT exceed the cap — this is not a dangerousAhead case');
+  assert.equal(dangerousLateral,true,'lateral (60) must exceed MAX_PREDICTION_LEAD+catchUpDebt (50) — this IS the reconciliation-band condition');
+});
+
+test('P4-04B2 Cap-Freeze Branch Attribution Fix: reconciliation-branch false-positive regression — the exact scenario the Codex review flagged must NOT be reported as cap-frozen',()=>{
+  // Same aheadBefore/hypothetical-forwardStepPx numbers as the pre-existing Part A false-negative
+  // regression above (aheadBefore=49.3, forwardStepPx≈2.14, maxLead=50 -> aheadBefore+forwardStepPx
+  // =51.4>50), but this time representing a frame where the reconciliation branch ran instead of
+  // advancePredictedPosition — i.e. predictionAdvanceBranchRan was false, so app.js now passes
+  // active:false (not the old, branch-blind telemetryActiveThisFrame) into isCapFrozenFrame.
+  const aheadBefore=49.3,forwardStepPx=(18/140)*(1000/60),maxLead=50;
+  assert.ok(aheadBefore+forwardStepPx>maxLead,'sanity check: the hypothetical step would indeed have exceeded the cap, matching the review\'s exact concern');
+  const capFrozen=isCapFrozenFrame({active:false,aheadBefore,aheadAfter:aheadBefore,maxLead,forwardStepPx});
+  assert.equal(capFrozen,false,'a frame where the advance branch never ran must never be classified as cap-frozen, however large the hypothetical forward step');
+});
+
+test('P4-04B2 Cap-Freeze Branch Attribution Fix: contrast — the SAME numbers with active:true (the old, branch-blind behaviour) would have been misclassified as frozen, proving the fix is the active gate, not a numeric change',()=>{
+  const aheadBefore=49.3,forwardStepPx=(18/140)*(1000/60),maxLead=50;
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore,aheadAfter:aheadBefore,maxLead,forwardStepPx}),true,'confirms this WAS the false-positive the review found, before app.js started passing the correctly branch-scoped active flag');
+});
+
+test('P4-04B2 Cap-Freeze Branch Attribution Fix: a suppressed reconciliation frame (capFrozen=false) can never start or extend a cap-freeze streak, so it can never produce a retained Recent Movement Anomaly event',()=>{
+  // Mid-streak: a reconciliation frame arriving while already frozen must reset the streak to 0, not
+  // extend it — nextCapFrozenStreakMs's own contract (isFrozen=false -> 0), applied to the branch
+  // attribution fix's output.
+  const midStreakMs=620;
+  assert.equal(nextCapFrozenStreakMs(midStreakMs,false,16.67),0);
+  // Never-frozen: a reconciliation frame can never START a streak either.
+  assert.equal(nextCapFrozenStreakMs(0,false,16.67),0);
+  // Consequently shouldCommitFreezeEvent/isFreezeEventStart (already exhaustively tested above) never
+  // see a >0 streak to work from — no event is ever committed from this frame.
+  assert.equal(isFreezeEventStart(0,0),false);
+  assert.equal(shouldCommitFreezeEvent(0,0),false);
 });

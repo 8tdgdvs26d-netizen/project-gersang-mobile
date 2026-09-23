@@ -722,6 +722,11 @@ function tickMovementFrame(now){
   // is no active input to project an "ahead" direction onto (movementDivergence's own fallback).
   const telemetryAheadBefore=joystickInput.active?movementDivergence(predictedPosition,serverPos,joystickInput).ahead:null;
   const telemetryActiveThisFrame=joystickInput.active&&!notYetInWorld&&!resetPending&&!predictionSuspended;
+  // P4-04B2 Cap-Freeze Branch Attribution Fix — set to true ONLY inside the branch below that
+  // actually calls advancePredictedPosition(). A reconciliation-band correction (dangerousAhead/
+  // dangerousLateral, just below) runs easeTowards() instead and must never be mistaken for a
+  // cap-limited advance step, however large the hypothetical forward step would have been.
+  let predictionAdvanceBranchRan=false;
   if(notYetInWorld||resetPending){
     predictedPosition={...serverPos};
     predictionSuspended=false;
@@ -746,6 +751,7 @@ function tickMovementFrame(now){
     }else if(joystickActive&&shouldSendJoystickMove(S.mapView,joystickInput.active)){
       const candidate=advancePredictedPosition(predictedPosition,serverPos,joystickInput,dt,PREDICTION_VELOCITY,MAX_PREDICTION_LEAD);
       predictedPosition=clampPredictedStep(predictedPosition,candidate,WORLD_BOUNDS,INFLATED_OBSTACLES);
+      predictionAdvanceBranchRan=true;
     }
   }
   // P1-07 Root Cause Measurement Test — captured AFTER the branch tree above has fully settled
@@ -757,8 +763,19 @@ function tickMovementFrame(now){
   // P4-04B2 — forwardStepPx: the exact forward-step contribution (magnitude*velocity*dt) this
   // frame's advancePredictedPosition call would integrate — mathematically identical to production's
   // own aheadCandidate math (see telemetry.js's isCapFrozenFrame comment), not a re-derived proxy.
-  const telemetryForwardStepPx=joystickInput.active?joystickInput.magnitude*PREDICTION_VELOCITY*dt:null;
-  const telemetryCapFrozenThisFrame=isCapFrozenFrame({active:telemetryActiveThisFrame,aheadBefore:telemetryAheadBefore,aheadAfter:telemetryAheadAfter,maxLead:MAX_PREDICTION_LEAD,forwardStepPx:telemetryForwardStepPx});
+  // P4-04B2 Cap-Freeze Branch Attribution Fix — gated on predictionAdvanceBranchRan, not
+  // joystickInput.active: a reconciliation-band correction (dangerousAhead/dangerousLateral) also
+  // runs with joystick active, but never calls advancePredictedPosition, so this hypothetical step
+  // must not exist for that frame at all (null, exactly like an inactive frame).
+  const telemetryForwardStepPx=predictionAdvanceBranchRan?joystickInput.magnitude*PREDICTION_VELOCITY*dt:null;
+  // P4-04B2 Cap-Freeze Branch Attribution Fix — telemetryActiveThisFrame alone (joystick active +
+  // not suspended/resetting) is NOT sufficient to classify cap-freeze: it says nothing about which
+  // branch above actually ran. Only a frame whose advance branch actually executed can be a genuine
+  // cap freeze; a reconciliation-band correction is a structurally different code path and must
+  // never be attributed to MAX_PREDICTION_LEAD. telemetryActiveThisFrame itself is untouched — it
+  // still gates telemetryActiveMovementTotalMs (the frozen-ratio denominator) exactly as before.
+  const telemetryCapDetectionActive=telemetryActiveThisFrame&&predictionAdvanceBranchRan;
+  const telemetryCapFrozenThisFrame=isCapFrozenFrame({active:telemetryCapDetectionActive,aheadBefore:telemetryAheadBefore,aheadAfter:telemetryAheadAfter,maxLead:MAX_PREDICTION_LEAD,forwardStepPx:telemetryForwardStepPx});
   const telemetryPreviousStreakMs=telemetryCapFrozenCurrentMs;
   telemetryCapFrozenCurrentMs=nextCapFrozenStreakMs(telemetryCapFrozenCurrentMs,telemetryCapFrozenThisFrame,dt);
   if(telemetryCapFrozenThisFrame)telemetryCapFrozenTotalMs+=dt;
