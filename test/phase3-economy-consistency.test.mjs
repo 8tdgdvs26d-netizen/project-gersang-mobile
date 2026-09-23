@@ -38,7 +38,7 @@ function cargoQty(snap,good){return snap.cargo.stacks.find(x=>x.goodTypeId===goo
 // them — the economy invariant those comparisons exist to prove (wallet/cargo/market/economy_tx/
 // item_trace conservation) is fully covered by every other assertion in this file and is completely
 // untouched by this.
-const omitVolatileSnapshotFields=snap=>{const {serverNowMs,worldMonsters,...rest}=snap;return rest};
+const omitVolatileSnapshotFields=snap=>{const {serverNowMs,worldMonsters,worldStateRevision,...rest}=snap;return rest};
 
 await test.before(async()=>{dir=await mkdtemp(join(tmpdir(),'myrial-phase3-closeout-'));dbPath=join(dir,'test.sqlite');await start()});
 await test.after(async()=>{await stop();await rm(dir,{recursive:true,force:true})});
