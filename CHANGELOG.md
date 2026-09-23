@@ -684,3 +684,25 @@
 - **已知限制（如實記錄，P4-04B真人playtest先可以confirm）**：336-544ms嘅反應窗口喺真實mobile觸控延遲下係咪足夠,1.2秒「跑去城」嘅節奏感受,patrol搬去(500,80)之後喺實際world map畫面上嘅顯眼程度——呢啲全部係主觀體驗判斷,今round淨係用HTTP timing數據支持,唔可以單靠數學宣稱「感覺岩」。
 - 存檔影響：無schema變動。
 - Rollback基準：`main` @ `f61f838a018a7c799dd4cda925e3654e8530518d`。
+
+## P4-04B1 — 2026-09-23 — Real Mobile Movement + Chase Diagnostic（純diagnostic，唔改任何code）
+
+- **目標**：真人裝置playtest報告「角色移動卡頓／stop-start」、「monster喺幾步之內就捉到玩家」，同chaseSpeed(0.08px/ms)遠細過player nominal speed(0.1286px/ms)嘅設計預期矛盾。跟approved嘅P4-04B1 Coding Order，喺**唔改任何gameplay code**嘅前提下，用production嘅真實function（`nextEarnedPosition`／`clampEarnedTarget`／`advancePredictedPosition`／`movementDivergence`直接import，配合逐行對照`server.mjs`轉譯嘅throttle/allowance公式）做deterministic simulation，追查根本原因。
+- **關鍵發現**：純粹「穩定高RTT」（即使300ms）本身有足夠margin（理論上要去到~389ms先撞頂`MAX_PREDICTION_LEAD=50px`），單一孤立spike都唔會出事（其他concurrent request會繼續完成）。**真正致命嘅係「連續多個request一齊被delay」（burst stall，例如WiFi/流動網絡切換）**——用真實production function模擬證實：`predictedPosition`會凍結450-700ms（正正就係玩家報告嘅stutter），而`serverPos`（authoritative位置）同一時間完全冇郁，monster卻繼續以real elapsed time全速closing（同player request throttle與否完全脫鈎）——喺CHASE觸發初期發生嘅burst stall（模擬證實），可以令trueGap由110px（aggroRadius）跌穿40px（encounterRadius），令玩家俾捕捉，**即使全程joystick輸入完全正確**。
+- 結論：**唔係chaseSpeed太高**（穩定/jitter/單一spike情況下1.6倍速度優勢完全夠用），係movement/chase系統之間一個結構性時序缺口——player速度優勢淨係「長遠平均」保證，CHASE捕捉判定卻係「瞬時、連續real-time」判定。
+- **額外發現**：現有P1-07C telemetry（`isCapFrozenFrame`）用緊嘅fixed 0.5px proximity tolerance，喺呢個exact configuration（60fps／而家嘅`MOVE_SPEED_RATE`）底下會漏檢真實凍結（凍結平衡點49.3px跌出49.5px門檻），令telemetry本身可能低估緊真實發生嘅freeze。
+- 存檔影響：無。冇改任何檔案（純HTTP-level／deterministic simulation scratchpad diagnostic，冇commit）。
+- Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`（同上一round，今round冇新增commit）。
+
+## P4-04B2 — 2026-09-23 — Telemetry Diagnostic Fix + Real-Device Evidence Capture
+
+- **目標**：跟approved嘅P4-04B2 Coding Order，(1)修正P4-04B1發現嘅telemetry false negative，(2)加一個最小、純記憶體嘅「最近事件」保留機制，令Charlie真機截圖可以捕捉到450-700ms嘅freeze event（人手反應時間唔可能即時截圖）。**今round完全冇改任何gameplay數值／movement邏輯／server行為**——`git diff`確認淨係`public/telemetry.js`（純function）、`public/app.js`（telemetry call site+一個新state block）、`public/worldmap.js`（overlay markup追加）。
+- **Part A — cap-freeze false negative修正**：`isCapFrozenFrame`原本用`isNearLeadCap`嘅fixed 0.5px容差做「near cap」proximity判斷，但真正決定`advancePredictedPosition`凍唔凍嘅rule係`aheadCandidate=(forward.x-serverPosition.x)*dirX+...>maxLead`——喺而家嘅`MOVE_SPEED_RATE`/60fps底下，個凍結平衡點停喺49.3px，啱啱好跌出49.5px門檻，令舊邏輯漏檢。修正：唔再用proximity heuristic，改為直接複製production嗰條predicate——`aheadBefore+forwardStepPx>maxLead`，其中`forwardStepPx=magnitude*velocity*dt`（app.js call site已經有齊呢三個值，一行計得出）。數學上`aheadBefore+forwardStepPx`同`advancePredictedPosition`內部嘅`aheadCandidate`係完全相等嘅展開式（單位方向向量投影），**唔係重新估算嘅近似值**。`isNearLeadCap`／`TELEMETRY_LEAD_CAP_TOLERANCE_PX`完全冇改——佢哋仲有獨立用途（`#telemetry-leadcaphit`嘅proximity readout）。
+- **Part B — Recent Movement Anomaly（最近事件）保留**：新增`shouldCommitFreezeEvent`／`buildRecentEvent`／`isRecentEventStale`／`formatEventAge`（`public/telemetry.js`，純function，同module一貫嘅diagnostic-only風格）。App.js每frame peak-hold現有telemetry讀數（超前距離、RTT、response gap、in-flight count），凍結streak一結束（`telemetryCapFrozenCurrentMs`由>0跌返做0）就將啱啱嗰個streak嘅peak值連同freeze duration一齊commit做`telemetryRecentEvent`，然後reset peak trackers等下一次。**冇包括hard-reset count**——因為hard reset同cap-freeze係兩個structurally互斥嘅tickMovementFrame分支（唔會同一個frame一齊發生），attribute一個delta俾單一freeze event會捏造一個現有per-frame branching結構本身確立唔到嘅關聯；現有`#telemetry-hardresets`已經以session累計方式獨立展示。事件保留**RECENT_EVENT_RETENTION_MS=5000ms**，純記憶體（module-level變數），reload會清，冇DB、冇server persistence、冇upload、冇history list（淨係最近一個event）。
+- **Overlay擴充**：`public/worldmap.js`嘅`.telemetry-overlay`（一直visible喺World Map右下角，`aria-hidden`純屬accessibility標記,唔係display:none——Charlie唔需要任何開發者工具）追加6個新readout：凍結時長、尖峰超前、尖峰延遲、尖峰間隔、尖峰請求中、事件時間（"N.Ns ago"）。全部沿用現有`set(id,text)`／`formatMs`／`formatPx`／`formatCount`patch pattern，冇新UI設計，冇toggle。
+- **新測試**：`test/telemetry.test.mjs`更新7條現有`isCapFrozenFrame`測試（加返`forwardStepPx`引數，逐條驗證新公式喺舊case底下結果不變）+ 新增P4-04B1發現嗰個exact false-negative case嘅regression test（`aheadBefore=49.3,forwardStepPx≈2.14,maxLead=50`，證明新公式正確判斷做frozen）+ 8條Part B pure function測試（常數鎖定、commit/stale/format邏輯）；`test/worldmap.test.mjs`加一條confirm新6個overlay id有出現、順序喺`telemetry-hardresets`之後（純additive）。
+- **測試結果**：475（P4-04A baseline）＋12（新增/擴充嘅test）＝**487 tests passed, 0 failed**，連跑兩次確認唔flaky。
+- Scope check：冇改`chaseSpeed`／`aggroRadius`／`leashRadius`／`encounterRadius`／monster patrol／player movement rate／`MAX_PREDICTION_LEAD`行為／`MOVE_CATCHUP_CAP_MS`／reconciliation邏輯／chase time semantics／movement API／DB／AI／Battle——`git diff`確認`predictedPosition`／`earnedPosition`／`advancePredictedPosition`／`movement.js`本身一個字都冇改，`server.mjs`冇被touch。
+- **未有斷言呢個mechanism就係Charlie嗰次real-device事故嘅確認成因**——burst stall只係P4-04B1證明嘅reproducible failure mode，需要等呢round嘅telemetry fix部署之後、Charlie真機截圖返嚟先可以確認。冇提及`lastWorldMoveAt`process-global做過呢次事故嘅成因（純粹未來multi-character技術債務，同今次單人測試冇證據關聯）。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`。

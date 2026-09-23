@@ -564,6 +564,20 @@ test('renderWorldMapHtml renders the P1-07 Root Cause Measurement Test overlay i
   }
 });
 
+// --- P4-04B2: 6 more overlay data-point ids (Recent Movement Anomaly), purely additive to the
+// existing shell above (neither earlier test is touched — this only adds new coverage). ---
+
+test('renderWorldMapHtml renders the P4-04B2 Recent Movement Anomaly overlay ids, appended after the existing P1-07 Root Cause Measurement Test ones, each starting as a placeholder',()=>{
+  const cities=[{id:'a',name:'A',coordinates:{x:220,y:150}}];
+  const snap={state:'IN_WORLD',cityId:'a',worldPosition:{x:500,y:500}};
+  const html=renderWorldMapHtml({snap,cities,roads:[],mapView:'follow'});
+  const newIds=['telemetry-recent-freeze','telemetry-recent-lead','telemetry-recent-rtt','telemetry-recent-gap','telemetry-recent-inflight','telemetry-recent-age'];
+  for(const id of newIds){
+    assert.ok(html.includes(`id="${id}"`),`expected the overlay shell to include #${id}`);
+    assert.ok(html.indexOf(`id="${id}"`)>html.indexOf('id="telemetry-hardresets"'),`expected #${id} to be appended after the existing P1-07 Root Cause Measurement Test ids, never inserted between them`);
+  }
+});
+
 // =====================================================================================
 // P2-07 City Hub Navigation — IN_CITY must default directly to City Hub, never require a
 // separate "進入城市" step from the World Map. See CHANGELOG.md P2-07 City Hub Navigation entry

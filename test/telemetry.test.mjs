@@ -18,7 +18,12 @@ import {
   formatPx,
   formatCount,
   TELEMETRY_LEAD_CAP_TOLERANCE_PX,
-  TELEMETRY_NO_PROGRESS_EPSILON_PX
+  TELEMETRY_NO_PROGRESS_EPSILON_PX,
+  RECENT_EVENT_RETENTION_MS,
+  shouldCommitFreezeEvent,
+  buildRecentEvent,
+  isRecentEventStale,
+  formatEventAge
 } from '../public/telemetry.js';
 
 // P1-07C — Mobile Movement Telemetry (diagnostic-only, Issue #21). All DOM-free pure functions,
@@ -198,38 +203,54 @@ test('isNearLeadCap: a custom tolerance is honored',()=>{
   assert.equal(isNearLeadCap(20,36,10),false);
 });
 
-// --- P1-07 Root Cause Measurement Test: isCapFrozenFrame (capFrozenFrame) ---
-// Must measure an OUTCOME (no forward progress while already at/near the cap), never proximity
-// alone — see movement.test.mjs's advancePredictedPosition tests for the production behavior this
-// mirrors read-only.
+// --- P1-07 Root Cause Measurement Test / P4-04B2: isCapFrozenFrame (capFrozenFrame) ---
+// Must measure an OUTCOME (no forward progress while the intended step would exceed maxLead), never
+// a fixed-pixel proximity proxy — see movement.test.mjs's advancePredictedPosition tests for the
+// production behavior this mirrors read-only. P4-04B2 replaced the old isNearLeadCap-based proximity
+// gate with forwardStepPx, deriving `aheadBefore+forwardStepPx` — mathematically identical to
+// production's own `aheadCandidate` — instead of a fixed 0.5px tolerance window that could miss the
+// real freeze equilibrium value entirely (see the false-negative regression below).
 
 test('isCapFrozenFrame: inactive (joystick not driving this frame) is never frozen, regardless of distance',()=>{
-  assert.equal(isCapFrozenFrame({active:false,aheadBefore:36,aheadAfter:36,maxLead:36}),false);
+  assert.equal(isCapFrozenFrame({active:false,aheadBefore:36,aheadAfter:36,maxLead:36,forwardStepPx:2}),false);
 });
 
-test('isCapFrozenFrame: active, far from the cap, is never frozen even with zero progress (nothing to freeze against yet)',()=>{
-  assert.equal(isCapFrozenFrame({active:true,aheadBefore:5,aheadAfter:5,maxLead:36}),false);
+test('isCapFrozenFrame: active, far from the cap, is never frozen even with zero progress (nothing to freeze against yet — aheadBefore+forwardStepPx still well under maxLead)',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:5,aheadAfter:5,maxLead:36,forwardStepPx:2}),false);
 });
 
-test('isCapFrozenFrame: active, at the cap, zero forward progress this frame — frozen',()=>{
-  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:36,maxLead:36}),true);
+test('isCapFrozenFrame: active, the intended step would exceed maxLead, zero forward progress this frame — frozen',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:36,maxLead:36,forwardStepPx:2}),true);
 });
 
-test('isCapFrozenFrame: active, at the cap, but still gaining real forward progress this frame — NOT frozen (proximity alone is never sufficient, matches the Root Cause Measurement Test\'s explicit "cannot use proximity as a crude proxy" requirement)',()=>{
-  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:40,maxLead:36}),false);
+test('isCapFrozenFrame: active, still gaining real forward progress this frame — NOT frozen (proximity alone is never sufficient, matches the Root Cause Measurement Test\'s explicit "cannot use proximity as a crude proxy" requirement)',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:40,maxLead:36,forwardStepPx:4}),false);
 });
 
 test('isCapFrozenFrame: active, at the cap, progress within the floating-point noise epsilon still counts as frozen',()=>{
-  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:36.005,maxLead:36}),true);
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:36.005,maxLead:36,forwardStepPx:2}),true);
 });
 
-test('isCapFrozenFrame: null aheadBefore/aheadAfter (no active input direction to project onto) is never frozen',()=>{
-  assert.equal(isCapFrozenFrame({active:true,aheadBefore:null,aheadAfter:36,maxLead:36}),false);
-  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:null,maxLead:36}),false);
+test('isCapFrozenFrame: null aheadBefore/aheadAfter/forwardStepPx (no active input direction to project onto, or step not supplied) is never frozen',()=>{
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:null,aheadAfter:36,maxLead:36,forwardStepPx:2}),false);
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:null,maxLead:36,forwardStepPx:2}),false);
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:36,aheadAfter:36,maxLead:36,forwardStepPx:null}),false);
 });
 
 test('isCapFrozenFrame: negative "ahead" (server legitimately caught up/passed predicted, P1-07D) is never near the cap, never frozen',()=>{
-  assert.equal(isCapFrozenFrame({active:true,aheadBefore:-50,aheadAfter:-50,maxLead:36}),false);
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore:-50,aheadAfter:-50,maxLead:36,forwardStepPx:2}),false);
+});
+
+// --- P4-04B2 Draft — Confirmed False-Negative Regression ---
+// Reproduces the exact P4-04B1 Diagnostic finding: a continuously-held joystick at the current
+// MOVE_SPEED_RATE/60fps freezes at aheadBefore≈49.3px (maxLead=50) — OUTSIDE the OLD fixed 0.5px
+// tolerance window (49.5px), so the pre-P4-04B2 isNearLeadCap-gated rule would have reported "not
+// frozen" for a frame that genuinely made zero forward progress because of the cap.
+
+test('isCapFrozenFrame: P4-04B1\'s reproduced false-negative case — aheadBefore=49.3px, forwardStepPx≈2.14px (18/140*16.67ms, the production JOYSTICK_STEP_DISTANCE/JOYSTICK_SEND_INTERVAL_MS*60fps-frame step), maxLead=50 — now correctly detected as frozen',()=>{
+  const aheadBefore=49.3,forwardStepPx=(18/140)*(1000/60),maxLead=50;
+  assert.ok(aheadBefore<maxLead-TELEMETRY_LEAD_CAP_TOLERANCE_PX,'sanity: this aheadBefore sits OUTSIDE the old 0.5px tolerance window — the old proximity-based rule would have missed it');
+  assert.equal(isCapFrozenFrame({active:true,aheadBefore,aheadAfter:aheadBefore,maxLead,forwardStepPx}),true,'the new forwardStepPx-based rule must still detect this as frozen — aheadBefore+forwardStepPx=51.4>50');
 });
 
 // --- P1-07 Root Cause Measurement Test: nextCapFrozenStreakMs (capFrozenDuration) ---
@@ -295,4 +316,52 @@ test('formatCount: null renders as the en-dash placeholder, distinct from a real
 test('formatCount: formats an integer count as-is',()=>{
   assert.equal(formatCount(0),'0');
   assert.equal(formatCount(7),'7');
+});
+
+// --- P4-04B2 — Recent Movement Anomaly retention ---
+
+test('P4-04B2 Recent Movement Anomaly constant is locked at its approved value',()=>{
+  assert.equal(RECENT_EVENT_RETENTION_MS,5000);
+});
+
+test('shouldCommitFreezeEvent: a streak that just ended (previous>0, next===0) should commit',()=>{
+  assert.equal(shouldCommitFreezeEvent(620,0),true);
+});
+
+test('shouldCommitFreezeEvent: a streak still in progress (next>0) never commits mid-freeze',()=>{
+  assert.equal(shouldCommitFreezeEvent(600,616.67),false);
+});
+
+test('shouldCommitFreezeEvent: never-frozen frames (previous===0, next===0) never commit — a zero-duration streak is not a meaningful event',()=>{
+  assert.equal(shouldCommitFreezeEvent(0,0),false);
+});
+
+test('buildRecentEvent: assembles the retained snapshot from the caller\'s already-tracked peak values, unchanged',()=>{
+  const event=buildRecentEvent({freezeDurationMs:620,peakLeadPx:49.3,peakRttMs:640,peakGapMs:710,maxInFlight:5,now:12345});
+  assert.deepEqual(event,{freezeDurationMs:620,peakLeadPx:49.3,peakRttMs:640,peakGapMs:710,maxInFlight:5,recordedAt:12345});
+});
+
+test('isRecentEventStale: a missing event is always stale (nothing to show)',()=>{
+  assert.equal(isRecentEventStale(null,10000),true);
+});
+
+test('isRecentEventStale: within the retention window is not stale',()=>{
+  const event=buildRecentEvent({freezeDurationMs:620,peakLeadPx:49.3,peakRttMs:640,peakGapMs:710,maxInFlight:5,now:10000});
+  assert.equal(isRecentEventStale(event,10000+RECENT_EVENT_RETENTION_MS-1),false);
+});
+
+test('isRecentEventStale: past the retention window is stale',()=>{
+  const event=buildRecentEvent({freezeDurationMs:620,peakLeadPx:49.3,peakRttMs:640,peakGapMs:710,maxInFlight:5,now:10000});
+  assert.equal(isRecentEventStale(event,10000+RECENT_EVENT_RETENTION_MS+1),true);
+});
+
+test('isRecentEventStale: a custom retention window is honored',()=>{
+  const event=buildRecentEvent({freezeDurationMs:620,peakLeadPx:49.3,peakRttMs:640,peakGapMs:710,maxInFlight:5,now:10000});
+  assert.equal(isRecentEventStale(event,10500,1000),false);
+  assert.equal(isRecentEventStale(event,11500,1000),true);
+});
+
+test('formatEventAge: formats the elapsed time since the event as "N.Ns ago"',()=>{
+  const event=buildRecentEvent({freezeDurationMs:620,peakLeadPx:49.3,peakRttMs:640,peakGapMs:710,maxInFlight:5,now:10000});
+  assert.equal(formatEventAge(event,12100),'2.1s ago');
 });
