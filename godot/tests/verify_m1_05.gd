@@ -11,9 +11,9 @@ func _run() -> void:
 
 	var main := main_scene.instantiate()
 	root.add_child(main)
-	var player := main.get_node("Player") as CharacterBody2D
+	var player := main.get_node("Actors/Player") as CharacterBody2D
 	var player_shape := player.get_node("CollisionShape") as CollisionShape2D
-	var obstacle := main.get_node("RightObstacle") as StaticBody2D
+	var obstacle := main.get_node("Actors/RightObstacle") as StaticBody2D
 	var obstacle_shape := obstacle.get_node("CollisionShape") as CollisionShape2D
 	assert(player_shape.shape is RectangleShape2D)
 	assert(obstacle_shape.shape is RectangleShape2D)
