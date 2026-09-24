@@ -7,13 +7,13 @@ func _init() -> void:
 
 	var main := main_scene.instantiate()
 	root.add_child(main)
-	var player := main.get_node_or_null("Player") as CharacterBody2D
+	var player := main.get_node_or_null("Actors/Player") as CharacterBody2D
 	assert(player != null, "Main scene must contain the player")
 
 	var camera := player.get_node_or_null("Camera") as Camera2D
 	assert(camera != null, "Player must own a Camera2D")
 	assert(camera.enabled, "Player camera must be enabled")
-	assert(camera.position == Vector2.ZERO, "Camera must follow the player without an offset")
+	assert(camera.position == Vector2(0.0, -24.0), "Camera must follow the player's visual centre")
 
 	print("M1-03 structural verification passed")
 	quit()

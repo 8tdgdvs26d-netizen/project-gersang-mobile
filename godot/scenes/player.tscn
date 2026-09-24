@@ -9,15 +9,19 @@ size = Vector2(32, 48)
 script = ExtResource("1_player")
 
 [node name="Placeholder" type="Polygon2D" parent="."]
+position = Vector2(0, -24)
 polygon = PackedVector2Array(0, -22, 16, -8, 16, 16, 0, 24, -16, 16, -16, -8)
 color = Color(0.88, 0.75, 0.36, 1)
 
 [node name="DirectionMarker" type="Polygon2D" parent="."]
+position = Vector2(0, -24)
 polygon = PackedVector2Array(0, -18, 5, -9, -5, -9)
 color = Color(0.18, 0.24, 0.23, 1)
 
 [node name="CollisionShape" type="CollisionShape2D" parent="."]
+position = Vector2(0, -24)
 shape = SubResource("RectangleShape2D_player")
 
 [node name="Camera" type="Camera2D" parent="."]
+position = Vector2(0, -24)
 enabled = true

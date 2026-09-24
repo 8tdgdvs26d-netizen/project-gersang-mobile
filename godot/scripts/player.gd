@@ -3,7 +3,8 @@ extends CharacterBody2D
 
 @export_range(1.0, 1000.0, 1.0, "or_greater") var move_speed: float = 220.0
 
-const BODY_HALF_EXTENTS := Vector2(16.0, 24.0)
+const BOUNDARY_MIN_OFFSET := Vector2(16.0, 48.0)
+const BOUNDARY_MAX_OFFSET := Vector2(16.0, 0.0)
 
 
 func _physics_process(_delta: float) -> void:
@@ -19,6 +20,6 @@ func _physics_process(_delta: float) -> void:
 
 
 func _clamp_to_world_boundary() -> void:
-	var minimum := WorldBoundary.BOUNDS.position + BODY_HALF_EXTENTS
-	var maximum := WorldBoundary.BOUNDS.end - BODY_HALF_EXTENTS
+	var minimum := WorldBoundary.BOUNDS.position + BOUNDARY_MIN_OFFSET
+	var maximum := WorldBoundary.BOUNDS.end - BOUNDARY_MAX_OFFSET
 	global_position = global_position.clamp(minimum, maximum)

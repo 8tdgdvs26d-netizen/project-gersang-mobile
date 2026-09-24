@@ -26,14 +26,17 @@ color = Color(0.24, 0.36, 0.34, 1)
 [node name="WorldBoundary" type="Node2D" parent="."]
 script = ExtResource("3_boundary")
 
-[node name="RightObstacle" parent="." instance=ExtResource("4_obstacle")]
+[node name="Actors" type="Node2D" parent="."]
+y_sort_enabled = true
+
+[node name="RightObstacle" parent="Actors" instance=ExtResource("4_obstacle")]
 position = Vector2(950, 500)
 
-[node name="UpperObstacle" parent="." instance=ExtResource("4_obstacle")]
+[node name="UpperObstacle" parent="Actors" instance=ExtResource("4_obstacle")]
 position = Vector2(640, 140)
 rotation = 1.5708
 
-[node name="Player" parent="." instance=ExtResource("2_player")]
+[node name="Player" parent="Actors" instance=ExtResource("2_player")]
 position = Vector2(640, 500)
 
 [node name="Interface" type="CanvasLayer" parent="."]
@@ -67,11 +70,11 @@ horizontal_alignment = 1
 [node name="Subtitle" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.73, 0.79, 0.78, 1)
 theme_override_font_sizes/font_size = 20
-text = "Godot Migration M1-05 — Obstacle Collision"
+text = "Godot Migration M1-06 — Y-Sort and Occlusion"
 horizontal_alignment = 1
 
 [node name="Scope" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.55, 0.65, 0.63, 1)
 theme_override_font_sizes/font_size = 15
-text = "Use W A S D — solid blocks stop and redirect movement"
+text = "Move above and below blocks to verify visual depth"
 horizontal_alignment = 1
