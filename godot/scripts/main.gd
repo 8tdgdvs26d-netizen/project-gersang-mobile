@@ -1,7 +1,7 @@
 extends Node2D
 
-const BOOTSTRAP_VERSION := "M1-02"
+const BOOTSTRAP_VERSION := "M1-03"
 
 
 func _ready() -> void:
-	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " player movement ready")
+	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " camera follow ready")

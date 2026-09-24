@@ -6,6 +6,21 @@
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
 
+[node name="WorldReference" type="Node2D" parent="."]
+position = Vector2(640, 500)
+
+[node name="HorizontalGuide" type="Polygon2D" parent="WorldReference"]
+polygon = PackedVector2Array(-2000, -2, 2000, -2, 2000, 2, -2000, 2)
+color = Color(0.12, 0.2, 0.2, 1)
+
+[node name="VerticalGuide" type="Polygon2D" parent="WorldReference"]
+polygon = PackedVector2Array(-2, -2000, 2, -2000, 2, 2000, -2, 2000)
+color = Color(0.12, 0.2, 0.2, 1)
+
+[node name="OriginMarker" type="Polygon2D" parent="WorldReference"]
+polygon = PackedVector2Array(0, -20, 20, 0, 0, 20, -20, 0)
+color = Color(0.24, 0.36, 0.34, 1)
+
 [node name="Player" parent="." instance=ExtResource("2_player")]
 position = Vector2(640, 500)
 
@@ -40,11 +55,11 @@ horizontal_alignment = 1
 [node name="Subtitle" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.73, 0.79, 0.78, 1)
 theme_override_font_sizes/font_size = 20
-text = "Godot Migration M1-02 — Player Movement"
+text = "Godot Migration M1-03 — Camera Follow"
 horizontal_alignment = 1
 
 [node name="Scope" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.55, 0.65, 0.63, 1)
 theme_override_font_sizes/font_size = 15
-text = "Use W A S D to move freely in eight directions"
+text = "Use W A S D — the camera follows the player"
 horizontal_alignment = 1
