@@ -5,7 +5,7 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
-M1-04 World Boundary builds on the accepted M1-03 camera follow:
+M1-05 Obstacle Collision builds on the accepted M1-04 world boundary:
 
 - `project.godot` with a 1280 × 720 base viewport and Compatibility renderer
 - a `CharacterBody2D` player scene at `scenes/player.tscn`
@@ -15,17 +15,19 @@ M1-04 World Boundary builds on the accepted M1-03 camera follow:
 - minimal world reference guides used only to make camera movement observable
 - one shared rectangular world boundary used by both movement and its visual guide
 - player clamping that keeps the full placeholder body inside that boundary
+- matching player and obstacle collision shapes using Godot's 2D physics
+- two solid placeholder blocks for collision and wall-sliding verification
 - Godot-generated and local export files excluded from version control
 
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M1-04 world boundary ready`
+`Myrial: Unwritten M1-05 obstacle collision ready`
 
 ## Deliberately not included
 
-M1-04 does not add camera smoothing, camera limits or shake, obstacle collision,
+M1-05 does not add camera smoothing, camera limits or shake, complex obstacle shapes,
 Y-sorting, mobile touch controls, cities, economy, combat, monsters, online systems,
 saved-game migration, production UI, or final art. The boundary, guide lines and
-origin marker are temporary verification visuals, not world art. Those excluded
-features require separate approved work packages and evidence.
+origin marker, and solid blocks are temporary verification visuals, not world art.
+Those excluded features require separate approved work packages and evidence.

@@ -1,7 +1,7 @@
 extends Node2D
 
-const BOOTSTRAP_VERSION := "M1-04"
+const BOOTSTRAP_VERSION := "M1-05"
 
 
 func _ready() -> void:
-	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " world boundary ready")
+	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " obstacle collision ready")
