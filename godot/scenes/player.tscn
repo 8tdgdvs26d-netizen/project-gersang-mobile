@@ -1,0 +1,14 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/player.gd" id="1_player"]
+
+[node name="Player" type="CharacterBody2D"]
+script = ExtResource("1_player")
+
+[node name="Placeholder" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(0, -22, 16, -8, 16, 16, 0, 24, -16, 16, -16, -8)
+color = Color(0.88, 0.75, 0.36, 1)
+
+[node name="DirectionMarker" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(0, -18, 5, -9, -5, -9)
+color = Color(0.18, 0.24, 0.23, 1)
