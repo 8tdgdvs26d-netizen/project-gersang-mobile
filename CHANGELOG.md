@@ -757,3 +757,60 @@
 - Scope check：movement／prediction／`isCapFrozenFrame`／branch-attribution邏輯／Recent Event邏輯／telemetry數值／FPS計算／networking／reconciliation／monster chase／server／DB／API／Battle全部一個字都冇改——今round純粹係responsive presentation改動。
 - 存檔影響：無schema變動。
 - Rollback基準：`main` @ `c3c218095db86b4cc4dca119bc4c4303f0f99f45`（同P4-04B2一致，呢round淨係fix-on-top）。
+
+## P4-04B3 — 2026-09-23 — Prediction Lead Cap Controlled Experiment（DRAFT，未merge）
+
+- **目標**：跟GPT/Charlie嘅Coding Order,根據Charlie真機capture嘅telemetry證據(FPS 60、recent freeze 117ms、累計凍結1504ms、frozen ratio 22.3%、recent event peak lead 48.0px、peak RTT 169ms、peak response gap 377ms、peak in-flight 4),做一個**單一常數**嘅controlled experiment:377ms嘅peak response gap喺而家嘅prediction velocity(~128.6px/s)底下大約對應48.5px嘅prediction distance,同觀察到嘅48.0px peak lead(貼近舊嘅50px cap)非常吻合,證明呢個controlled experiment有實證支持。
+- **改動**:`public/movement.js`嘅`MAX_PREDICTION_LEAD`由`50`改做`80`。**冇改任何其他嘢**——FPS計算、player movement speed、`JOYSTICK_SEND_INTERVAL_MS`、server `MOVEMENT_MIN_INTERVAL_MS`、`MOVE_SPEED_RATE`、`MOVE_CATCHUP_CAP_MS`、reconciliation邏輯、`chaseSpeed`、`aggroRadius`、`leashRadius`、`encounterRadius`、telemetry計算、networking/API/DB/Battle全部一個字都冇動。
+- **已按order明確授權**,更新咗`test/movement.test.mjs`入面**直接lock住`MAX_PREDICTION_LEAD`數值**嗰條test(`P1-07B reconciliation constants are locked at their currently-approved values`)由`50`改做`80`,`RECONCILE_SMOOTHING_MS`/`RECONCILE_STRONG_SMOOTHING_MS`/`RECONCILE_HARD_RESET_DISTANCE`三個常數維持原值,冇改。
+- **⚠️ 發現咗一個order冇預見到嘅interaction,已完整驗證,未自行處理**:`RECONCILE_HARD_RESET_DISTANCE=54px`呢個常數(order明確話唔准今round touch)而家**細過**新嘅`MAX_PREDICTION_LEAD=80px`。呢個關係逆轉令`reconciliationSmoothingMs(distance,maxLead=MAX_PREDICTION_LEAD,hardResetDistance=RECONCILE_HARD_RESET_DISTANCE,...)`嘅內部邏輯(`if(distance>hardResetDistance)return null`喺`distance>maxLead`嘅檢查之前)產生一個實際後果:**任何divergence一超過54px就即刻hard-reset(snap),completely冇經過"strong smoothing"呢個中間band**——即係話"喺cap(80px)之內但已經觸發reconciliation"呢個情況,而家喺54-80px呢個範圍會粗暴咁snap,而唔係原本設計嗰種平滑修正。呢個純粹係「單一常數改動」喺**冇改reconciliation邏輯本身**嘅前提下,同一個order明確要求維持原狀嘅常數之間產生嘅emergent interaction。
+  - 呢個interaction令**5條pre-existing test**(全部hardcode咗相對於舊50px cap校正嘅boundary數值)mechanically fail,同任何新錯誤或者implementation瑕疵無關:
+    1. `test/movement.test.mjs:351`——`reconciliationSmoothingMs(MAX_PREDICTION_LEAD)`宜家評估緊`reconciliationSmoothingMs(80)`,80>54(hardResetDistance)→回傳`null`,測試預期`RECONCILE_SMOOTHING_MS`(40)。
+    2. `test/movement.test.mjs:355`——`reconciliationSmoothingMs(MAX_PREDICTION_LEAD+1)`即`reconciliationSmoothingMs(81)`,同樣行緊hard-reset分支,回傳`null`,測試預期`RECONCILE_STRONG_SMOOTHING_MS`(40)。
+    3. `test/movement.test.mjs:500-506`——`catchUpDebtAfterGrant`嘅counter-example,硬編碼咗115px呢個probe值,原本特登揀啱好高過舊budget(`MAX_PREDICTION_LEAD+debt`=50+60=110px)但今次budget變成80+60=140px,115px已經唔再"dangerous"。
+    4. `test/movement.test.mjs:722-735`——simulation table用`D=[20,36,54,90]`測試180°邊界,D=54原本(>50)屬dangerous,而家(<80)變safe,只有D=90仲係dangerous。
+    5. `test/telemetry.test.mjs:498`——P4-04B2 Cap-Freeze Branch Attribution Fix嗰條setup sanity check,用`lateral=60`測試`dangerousLateral`,原本(>50)為true,而家(<80)變false。(呢條test下面實際做regression proof嗰兩條test用嘅係local hardcoded `maxLead=50`,唔係讀緊個import constant,所以**冇受影響**,依然通過。)
+  - 呢5條test**冇被改動、冇被削弱、冇被刪除**——跟CLAUDE.md「不可為咗令測試通過而削弱或刪除現有測試斷言」嘅規則,亦跟order「Update tests that intentionally lock MAX_PREDICTION_LEAD to the approved value」嘅字面授權範圍(淨係嗰一條直接lock數值嘅test)嚴格對應,冇自行擴大改動範圍。
+- **測試結果**：508（P4-04B2 baseline）**503 passed, 5 failed**(上述5條,原因已逐一列明),連跑兩次確認呢個結果完全deterministic(唔係flake)。Focused（`test/movement.test.mjs`/`test/telemetry.test.mjs`）：同樣5條fail,原因一致。
+- **改動檔案**：`public/movement.js`(`MAX_PREDICTION_LEAD`常數,連comment)、`test/movement.test.mjs`(1條order明確授權嘅lock-value test)。**冇改任何其他檔案**。
+- Scope check：`git diff`確認淨係呢兩個檔案、共10行改動;`dangerousAhead`/`dangerousLateral`嘅判斷邏輯本身、`reconciliationSmoothingMs`嘅function code、`RECONCILE_HARD_RESET_DISTANCE`、FPS計算、player movement speed、`JOYSTICK_SEND_INTERVAL_MS`、server movement allowance、chaseSpeed、monster邏輯、networking/API/DB/Battle全部一個字都冇touch。
+- **未解決事項**：5條test嘅fail純粹源自上述`RECONCILE_HARD_RESET_DISTANCE`同新`MAX_PREDICTION_LEAD`嘅數值倒掛,修復方案(a)調高`RECONCILE_HARD_RESET_DISTANCE`(屬於reconciliation-related常數,order明確話今round唔准改)或者(b)更新嗰5條test嘅hardcoded boundary數值(order嘅test授權淨係涵蓋直接lock數值嗰一條,冇覆蓋呢5條) 兩者都超出咗呢round明確批准嘅範圍,所以**未有自行處理**,等GPT/Charlie決定點樣跟進。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `e744c6318489d1e2221f0cae893feede9936c4dc`（P4-04B2 merge之後）。
+
+## P4-04B3 Lead Cap Experiment Invariant Fix — 2026-09-23 — RECONCILE_HARD_RESET_DISTANCE 54→84（DRAFT，未merge）
+
+- **目標**：修復上面P4-04B3 round發現、未解決嘅interaction——`MAX_PREDICTION_LEAD`(50→80)呢個controlled experiment令`RECONCILE_HARD_RESET_DISTANCE`(54,冇改)嘅relative ordering逆轉,令`reconciliationSmoothingMs`嘅hard-reset檢查喺maxLead檢查之前就搶先fire,吞噬咗原本"strong smoothing"呢個band。跟GPT/Charlie嘅新Coding Order,呢個fix將呢個interaction定性為「呢個experiment本身嘅dependent invariant adjustment,唔係獨立嘅reconciliation tuning」,並提供咗明確嘅新數值。
+- **常數改動**:`public/movement.js`嘅`RECONCILE_HARD_RESET_DISTANCE`由`54`改做`84`——保持返同`MAX_PREDICTION_LEAD`之間原本嗰個`+4px`嘅band(舊:50→54;新:80→84)。`RECONCILE_SMOOTHING_MS`/`RECONCILE_STRONG_SMOOTHING_MS`/`JOYSTICK_SEND_INTERVAL_MS`/movement speed/`MOVE_SPEED_RATE`/`MOVE_CATCHUP_CAP_MS`/reconciliation function邏輯本身(`reconciliationSmoothingMs`/`easeTowards`嘅code)/monster參數/FPS/telemetry計算/networking/API/DB/Battle全部一個字都冇改——`git diff`確認`public/app.js`、`server.mjs`完全冇touch,`public/movement.js`淨係改咗兩個常數嘅數值+comment(冇改任何function body)。
+- **5條test已按order要求做「語意更新」,唔係淨係換數字**:
+  1. `test/movement.test.mjs`——「between MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE」嗰條,將hardcoded嘅`45`改做`RECONCILE_HARD_RESET_DISTANCE-1`(相對表達式,確保真係跌落"strong band"入面,而唔係啱好撞中兩個常數數值相同先僥倖pass)。
+  2. `catchUpDebtAfterGrant`嘅counter-example——將hardcoded嘅`115px`改做`newBudget+1`(由當下嘅ahead-only budget推導,`newBudget<probe<oldBudget`嘅原本語意完全保留,唔會因為`MAX_PREDICTION_LEAD`再改一次而再次失效)。
+  3. Simulation table 180°邊界——將`D=[20,36]`(safe)/`D=[54,90]`(dangerous)改做`D=[20,36,MAX_PREDICTION_LEAD-1]`(safe)/`D=[MAX_PREDICTION_LEAD+1,90]`(dangerous),即刻邊界(`±1`)同「well above」(`90`)兩層覆蓋都保留,但唔再hardcode死`54`。
+  4. `test/telemetry.test.mjs`嘅dangerousLateral sanity check——將hardcoded嘅`lateral=60`改做`MAX_PREDICTION_LEAD+10`嘅`lateralProbe`,`aheadBefore=49.3`維持不變(嗰個數值源自獨立嘅P4-04B1 false-negative reproduction,同`MAX_PREDICTION_LEAD`本身無關,喺兩個cap數值底下都遠低於cap,唔需要改)。
+  5. 直接lock數值嗰條test——`MAX_PREDICTION_LEAD=80`(維持上round)、`RECONCILE_HARD_RESET_DISTANCE=84`(新增),舊嘅「3x JOYSTICK_STEP_DISTANCE」(即`54=18*3`)呢個已經唔再成立嘅關係斷言已移除,改用返兩條新嘅**explicit invariant regression**取代:
+     - `RECONCILE_HARD_RESET_DISTANCE>MAX_PREDICTION_LEAD`(確保呢個ordering future-proof,以後邊個常數再被獨立改動都會即刻爆呢條test,而唔係靜靜哋重演今次嘅interaction)
+     - `RECONCILE_HARD_RESET_DISTANCE-MAX_PREDICTION_LEAD===4`(鎖住個實驗保留嘅`+4px`band)
+- **測試結果**：503（P4-04B3上round baseline,連5個fail）→ 而家**510 tests passed, 0 failed**(508+2條新invariant regression),連跑兩次確認唔flaky。Focused（`test/movement.test.mjs`/`test/telemetry.test.mjs`）：189/189 pass。
+- **改動檔案**：`public/movement.js`(`RECONCILE_HARD_RESET_DISTANCE`常數+comment)、`test/movement.test.mjs`(5條test語意更新+2條新invariant test)、`test/telemetry.test.mjs`(1條test語意更新)。**`public/app.js`、`public/telemetry.js`、`public/worldmap.js`、`server.mjs`今round完全冇改**。
+- Scope check：`dangerousAhead`/`dangerousLateral`判斷邏輯、`reconciliationSmoothingMs`/`easeTowards`嘅function code本身、`RECONCILE_SMOOTHING_MS`/`RECONCILE_STRONG_SMOOTHING_MS`/`JOYSTICK_SEND_INTERVAL_MS`/movement speed/`MOVE_SPEED_RATE`/`MOVE_CATCHUP_CAP_MS`、chaseSpeed/aggroRadius/leashRadius/encounterRadius、FPS邏輯、telemetry計算、networking/API/DB/Battle全部一個字都冇改——今round純粹係呢個controlled experiment嘅dependent invariant adjustment。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `e744c6318489d1e2221f0cae893feede9936c4dc`（P4-04B2 merge之後）。
+
+## P4-04B3 Restore Independent Error-Recovery Hard Reset — 2026-09-24 — RECONCILE_HARD_RESET_DISTANCE 84→54（DRAFT，未merge）
+
+- **目標**：修正`chatgpt-codex-connector[bot]`喺PR #60 Ready Gate之後提出嘅P2 finding——上一round「invariant fix」將`RECONCILE_HARD_RESET_DISTANCE`推高到84,原意係想保住`reconciliationSmoothingMs`一個以為存在嘅ordering invariant,但實際上有一個未預見嘅production side effect。
+- **已獨立驗證嘅根本原因**:`reconciliationSmoothingMs`喺`public/app.js`嘅`tickMovementFrame`入面有**兩個完全獨立**嘅call mode:
+  1. `predictionSuspended`(錯誤恢復,即REJECTED/exception/collided)branch——`reconciliationSmoothingMs(d)`,用晒default參數,包括`hardResetDistance=RECONCILE_HARD_RESET_DISTANCE`。
+  2. `dangerousAhead`/`dangerousLateral`branch——`reconciliationSmoothingMs(bandDistance,MAX_PREDICTION_LEAD,Infinity)`,**明確override咗`hardResetDistance=Infinity`**,完全唔受`RECONCILE_HARD_RESET_DISTANCE`嘅數值影響。
+  上一round將`RECONCILE_HARD_RESET_DISTANCE`推高到84嘅原意係想保住第2種call mode嘅ordering,但第2種call mode本身**從來都冇用過`RECONCILE_HARD_RESET_DISTANCE`**(一直都係`Infinity`)——即係話上一round個「invariant」假設本身就係錯嘅。真正受影響嘅淨係第1種call mode(錯誤恢復):將門檻由54推高到84,令一個REJECTED/exception/collided response令predicted position偏離server 55-84px嘅情況,而家會用40ms easing慢慢"glide"返去,而唔係好似原本設計咁**即刻snap**——呢個正正就係`RECONCILE_HARD_RESET_DISTANCE`當初(3x JOYSTICK_STEP_DISTANCE)想避免嘅「喺一段唔相關嘅距離度做奇怪嘅slide」效果,同埋confound埋個「純粹lead-cap experiment」嘅隔離性。
+- **常數改動**:`public/movement.js`嘅`RECONCILE_HARD_RESET_DISTANCE`由`84`改返做`54`(即返去原本值),還原返「3x JOYSTICK_STEP_DISTANCE」嘅documented relationship。`MAX_PREDICTION_LEAD`維持`80`(冇改)。
+- **移除咗兩條「false invariant」test**:`RECONCILE_HARD_RESET_DISTANCE>MAX_PREDICTION_LEAD`同`RECONCILE_HARD_RESET_DISTANCE-MAX_PREDICTION_LEAD===4`——呢兩條test喺上一round假設「兩個常數之間一定要有固定ordering/gap」,而家證實呢個假設係錯嘅。**冇用第二個artificial relationship取代佢哋**,跟order明確要求。
+- **`reconciliationSmoothingMs`嘅test已按order要求拆做兩個block,分別測試production實際用緊嘅兩種call mode**:
+  - **(A)錯誤恢復/default參數**:`distance<54`→smoothing;`distance===54`→smoothing(inclusive boundary);`distance>54`→null。
+  - **(B) dangerous reconciliation/`hardResetDistance=Infinity`**:`distance<=80(MAX_PREDICTION_LEAD)`→gentle smoothing;`distance>80`→strong smoothing,**明確證明`81px`(遠超`RECONCILE_HARD_RESET_DISTANCE=54`)喺呢個call mode底下永遠唔會null**,直接示範咗`MAX_PREDICTION_LEAD=80`同獨立、細啲嘅`RECONCILE_HARD_RESET_DISTANCE=54`點解可以安全共存。
+- **已保留嘅、上兩round先至改好嘅test語意冇還原做舊嘅magic number**(跟order明確要求):`catchUpDebtAfterGrant`嘅probe(derive自current budget)、simulation table嘅probe(derive自`MAX_PREDICTION_LEAD`)、telemetry嘅`dangerousLateral`probe(derive自`MAX_PREDICTION_LEAD`)全部維持上round嘅改動,冇動。
+- **測試結果**：510(P4-04B3 invariant fix baseline,包含2條而家已移除嘅false invariant test)→ 而家**508 tests passed, 0 failed**,連跑兩次確認唔flaky。Focused（`test/movement.test.mjs`/`test/telemetry.test.mjs`）：187/187 pass。
+- **改動檔案**：`public/movement.js`(`RECONCILE_HARD_RESET_DISTANCE`常數+comment,`MAX_PREDICTION_LEAD`comment更正)、`test/movement.test.mjs`(lock-value test更新、移除2條false invariant、`reconciliationSmoothingMs`test拆做A/B兩個block)。**`public/app.js`、`public/telemetry.js`、`public/worldmap.js`、`server.mjs`、`test/telemetry.test.mjs`今round完全冇改**。
+- Scope check：`reconciliationSmoothingMs`/`easeTowards`function code本身、`predictionSuspended`branch、`dangerousAhead`/`dangerousLateral`branch、`RECONCILE_SMOOTHING_MS`/`RECONCILE_STRONG_SMOOTHING_MS`/`JOYSTICK_SEND_INTERVAL_MS`/movement speed/`MOVE_SPEED_RATE`/`MOVE_CATCHUP_CAP_MS`/`MAX_PREDICTION_LEAD`嘅數值本身(80,冇改)/monster參數/FPS/telemetry計算/networking/API/DB/Battle全部一個字都冇改——今round純粹係修正一個常數同同佢相關嘅test/文件。
+- 存檔影響：無schema變動。
+- Rollback基準：`main` @ `e744c6318489d1e2221f0cae893feede9936c4dc`（P4-04B2 merge之後）。

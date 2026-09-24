@@ -496,16 +496,22 @@ test('P4-04B2 Draft Review Fix: lead/in-flight peaks outside an active freeze ev
 // isCapFrozenFrame itself, which is untouched this round.
 
 test('P4-04B2 Cap-Freeze Branch Attribution Fix: setup sanity check — aheadBefore≈49.3 combined with a large lateral divergence is exactly the dangerousLateral condition app.js checks, which routes to the reconciliation branch (never advancePredictedPosition)',()=>{
+  // P4-04B3 Lead Cap Experiment Invariant Fix — lateral probe derived from MAX_PREDICTION_LEAD
+  // (MAX_PREDICTION_LEAD+10, never a fixed literal that only happened to exceed the old 50px cap),
+  // so this stays a genuine dangerousLateral case regardless of the cap's current value. aheadBefore
+  // stays 49.3 — that value comes from the unrelated P4-04B1 false-negative reproduction (MOVE_SPEED_
+  // RATE/60fps math), not from MAX_PREDICTION_LEAD, and 49.3 is comfortably below either cap value.
   const input={active:true,dirX:1,dirY:0};
-  const predicted={x:49.3,y:60},server={x:0,y:0}; // dx=49.3 (ahead), dy=60 (lateral, since dir is +x)
+  const lateralProbe=MAX_PREDICTION_LEAD+10;
+  const predicted={x:49.3,y:lateralProbe},server={x:0,y:0}; // dx=49.3 (ahead), dy=lateralProbe (lateral, since dir is +x)
   const divergence=movementDivergence(predicted,server,input);
   assert.ok(Math.abs(divergence.ahead-49.3)<1e-9,`expected ahead≈49.3, got ${divergence.ahead}`);
-  assert.equal(divergence.lateral,60);
+  assert.equal(divergence.lateral,lateralProbe);
   const catchUpDebt=0; // no legitimate catch-up budget in this scenario
   const dangerousAhead=divergence.ahead>MAX_PREDICTION_LEAD;
   const dangerousLateral=divergence.lateral>MAX_PREDICTION_LEAD+catchUpDebt;
   assert.equal(dangerousAhead,false,'ahead alone (49.3) must NOT exceed the cap — this is not a dangerousAhead case');
-  assert.equal(dangerousLateral,true,'lateral (60) must exceed MAX_PREDICTION_LEAD+catchUpDebt (50) — this IS the reconciliation-band condition');
+  assert.equal(dangerousLateral,true,`lateral (${lateralProbe}) must exceed MAX_PREDICTION_LEAD+catchUpDebt (${MAX_PREDICTION_LEAD}) — this IS the reconciliation-band condition`);
 });
 
 test('P4-04B2 Cap-Freeze Branch Attribution Fix: reconciliation-branch false-positive regression — the exact scenario the Codex review flagged must NOT be reported as cap-frozen',()=>{

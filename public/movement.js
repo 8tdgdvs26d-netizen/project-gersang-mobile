@@ -34,7 +34,14 @@ export const JOYSTICK_SEND_INTERVAL_MS=140;
 // How far (px) the predicted position may lead the last confirmed serverPosition. Prediction
 // self-caps at this distance and simply stops advancing (waits for the server to catch up) —
 // this is normal, expected lead, not an error, and must never actively pull the prediction back.
-export const MAX_PREDICTION_LEAD=50;
+// P4-04B3 — Prediction Lead Cap Controlled Experiment: 50 -> 80, per Charlie's real-device
+// telemetry (peak response gap 377ms at ~128.6px/s prediction velocity ≈48.5px, closely matching
+// the observed 48.0px peak lead immediately below the old 50px cap). RECONCILE_HARD_RESET_DISTANCE
+// (below) is NOT required to stay above this value — it governs an entirely independent
+// reconciliationSmoothingMs call mode (predictionSuspended/error-recovery), never the
+// dangerousAhead/dangerousLateral path this cap directly bounds (that path always passes
+// hardResetDistance=Infinity) — see CHANGELOG.md's P4-04B3 entries for the full history.
+export const MAX_PREDICTION_LEAD=80;
 // Correction smoothing (ms) used only while actively reconciling (see reconciliationSmoothingMs)
 // and the current divergence is still within MAX_PREDICTION_LEAD.
 export const RECONCILE_SMOOTHING_MS=40;
@@ -44,6 +51,18 @@ export const RECONCILE_SMOOTHING_MS=40;
 export const RECONCILE_STRONG_SMOOTHING_MS=40;
 // Beyond this divergence (px, 3x JOYSTICK_STEP_DISTANCE), easing would itself look like an odd
 // slide across an unrelated distance — snap predicted position straight to serverPosition instead.
+// P4-04B3 Restore Independent Error-Recovery Hard Reset — this constant governs ONE specific
+// reconciliationSmoothingMs call mode: the predictionSuspended/error-recovery branch in app.js's
+// tickMovementFrame (reconciliationSmoothingMs(d), all default params). The OTHER call mode — the
+// dangerousAhead/dangerousLateral branch — always calls reconciliationSmoothingMs(bandDistance,
+// MAX_PREDICTION_LEAD,Infinity), explicitly disabling hard-reset for that path, so it was never
+// actually gated by this constant at all. The P4-04B3 "invariant fix" round (54 -> 84) mistakenly
+// assumed RECONCILE_HARD_RESET_DISTANCE needed to track MAX_PREDICTION_LEAD to protect that second
+// path — it did not — and the 84px value had a real, unintended side effect: a REJECTED/exception/
+// collided response leaving prediction 55-84px from server truth would now visibly ease/glide back
+// instead of snapping immediately, exactly the "odd slide across an unrelated distance" this
+// constant exists to prevent. Restored to its original, independent value — see CHANGELOG.md's
+// P4-04B3 entries for the full before/after reasoning.
 export const RECONCILE_HARD_RESET_DISTANCE=54;
 
 // P1-07D — Latency-Decoupled Movement (Issue #23). Prototype Parameters, tunable, pending real-

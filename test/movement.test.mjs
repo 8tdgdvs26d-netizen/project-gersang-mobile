@@ -234,11 +234,19 @@ test('predictionVelocity: computes correctly for arbitrary step/interval inputs'
 // --- Prototype Parameter locks ---
 
 test('P1-07B reconciliation constants are locked at their currently-approved values',()=>{
-  assert.equal(MAX_PREDICTION_LEAD,50);
+  // P4-04B3 Prediction Lead Cap Controlled Experiment — MAX_PREDICTION_LEAD only: 50 -> 80, per
+  // Charlie's real-device telemetry evidence (see CHANGELOG.md).
+  // P4-04B3 Restore Independent Error-Recovery Hard Reset — RECONCILE_HARD_RESET_DISTANCE is
+  // restored to its original 54 (= JOYSTICK_STEP_DISTANCE*3) and is NOT required to track
+  // MAX_PREDICTION_LEAD: it governs only the predictionSuspended/error-recovery
+  // reconciliationSmoothingMs call mode (default params), never the dangerousAhead/dangerousLateral
+  // one, which always passes hardResetDistance=Infinity — see the two production-call-mode test
+  // blocks below and CHANGELOG.md's P4-04B3 entries for the full history.
+  assert.equal(MAX_PREDICTION_LEAD,80);
   assert.equal(RECONCILE_SMOOTHING_MS,40);
   assert.equal(RECONCILE_STRONG_SMOOTHING_MS,40);
   assert.equal(RECONCILE_HARD_RESET_DISTANCE,54);
-  assert.equal(RECONCILE_HARD_RESET_DISTANCE,JOYSTICK_STEP_DISTANCE*3,'hard reset distance is documented as 3x JOYSTICK_STEP_DISTANCE');
+  assert.equal(RECONCILE_HARD_RESET_DISTANCE,JOYSTICK_STEP_DISTANCE*3,'hard reset distance is documented as 3x JOYSTICK_STEP_DISTANCE — an independent error-recovery threshold, unrelated to MAX_PREDICTION_LEAD');
 });
 
 // --- isStepBlocked / clampPredictedStep: must be at least as strict as server.mjs's own
@@ -339,28 +347,51 @@ test('advancePredictedPosition: the lead cap is measured against serverPosition,
 });
 
 // --- reconciliationSmoothingMs: distance-based correction banding ---
+//
+// P4-04B3 Restore Independent Error-Recovery Hard Reset — reconciliationSmoothingMs is called from
+// app.js's tickMovementFrame in two genuinely independent modes, so these are split into two blocks
+// that each test the ACTUAL parameters production passes, rather than one block that conflated them:
+//
+// A) predictionSuspended/error-recovery — reconciliationSmoothingMs(d), all default params, so
+//    RECONCILE_HARD_RESET_DISTANCE (54) is the only threshold that matters; MAX_PREDICTION_LEAD (80)
+//    is unreachable as a maxLead boundary here since hard-reset always fires first for any distance
+//    beyond 54.
+// B) dangerousAhead/dangerousLateral — reconciliationSmoothingMs(bandDistance,MAX_PREDICTION_LEAD,
+//    Infinity), which explicitly disables hard-reset, so RECONCILE_HARD_RESET_DISTANCE never applies
+//    to this call mode at all — it can safely be smaller than MAX_PREDICTION_LEAD, as it now is.
 
-test('reconciliationSmoothingMs: within MAX_PREDICTION_LEAD returns the gentle smoothing constant',()=>{
+// --- (A) predictionSuspended/error-recovery: production defaults ---
+
+test('reconciliationSmoothingMs (error-recovery defaults): distance below RECONCILE_HARD_RESET_DISTANCE returns the gentle smoothing constant',()=>{
   assert.equal(reconciliationSmoothingMs(10),RECONCILE_SMOOTHING_MS);
   assert.equal(reconciliationSmoothingMs(0),RECONCILE_SMOOTHING_MS);
 });
 
-test('reconciliationSmoothingMs: exactly at MAX_PREDICTION_LEAD is still the gentle band (inclusive boundary)',()=>{
-  assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD),RECONCILE_SMOOTHING_MS);
+test('reconciliationSmoothingMs (error-recovery defaults): exactly at RECONCILE_HARD_RESET_DISTANCE is still smoothing, not a hard reset (inclusive boundary)',()=>{
+  assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE),RECONCILE_SMOOTHING_MS);
 });
 
-test('reconciliationSmoothingMs: between MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE returns the strong smoothing constant',()=>{
-  assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD+1),RECONCILE_STRONG_SMOOTHING_MS);
-  assert.equal(reconciliationSmoothingMs(45),RECONCILE_STRONG_SMOOTHING_MS);
-});
-
-test('reconciliationSmoothingMs: exactly at RECONCILE_HARD_RESET_DISTANCE is still the strong band (inclusive boundary)',()=>{
-  assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE),RECONCILE_STRONG_SMOOTHING_MS);
-});
-
-test('reconciliationSmoothingMs: beyond RECONCILE_HARD_RESET_DISTANCE returns null to signal an immediate hard reset',()=>{
+test('reconciliationSmoothingMs (error-recovery defaults): beyond RECONCILE_HARD_RESET_DISTANCE returns null to signal an immediate hard reset',()=>{
   assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE+1),null);
   assert.equal(reconciliationSmoothingMs(1000),null);
+});
+
+// --- (B) dangerousAhead/dangerousLateral: the actual production call, hardResetDistance=Infinity ---
+
+test('reconciliationSmoothingMs (dangerous-reconciliation mode, hardResetDistance=Infinity): at/below MAX_PREDICTION_LEAD returns the gentle smoothing constant',()=>{
+  assert.equal(reconciliationSmoothingMs(10,MAX_PREDICTION_LEAD,Infinity),RECONCILE_SMOOTHING_MS);
+  assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD,MAX_PREDICTION_LEAD,Infinity),RECONCILE_SMOOTHING_MS);
+});
+
+test('reconciliationSmoothingMs (dangerous-reconciliation mode, hardResetDistance=Infinity): above MAX_PREDICTION_LEAD returns the strong smoothing constant, never null',()=>{
+  // The key demonstration: 81px is well beyond RECONCILE_HARD_RESET_DISTANCE(54), yet this call mode
+  // NEVER hard-resets — proving MAX_PREDICTION_LEAD=80 and the independent, smaller
+  // RECONCILE_HARD_RESET_DISTANCE=54 coexist safely, because this path never consults that constant.
+  const probe=MAX_PREDICTION_LEAD+1;
+  assert.ok(probe>RECONCILE_HARD_RESET_DISTANCE,'sanity: this probe is beyond the (irrelevant, for this call mode) default hard-reset threshold');
+  const smoothingMs=reconciliationSmoothingMs(probe,MAX_PREDICTION_LEAD,Infinity);
+  assert.notEqual(smoothingMs,null,'this call mode must never hard-reset — hardResetDistance=Infinity');
+  assert.equal(smoothingMs,RECONCILE_STRONG_SMOOTHING_MS);
 });
 
 test('reconciliationSmoothingMs: custom thresholds/constants are honored, not hardcoded internally',()=>{
@@ -499,8 +530,13 @@ test('catchUpDebtAfterGrant: only the ahead-projected component is credited, nev
   const debt=catchUpDebtAfterGrant(predicted,newServerPosition,intentDirection);
   assert.equal(debt,60,'lateral component must never be credited into catchUpDebt');
   const euclidean=Math.hypot(60,40),oldBudget=MAX_PREDICTION_LEAD+euclidean,newBudget=MAX_PREDICTION_LEAD+debt;
-  assert.ok(115<oldBudget,'sanity: the old (Euclidean) design would have masked a 115px unrelated lateral divergence');
-  assert.ok(115>newBudget,'the new (ahead-only) design correctly still flags a 115px unrelated lateral divergence as dangerous');
+  // P4-04B3 Lead Cap Experiment Invariant Fix — probe derived from the current budgets (never a
+  // fixed literal calibrated to the old 50px cap): just beyond the ahead-only budget, still safely
+  // under the (hypothetical) Euclidean budget, so this counter-example keeps proving the same point
+  // regardless of MAX_PREDICTION_LEAD's current value.
+  const probe=newBudget+1;
+  assert.ok(probe<oldBudget,'sanity: the old (Euclidean) design would have masked this unrelated lateral divergence');
+  assert.ok(probe>newBudget,'the new (ahead-only) design correctly still flags this unrelated lateral divergence as dangerous');
 });
 
 // --- nextCatchUpDebt: clearing rules ---
@@ -716,14 +752,18 @@ test('simulation table: at every angle 0/45/90°, catchUpDebt=D always keeps the
   }
 });
 
-test('simulation table: at 180°, dangerousAhead triggers once D>MAX_PREDICTION_LEAD (D=54,90), stays safe for D=20/36',()=>{
-  for(const D of [20,36]){
+test('simulation table: at 180°, dangerousAhead triggers once D>MAX_PREDICTION_LEAD, stays safe just below it',()=>{
+  // P4-04B3 Lead Cap Experiment Invariant Fix — probes derived relative to MAX_PREDICTION_LEAD
+  // (never fixed literals calibrated to the old 50px cap), so this table keeps testing the actual
+  // boundary — safely-below/well-below on one side, just-above/well-above on the other — regardless
+  // of the cap's current value.
+  for(const D of [20,36,MAX_PREDICTION_LEAD-1]){
     const predicted={x:-D,y:0},server={x:0,y:0};
     const input={active:true,dirX:-1,dirY:0,magnitude:1}; // 180° reversal
     const divergence=movementDivergence(predicted,server,input);
     assert.equal(divergence.ahead>MAX_PREDICTION_LEAD,false,`D=${D}: expected safe at 180°, got ahead=${divergence.ahead}`);
   }
-  for(const D of [54,90]){
+  for(const D of [MAX_PREDICTION_LEAD+1,90]){
     const predicted={x:-D,y:0},server={x:0,y:0};
     const input={active:true,dirX:-1,dirY:0,magnitude:1};
     const divergence=movementDivergence(predicted,server,input);
