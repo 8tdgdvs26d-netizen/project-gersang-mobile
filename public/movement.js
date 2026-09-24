@@ -47,9 +47,16 @@ export const RECONCILE_SMOOTHING_MS=40;
 // MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE — same value as RECONCILE_SMOOTHING_MS
 // today, kept as an independently tunable constant for real-device re-tuning.
 export const RECONCILE_STRONG_SMOOTHING_MS=40;
-// Beyond this divergence (px, 3x JOYSTICK_STEP_DISTANCE), easing would itself look like an odd
-// slide across an unrelated distance — snap predicted position straight to serverPosition instead.
-export const RECONCILE_HARD_RESET_DISTANCE=54;
+// Beyond this divergence (px), easing would itself look like an odd slide across an unrelated
+// distance — snap predicted position straight to serverPosition instead.
+// P4-04B3 Lead Cap Experiment Invariant Fix — 54 -> 84, a dependent adjustment of the P4-04B3
+// MAX_PREDICTION_LEAD experiment (50 -> 80), not an independent reconciliation tuning change. The
+// reconciliation design assumes MAX_PREDICTION_LEAD < RECONCILE_HARD_RESET_DISTANCE, previously
+// preserving a +4px band (50 -> 54); 84 preserves that same +4px band against the new 80px cap
+// (80 -> 84), keeping reconciliationSmoothingMs's hard-reset check from firing before its own
+// maxLead check ever gets evaluated. The old "3x JOYSTICK_STEP_DISTANCE" relationship (54=18*3) no
+// longer holds — see CHANGELOG.md's P4-04B3 entry for the full before/after reasoning.
+export const RECONCILE_HARD_RESET_DISTANCE=84;
 
 // P1-07D — Latency-Decoupled Movement (Issue #23). Prototype Parameters, tunable, pending real-
 // device (iPhone) validation — none of these are Canonical balance numbers.

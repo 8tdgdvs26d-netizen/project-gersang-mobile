@@ -234,14 +234,29 @@ test('predictionVelocity: computes correctly for arbitrary step/interval inputs'
 // --- Prototype Parameter locks ---
 
 test('P1-07B reconciliation constants are locked at their currently-approved values',()=>{
-  // P4-04B3 Prediction Lead Cap Controlled Experiment — MAX_PREDICTION_LEAD only: 50 -> 80, per
-  // Charlie's real-device telemetry evidence (see CHANGELOG.md). The other three constants are
-  // explicitly untouched this round and remain locked at their prior values.
+  // P4-04B3 Prediction Lead Cap Controlled Experiment + Invariant Fix — MAX_PREDICTION_LEAD 50 -> 80
+  // and RECONCILE_HARD_RESET_DISTANCE 54 -> 84 (a dependent adjustment preserving the same +4px band,
+  // not an independent reconciliation tuning change — see CHANGELOG.md). RECONCILE_SMOOTHING_MS/
+  // RECONCILE_STRONG_SMOOTHING_MS are untouched. The old "3x JOYSTICK_STEP_DISTANCE" relationship no
+  // longer holds (84 !== 18*3) — replaced by the explicit ordering-invariant tests below.
   assert.equal(MAX_PREDICTION_LEAD,80);
   assert.equal(RECONCILE_SMOOTHING_MS,40);
   assert.equal(RECONCILE_STRONG_SMOOTHING_MS,40);
-  assert.equal(RECONCILE_HARD_RESET_DISTANCE,54);
-  assert.equal(RECONCILE_HARD_RESET_DISTANCE,JOYSTICK_STEP_DISTANCE*3,'hard reset distance is documented as 3x JOYSTICK_STEP_DISTANCE');
+  assert.equal(RECONCILE_HARD_RESET_DISTANCE,84);
+});
+
+// --- P4-04B3 Lead Cap Experiment Invariant Fix — the reconciliation design (reconciliationSmoothingMs)
+// assumes MAX_PREDICTION_LEAD < RECONCILE_HARD_RESET_DISTANCE (its hard-reset check must never fire
+// before its own maxLead check gets a chance to apply strong smoothing); these regression-lock that
+// ordering directly, so a future change to either constant in isolation fails loudly here instead of
+// silently reintroducing the P4-04B3 interaction (hard-reset swallowing the strong-smoothing band). ---
+
+test('P4-04B3 invariant: RECONCILE_HARD_RESET_DISTANCE must stay strictly greater than MAX_PREDICTION_LEAD',()=>{
+  assert.ok(RECONCILE_HARD_RESET_DISTANCE>MAX_PREDICTION_LEAD,`RECONCILE_HARD_RESET_DISTANCE(${RECONCILE_HARD_RESET_DISTANCE}) must exceed MAX_PREDICTION_LEAD(${MAX_PREDICTION_LEAD}), or reconciliationSmoothingMs's hard-reset check swallows its own strong-smoothing band`);
+});
+
+test('P4-04B3 invariant: the experimental +4px band between MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE is preserved',()=>{
+  assert.equal(RECONCILE_HARD_RESET_DISTANCE-MAX_PREDICTION_LEAD,4);
 });
 
 // --- isStepBlocked / clampPredictedStep: must be at least as strict as server.mjs's own
@@ -353,8 +368,11 @@ test('reconciliationSmoothingMs: exactly at MAX_PREDICTION_LEAD is still the gen
 });
 
 test('reconciliationSmoothingMs: between MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE returns the strong smoothing constant',()=>{
+  // P4-04B3 Lead Cap Experiment Invariant Fix — probes derived relative to the current constants
+  // (never a fixed literal that only happened to sit in the old 50-54px band) so this test keeps
+  // meaning if either constant is re-tuned again in the future.
   assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD+1),RECONCILE_STRONG_SMOOTHING_MS);
-  assert.equal(reconciliationSmoothingMs(45),RECONCILE_STRONG_SMOOTHING_MS);
+  assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE-1),RECONCILE_STRONG_SMOOTHING_MS);
 });
 
 test('reconciliationSmoothingMs: exactly at RECONCILE_HARD_RESET_DISTANCE is still the strong band (inclusive boundary)',()=>{
@@ -502,8 +520,13 @@ test('catchUpDebtAfterGrant: only the ahead-projected component is credited, nev
   const debt=catchUpDebtAfterGrant(predicted,newServerPosition,intentDirection);
   assert.equal(debt,60,'lateral component must never be credited into catchUpDebt');
   const euclidean=Math.hypot(60,40),oldBudget=MAX_PREDICTION_LEAD+euclidean,newBudget=MAX_PREDICTION_LEAD+debt;
-  assert.ok(115<oldBudget,'sanity: the old (Euclidean) design would have masked a 115px unrelated lateral divergence');
-  assert.ok(115>newBudget,'the new (ahead-only) design correctly still flags a 115px unrelated lateral divergence as dangerous');
+  // P4-04B3 Lead Cap Experiment Invariant Fix — probe derived from the current budgets (never a
+  // fixed literal calibrated to the old 50px cap): just beyond the ahead-only budget, still safely
+  // under the (hypothetical) Euclidean budget, so this counter-example keeps proving the same point
+  // regardless of MAX_PREDICTION_LEAD's current value.
+  const probe=newBudget+1;
+  assert.ok(probe<oldBudget,'sanity: the old (Euclidean) design would have masked this unrelated lateral divergence');
+  assert.ok(probe>newBudget,'the new (ahead-only) design correctly still flags this unrelated lateral divergence as dangerous');
 });
 
 // --- nextCatchUpDebt: clearing rules ---
@@ -719,14 +742,18 @@ test('simulation table: at every angle 0/45/90°, catchUpDebt=D always keeps the
   }
 });
 
-test('simulation table: at 180°, dangerousAhead triggers once D>MAX_PREDICTION_LEAD (D=54,90), stays safe for D=20/36',()=>{
-  for(const D of [20,36]){
+test('simulation table: at 180°, dangerousAhead triggers once D>MAX_PREDICTION_LEAD, stays safe just below it',()=>{
+  // P4-04B3 Lead Cap Experiment Invariant Fix — probes derived relative to MAX_PREDICTION_LEAD
+  // (never fixed literals calibrated to the old 50px cap), so this table keeps testing the actual
+  // boundary — safely-below/well-below on one side, just-above/well-above on the other — regardless
+  // of the cap's current value.
+  for(const D of [20,36,MAX_PREDICTION_LEAD-1]){
     const predicted={x:-D,y:0},server={x:0,y:0};
     const input={active:true,dirX:-1,dirY:0,magnitude:1}; // 180° reversal
     const divergence=movementDivergence(predicted,server,input);
     assert.equal(divergence.ahead>MAX_PREDICTION_LEAD,false,`D=${D}: expected safe at 180°, got ahead=${divergence.ahead}`);
   }
-  for(const D of [54,90]){
+  for(const D of [MAX_PREDICTION_LEAD+1,90]){
     const predicted={x:-D,y:0},server={x:0,y:0};
     const input={active:true,dirX:-1,dirY:0,magnitude:1};
     const divergence=movementDivergence(predicted,server,input);
