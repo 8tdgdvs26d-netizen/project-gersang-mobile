@@ -234,29 +234,19 @@ test('predictionVelocity: computes correctly for arbitrary step/interval inputs'
 // --- Prototype Parameter locks ---
 
 test('P1-07B reconciliation constants are locked at their currently-approved values',()=>{
-  // P4-04B3 Prediction Lead Cap Controlled Experiment + Invariant Fix — MAX_PREDICTION_LEAD 50 -> 80
-  // and RECONCILE_HARD_RESET_DISTANCE 54 -> 84 (a dependent adjustment preserving the same +4px band,
-  // not an independent reconciliation tuning change — see CHANGELOG.md). RECONCILE_SMOOTHING_MS/
-  // RECONCILE_STRONG_SMOOTHING_MS are untouched. The old "3x JOYSTICK_STEP_DISTANCE" relationship no
-  // longer holds (84 !== 18*3) — replaced by the explicit ordering-invariant tests below.
+  // P4-04B3 Prediction Lead Cap Controlled Experiment — MAX_PREDICTION_LEAD only: 50 -> 80, per
+  // Charlie's real-device telemetry evidence (see CHANGELOG.md).
+  // P4-04B3 Restore Independent Error-Recovery Hard Reset — RECONCILE_HARD_RESET_DISTANCE is
+  // restored to its original 54 (= JOYSTICK_STEP_DISTANCE*3) and is NOT required to track
+  // MAX_PREDICTION_LEAD: it governs only the predictionSuspended/error-recovery
+  // reconciliationSmoothingMs call mode (default params), never the dangerousAhead/dangerousLateral
+  // one, which always passes hardResetDistance=Infinity — see the two production-call-mode test
+  // blocks below and CHANGELOG.md's P4-04B3 entries for the full history.
   assert.equal(MAX_PREDICTION_LEAD,80);
   assert.equal(RECONCILE_SMOOTHING_MS,40);
   assert.equal(RECONCILE_STRONG_SMOOTHING_MS,40);
-  assert.equal(RECONCILE_HARD_RESET_DISTANCE,84);
-});
-
-// --- P4-04B3 Lead Cap Experiment Invariant Fix — the reconciliation design (reconciliationSmoothingMs)
-// assumes MAX_PREDICTION_LEAD < RECONCILE_HARD_RESET_DISTANCE (its hard-reset check must never fire
-// before its own maxLead check gets a chance to apply strong smoothing); these regression-lock that
-// ordering directly, so a future change to either constant in isolation fails loudly here instead of
-// silently reintroducing the P4-04B3 interaction (hard-reset swallowing the strong-smoothing band). ---
-
-test('P4-04B3 invariant: RECONCILE_HARD_RESET_DISTANCE must stay strictly greater than MAX_PREDICTION_LEAD',()=>{
-  assert.ok(RECONCILE_HARD_RESET_DISTANCE>MAX_PREDICTION_LEAD,`RECONCILE_HARD_RESET_DISTANCE(${RECONCILE_HARD_RESET_DISTANCE}) must exceed MAX_PREDICTION_LEAD(${MAX_PREDICTION_LEAD}), or reconciliationSmoothingMs's hard-reset check swallows its own strong-smoothing band`);
-});
-
-test('P4-04B3 invariant: the experimental +4px band between MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE is preserved',()=>{
-  assert.equal(RECONCILE_HARD_RESET_DISTANCE-MAX_PREDICTION_LEAD,4);
+  assert.equal(RECONCILE_HARD_RESET_DISTANCE,54);
+  assert.equal(RECONCILE_HARD_RESET_DISTANCE,JOYSTICK_STEP_DISTANCE*3,'hard reset distance is documented as 3x JOYSTICK_STEP_DISTANCE — an independent error-recovery threshold, unrelated to MAX_PREDICTION_LEAD');
 });
 
 // --- isStepBlocked / clampPredictedStep: must be at least as strict as server.mjs's own
@@ -357,31 +347,51 @@ test('advancePredictedPosition: the lead cap is measured against serverPosition,
 });
 
 // --- reconciliationSmoothingMs: distance-based correction banding ---
+//
+// P4-04B3 Restore Independent Error-Recovery Hard Reset — reconciliationSmoothingMs is called from
+// app.js's tickMovementFrame in two genuinely independent modes, so these are split into two blocks
+// that each test the ACTUAL parameters production passes, rather than one block that conflated them:
+//
+// A) predictionSuspended/error-recovery — reconciliationSmoothingMs(d), all default params, so
+//    RECONCILE_HARD_RESET_DISTANCE (54) is the only threshold that matters; MAX_PREDICTION_LEAD (80)
+//    is unreachable as a maxLead boundary here since hard-reset always fires first for any distance
+//    beyond 54.
+// B) dangerousAhead/dangerousLateral — reconciliationSmoothingMs(bandDistance,MAX_PREDICTION_LEAD,
+//    Infinity), which explicitly disables hard-reset, so RECONCILE_HARD_RESET_DISTANCE never applies
+//    to this call mode at all — it can safely be smaller than MAX_PREDICTION_LEAD, as it now is.
 
-test('reconciliationSmoothingMs: within MAX_PREDICTION_LEAD returns the gentle smoothing constant',()=>{
+// --- (A) predictionSuspended/error-recovery: production defaults ---
+
+test('reconciliationSmoothingMs (error-recovery defaults): distance below RECONCILE_HARD_RESET_DISTANCE returns the gentle smoothing constant',()=>{
   assert.equal(reconciliationSmoothingMs(10),RECONCILE_SMOOTHING_MS);
   assert.equal(reconciliationSmoothingMs(0),RECONCILE_SMOOTHING_MS);
 });
 
-test('reconciliationSmoothingMs: exactly at MAX_PREDICTION_LEAD is still the gentle band (inclusive boundary)',()=>{
-  assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD),RECONCILE_SMOOTHING_MS);
+test('reconciliationSmoothingMs (error-recovery defaults): exactly at RECONCILE_HARD_RESET_DISTANCE is still smoothing, not a hard reset (inclusive boundary)',()=>{
+  assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE),RECONCILE_SMOOTHING_MS);
 });
 
-test('reconciliationSmoothingMs: between MAX_PREDICTION_LEAD and RECONCILE_HARD_RESET_DISTANCE returns the strong smoothing constant',()=>{
-  // P4-04B3 Lead Cap Experiment Invariant Fix — probes derived relative to the current constants
-  // (never a fixed literal that only happened to sit in the old 50-54px band) so this test keeps
-  // meaning if either constant is re-tuned again in the future.
-  assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD+1),RECONCILE_STRONG_SMOOTHING_MS);
-  assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE-1),RECONCILE_STRONG_SMOOTHING_MS);
-});
-
-test('reconciliationSmoothingMs: exactly at RECONCILE_HARD_RESET_DISTANCE is still the strong band (inclusive boundary)',()=>{
-  assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE),RECONCILE_STRONG_SMOOTHING_MS);
-});
-
-test('reconciliationSmoothingMs: beyond RECONCILE_HARD_RESET_DISTANCE returns null to signal an immediate hard reset',()=>{
+test('reconciliationSmoothingMs (error-recovery defaults): beyond RECONCILE_HARD_RESET_DISTANCE returns null to signal an immediate hard reset',()=>{
   assert.equal(reconciliationSmoothingMs(RECONCILE_HARD_RESET_DISTANCE+1),null);
   assert.equal(reconciliationSmoothingMs(1000),null);
+});
+
+// --- (B) dangerousAhead/dangerousLateral: the actual production call, hardResetDistance=Infinity ---
+
+test('reconciliationSmoothingMs (dangerous-reconciliation mode, hardResetDistance=Infinity): at/below MAX_PREDICTION_LEAD returns the gentle smoothing constant',()=>{
+  assert.equal(reconciliationSmoothingMs(10,MAX_PREDICTION_LEAD,Infinity),RECONCILE_SMOOTHING_MS);
+  assert.equal(reconciliationSmoothingMs(MAX_PREDICTION_LEAD,MAX_PREDICTION_LEAD,Infinity),RECONCILE_SMOOTHING_MS);
+});
+
+test('reconciliationSmoothingMs (dangerous-reconciliation mode, hardResetDistance=Infinity): above MAX_PREDICTION_LEAD returns the strong smoothing constant, never null',()=>{
+  // The key demonstration: 81px is well beyond RECONCILE_HARD_RESET_DISTANCE(54), yet this call mode
+  // NEVER hard-resets — proving MAX_PREDICTION_LEAD=80 and the independent, smaller
+  // RECONCILE_HARD_RESET_DISTANCE=54 coexist safely, because this path never consults that constant.
+  const probe=MAX_PREDICTION_LEAD+1;
+  assert.ok(probe>RECONCILE_HARD_RESET_DISTANCE,'sanity: this probe is beyond the (irrelevant, for this call mode) default hard-reset threshold');
+  const smoothingMs=reconciliationSmoothingMs(probe,MAX_PREDICTION_LEAD,Infinity);
+  assert.notEqual(smoothingMs,null,'this call mode must never hard-reset — hardResetDistance=Infinity');
+  assert.equal(smoothingMs,RECONCILE_STRONG_SMOOTHING_MS);
 });
 
 test('reconciliationSmoothingMs: custom thresholds/constants are honored, not hardcoded internally',()=>{
