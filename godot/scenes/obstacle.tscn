@@ -1,0 +1,18 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_obstacle"]
+size = Vector2(240, 120)
+
+[node name="Obstacle" type="StaticBody2D"]
+
+[node name="Placeholder" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(-120, -60, 120, -60, 120, 60, -120, 60)
+color = Color(0.18, 0.3, 0.28, 1)
+
+[node name="Outline" type="Line2D" parent="."]
+points = PackedVector2Array(-120, -60, 120, -60, 120, 60, -120, 60, -120, -60)
+width = 4.0
+default_color = Color(0.45, 0.62, 0.56, 1)
+
+[node name="CollisionShape" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_obstacle")
