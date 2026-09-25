@@ -250,6 +250,7 @@ func _invariants_hold(cargo: Cargo) -> bool:
 
 func _verify_transitions() -> void:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.save_path = ""  # M2-06: keep this test away from the player's real save file
 	root.add_child(main)
 	await _settle()
 	var player := main.get_node("Actors/Player") as Player

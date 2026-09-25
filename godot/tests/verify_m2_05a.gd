@@ -16,6 +16,7 @@ var _joystick: TouchJoystick
 
 func _initialize() -> void:
 	_main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_main.save_path = ""  # M2-06: keep this test away from the player's real save file
 	root.add_child(_main)
 	await _settle()
 	_player = _main.get_node("Actors/Player") as Player
