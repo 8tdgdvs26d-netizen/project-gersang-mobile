@@ -5,7 +5,24 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
-M2-03 Six Test Goods and Cargo Data Foundation builds on the accepted M2-02 city hub foundation:
+M2-04 Money, A/B Price Table and Buy/Sell Transaction Core builds on the accepted M2-03 goods and cargo:
+
+- `scripts/wallet.gd`: a prototype wallet with `STARTING_MONEY` 10000 (TEST VALUE);
+  integer money that can never go negative, changed only through validated spend/add
+- `scripts/market_prices.gd`: fixed A/B test prices for all six goods (one price per
+  city used for both buying and selling); reserved cities C/D have no prices
+- `scripts/trade_service.gd`: a UI-independent trade core with atomic buy and atomic
+  sell; every check runs before any state changes, and cargo is only changed through
+  the M2-03 Cargo API
+- proven routes: A → B `test_good_01` (10 bought for 800, sold for 1200, +400),
+  B → A `test_good_05` (+800 for 2) and a losing A → B `test_good_05` example (−800)
+- the wallet and cargo are session state owned by `scripts/main.gd`, so World ↔ City
+  transitions preserve both Money and Cargo
+- the City Hub shows developer-only `Money` and `Cargo` lines; trading is exposed
+  through `main.buy_in_current_city()` / `sell_in_current_city()` for tests and
+  runtime checks, with no Market UI yet
+
+M2-03 Six Test Goods and Cargo Data Foundation (accepted):
 
 - six prototype goods (`test_good_01` … `test_good_06`) in one data source,
   `scripts/goods_catalog.gd`; unit sizes and base values are TEST VALUES only,
@@ -74,16 +91,16 @@ Earlier accepted foundations:
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M2-03 six goods and cargo foundation ready`
+`Myrial: Unwritten M2-04 money and buy/sell core ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m2_03.gd`
+`godot --headless --path godot --script res://tests/verify_m2_04.gd`
 
 ## Deliberately not included
 
-M2-03 does not add buy/sell, money, pricing, price differences, market stock or UI,
-balancing, cargo item-list UI, save/load, storage, city facilities,
+M2-04 does not add a formal Market UI or buy/sell buttons, dynamic prices, market stock,
+supply/demand, tax, fees or spreads, trade history, formal balancing, cargo item-list UI, save/load, storage, city facilities,
 NPCs, formal city content, a touch Enter button, gameplay for cities C and D, roads, minimap, fast travel, terrain features, battle mode, landscape battle orientation, runtime orientation switching,
 tap-to-move, pathfinding, sprint, dodge, interaction or combat buttons,
 multi-touch gestures, haptics, safe-area layout, final HUD art, camera smoothing, camera

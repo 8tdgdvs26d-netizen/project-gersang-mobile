@@ -11,6 +11,7 @@ var city_id := ""
 @onready var _city_label := $Center/Content/CityLabel as Label
 @onready var _leave_button := $Center/Content/LeaveButton as Button
 @onready var _cargo_label := $Center/Content/CargoLabel as Label
+@onready var _money_label := $Center/Content/MoneyLabel as Label
 
 
 func _ready() -> void:
@@ -29,10 +30,16 @@ func show_cargo_summary(used: int, capacity: int) -> void:
 	_cargo_label.text = "Cargo: %d / %d" % [used, capacity]
 
 
+## Developer-only debug line; the wallet itself lives outside the hub.
+func show_money(balance: int) -> void:
+	_money_label.text = "Money: %d" % balance
+
+
 func close() -> void:
 	city_id = ""
 	_city_label.text = ""
 	_cargo_label.text = ""
+	_money_label.text = ""
 	visible = false
 
 
@@ -46,6 +53,10 @@ func get_city_label_text() -> String:
 
 func get_cargo_label_text() -> String:
 	return _cargo_label.text
+
+
+func get_money_label_text() -> String:
+	return _money_label.text
 
 
 func _on_leave_pressed() -> void:

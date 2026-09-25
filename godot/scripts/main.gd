@@ -3,12 +3,14 @@ extends Node2D
 ## Minimal world/city state controller. The world scene stays loaded; entering
 ## a city pauses world movement and shows the shared City Hub overlay.
 
-const BOOTSTRAP_VERSION := "M2-03"
+const BOOTSTRAP_VERSION := "M2-04"
 
 var current_city_id := ""
 ## Session-owned player cargo. World/city transitions never reset it;
 ## it only resets when the game restarts (no disk save yet).
 var cargo := Cargo.new()
+## Session-owned player money, with the same lifetime as the cargo.
+var wallet := Wallet.new()
 var _city_markers := {}
 
 @onready var _player := $Actors/Player as Player
@@ -21,7 +23,7 @@ func _ready() -> void:
 		if child is CityMarker and child.city_id in WorldLayout.ACTIVE_CITY_IDS:
 			_city_markers[child.city_id] = child
 	_city_hub.leave_requested.connect(leave_city)
-	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " six goods and cargo foundation ready")
+	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " money and buy/sell core ready")
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -51,7 +53,7 @@ func enter_city(city_id: String) -> bool:
 	current_city_id = city_id
 	_set_world_active(false)
 	_city_hub.open(city_id)
-	_city_hub.show_cargo_summary(cargo.get_used_capacity(), Cargo.CARGO_CAPACITY)
+	_refresh_hub_summary()
 	return true
 
 
@@ -64,6 +66,29 @@ func leave_city() -> bool:
 	_player.global_position = WorldLayout.CITY_RETURN_POINTS[city_id]
 	_set_world_active(true)
 	return true
+
+
+## Buys in the city the player is currently in; the trade itself lives in
+## TradeService so it stays independent of any UI.
+func buy_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
+	if not is_in_city():
+		return {"success": false, "total_value": 0, "reason": "not_in_city"}
+	var result := TradeService.buy(current_city_id, good_id, quantity, wallet, cargo)
+	_refresh_hub_summary()
+	return result
+
+
+func sell_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
+	if not is_in_city():
+		return {"success": false, "total_value": 0, "reason": "not_in_city"}
+	var result := TradeService.sell(current_city_id, good_id, quantity, wallet, cargo)
+	_refresh_hub_summary()
+	return result
+
+
+func _refresh_hub_summary() -> void:
+	_city_hub.show_money(wallet.get_balance())
+	_city_hub.show_cargo_summary(cargo.get_used_capacity(), Cargo.CARGO_CAPACITY)
 
 
 func _player_body_rect() -> Rect2:
