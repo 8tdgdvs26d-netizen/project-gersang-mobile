@@ -5,6 +5,22 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
+M2-06 adds minimal local persistence (prototype persistence only):
+
+- saves only the player's Money and Cargo to `user://myrial_save.json` as small JSON
+  (`{"version": 1, "money": …, "cargo": {"test_good_01": …}}`) via `scripts/save_store.gd`
+- does not save the world position, current city or City Hub state: after a restart the
+  player uses the normal world spawn with the saved Money and Cargo
+- autosaves after every successful Buy/Sell; failed trades never write the save
+- on startup a valid save is fully validated, then restored into new Wallet/Cargo
+  objects through their normal APIs; a missing, invalid or corrupt save is never
+  partially restored and simply leaves the safe defaults (10000 money, empty cargo)
+  until the next successful trade writes a fresh valid save
+- a failed save write keeps the successful trade and only logs a warning
+- tests use their own save path (or `save_path = ""` to turn persistence off), so they
+  never read or overwrite the player's real save
+- no save slots, manual save/load, cloud, backend, encryption or migration framework
+
 M2-05A adds a minimal touch Enter City control to unblock mobile Market acceptance:
 
 - an `Enter City` touch button (`EnterControls/EnterCityButton` in `scenes/main.tscn`)
@@ -119,11 +135,11 @@ Earlier accepted foundations:
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M2-05A minimal player market with touch city entry ready`
+`Myrial: Unwritten M2-06 minimal money and cargo persistence ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m2_05a.gd`
+`godot --headless --path godot --script res://tests/verify_m2_06.gd`
 
 ## Deliberately not included
 

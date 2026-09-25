@@ -3,7 +3,7 @@ extends Node2D
 ## Minimal world/city state controller. The world scene stays loaded; entering
 ## a city pauses world movement and shows the shared City Hub overlay.
 
-const BOOTSTRAP_VERSION := "M2-05A"
+const BOOTSTRAP_VERSION := "M2-06"
 ## Each market button press trades exactly one unit.
 const MARKET_TRADE_QUANTITY := 1
 
@@ -13,6 +13,9 @@ var current_city_id := ""
 var cargo := Cargo.new()
 ## Session-owned player money, with the same lifetime as the cargo.
 var wallet := Wallet.new()
+## Local save file for money and cargo. An empty path turns persistence off
+## (used by tests so they never touch the player's real save).
+var save_path := SaveStore.DEFAULT_PATH
 var _city_markers := {}
 
 @onready var _player := $Actors/Player as Player
@@ -22,6 +25,7 @@ var _city_markers := {}
 
 
 func _ready() -> void:
+	_load_saved_session()
 	for child in $Cities.get_children():
 		if child is CityMarker and child.city_id in WorldLayout.ACTIVE_CITY_IDS:
 			_city_markers[child.city_id] = child
@@ -30,7 +34,7 @@ func _ready() -> void:
 	_city_hub.sell_requested.connect(_on_market_sell_requested)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	_update_enter_city_button()
-	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " minimal player market with touch city entry ready")
+	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " minimal money and cargo persistence ready")
 
 
 func _process(_delta: float) -> void:
@@ -92,6 +96,8 @@ func buy_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "total_value": 0, "reason": "not_in_city"}
 	var result := TradeService.buy(current_city_id, good_id, quantity, wallet, cargo)
+	if result["success"]:
+		_save_session()
 	_refresh_hub_summary()
 	return result
 
@@ -100,8 +106,28 @@ func sell_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "total_value": 0, "reason": "not_in_city"}
 	var result := TradeService.sell(current_city_id, good_id, quantity, wallet, cargo)
+	if result["success"]:
+		_save_session()
 	_refresh_hub_summary()
 	return result
+
+
+## Restores money and cargo from a valid save, or keeps the fresh defaults.
+## Position, city and hub state are never restored.
+func _load_saved_session() -> void:
+	var loaded := SaveStore.load_session(save_path)
+	if not loaded.is_empty():
+		wallet = loaded["wallet"]
+		cargo = loaded["cargo"]
+
+
+## Saves after a successful trade. A failed write keeps the trade and the valid
+## runtime state; it is only reported as a warning.
+func _save_session() -> void:
+	if save_path == "":
+		return
+	if not SaveStore.save(save_path, wallet, cargo):
+		push_warning("Myrial: could not write save file %s" % save_path)
 
 
 ## Touch Enter City is only another way to request the normal entry path.
