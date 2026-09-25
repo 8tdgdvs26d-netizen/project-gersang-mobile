@@ -3,9 +3,12 @@ extends Node2D
 ## Minimal world/city state controller. The world scene stays loaded; entering
 ## a city pauses world movement and shows the shared City Hub overlay.
 
-const BOOTSTRAP_VERSION := "M2-02"
+const BOOTSTRAP_VERSION := "M2-03"
 
 var current_city_id := ""
+## Session-owned player cargo. World/city transitions never reset it;
+## it only resets when the game restarts (no disk save yet).
+var cargo := Cargo.new()
 var _city_markers := {}
 
 @onready var _player := $Actors/Player as Player
@@ -18,7 +21,7 @@ func _ready() -> void:
 		if child is CityMarker and child.city_id in WorldLayout.ACTIVE_CITY_IDS:
 			_city_markers[child.city_id] = child
 	_city_hub.leave_requested.connect(leave_city)
-	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " city hub foundation ready")
+	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " six goods and cargo foundation ready")
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -48,6 +51,7 @@ func enter_city(city_id: String) -> bool:
 	current_city_id = city_id
 	_set_world_active(false)
 	_city_hub.open(city_id)
+	_city_hub.show_cargo_summary(cargo.get_used_capacity(), Cargo.CARGO_CAPACITY)
 	return true
 
 
