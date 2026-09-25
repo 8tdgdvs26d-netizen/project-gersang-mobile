@@ -3,7 +3,9 @@ extends Node2D
 ## Minimal world/city state controller. The world scene stays loaded; entering
 ## a city pauses world movement and shows the shared City Hub overlay.
 
-const BOOTSTRAP_VERSION := "M2-04"
+const BOOTSTRAP_VERSION := "M2-05"
+## Each market button press trades exactly one unit.
+const MARKET_TRADE_QUANTITY := 1
 
 var current_city_id := ""
 ## Session-owned player cargo. World/city transitions never reset it;
@@ -23,7 +25,9 @@ func _ready() -> void:
 		if child is CityMarker and child.city_id in WorldLayout.ACTIVE_CITY_IDS:
 			_city_markers[child.city_id] = child
 	_city_hub.leave_requested.connect(leave_city)
-	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " money and buy/sell core ready")
+	_city_hub.buy_requested.connect(_on_market_buy_requested)
+	_city_hub.sell_requested.connect(_on_market_sell_requested)
+	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " minimal player market ready")
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -89,6 +93,17 @@ func sell_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 func _refresh_hub_summary() -> void:
 	_city_hub.show_money(wallet.get_balance())
 	_city_hub.show_cargo_summary(cargo.get_used_capacity(), Cargo.CARGO_CAPACITY)
+	_city_hub.show_market(cargo.get_items())
+
+
+func _on_market_buy_requested(good_id: String) -> void:
+	var result := buy_in_current_city(good_id, MARKET_TRADE_QUANTITY)
+	_city_hub.show_trade_feedback("buy", good_id, MARKET_TRADE_QUANTITY, result)
+
+
+func _on_market_sell_requested(good_id: String) -> void:
+	var result := sell_in_current_city(good_id, MARKET_TRADE_QUANTITY)
+	_city_hub.show_trade_feedback("sell", good_id, MARKET_TRADE_QUANTITY, result)
 
 
 func _player_body_rect() -> Rect2:

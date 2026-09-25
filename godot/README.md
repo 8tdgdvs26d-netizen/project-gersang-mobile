@@ -5,7 +5,24 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
-M2-04 Money, A/B Price Table and Buy/Sell Transaction Core builds on the accepted M2-03 goods and cargo:
+M2-05 adds a minimal player-operable Market UI, building on the accepted M2-04 trade core:
+
+- the City Hub now shows a MARKET section directly (no extra navigation)
+- six goods visible, one row each, built from `GoodsCatalog`
+- city prices visible for the current city, read from `MarketPrices`
+- Buy 1 and Sell 1 buttons per good; each press asks `scripts/main.gd` to run exactly
+  one `buy_in_current_city` / `sell_in_current_city` trade through `TradeService`
+- Money, Cargo used / capacity and each good's Held quantity refresh immediately
+- one-line transaction feedback (for example `Bought 1 Test Good 1 for 80`,
+  `Not enough money`, `Not enough cargo space`, `Not enough goods`)
+- portrait prototype layout that fits the 720 × 1280 reference with 120 × 88 touch buttons
+- the UI only displays and forwards presses; it never changes money or cargo itself
+
+NOT INCLUDED in M2-05: formal UI or art, dynamic prices, market stock, quantity selection
+(Buy 10 / Buy Max / Sell All), trade history, save/load, formal balancing, and a touch way
+to enter a city from the world (entering still needs the E key).
+
+M2-04 Money, A/B Price Table and Buy/Sell Transaction Core (accepted):
 
 - `scripts/wallet.gd`: a prototype wallet with `STARTING_MONEY` 10000 (TEST VALUE);
   integer money that can never go negative, changed only through validated spend/add
@@ -91,15 +108,15 @@ Earlier accepted foundations:
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M2-04 money and buy/sell core ready`
+`Myrial: Unwritten M2-05 minimal player market ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m2_04.gd`
+`godot --headless --path godot --script res://tests/verify_m2_05.gd`
 
 ## Deliberately not included
 
-M2-04 does not add a formal Market UI or buy/sell buttons, dynamic prices, market stock,
+M2-05 does not add a formal Market UI, quantity selection, dynamic prices, market stock,
 supply/demand, tax, fees or spreads, trade history, formal balancing, cargo item-list UI, save/load, storage, city facilities,
 NPCs, formal city content, a touch Enter button, gameplay for cities C and D, roads, minimap, fast travel, terrain features, battle mode, landscape battle orientation, runtime orientation switching,
 tap-to-move, pathfinding, sprint, dodge, interaction or combat buttons,
