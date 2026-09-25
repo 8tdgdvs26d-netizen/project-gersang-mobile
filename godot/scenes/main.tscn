@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
@@ -7,6 +7,7 @@
 [ext_resource type="PackedScene" path="res://scenes/touch_joystick.tscn" id="5_joystick"]
 [ext_resource type="Script" path="res://scripts/world_grid.gd" id="6_grid"]
 [ext_resource type="PackedScene" path="res://scenes/city_marker.tscn" id="7_city"]
+[ext_resource type="PackedScene" path="res://scenes/city_hub.tscn" id="8_hub"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -72,11 +73,13 @@ horizontal_alignment = 1
 [node name="Subtitle" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.73, 0.79, 0.78, 1)
 theme_override_font_sizes/font_size = 20
-text = "Godot Migration M2-01 — 40K World and Two Cities"
+text = "Godot Migration M2-02 — City Hub Foundation"
 horizontal_alignment = 1
 
 [node name="Scope" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.55, 0.65, 0.63, 1)
 theme_override_font_sizes/font_size = 15
-text = "City A is top-left; walk east along the top edge to City B"
+text = "Stand in City A or B and press E to enter"
 horizontal_alignment = 1
+
+[node name="CityHub" parent="." instance=ExtResource("8_hub")]
