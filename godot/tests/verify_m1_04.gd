@@ -15,7 +15,7 @@ func _init() -> void:
 	player._clamp_to_world_boundary()
 	assert(player.global_position == WorldBoundary.BOUNDS.position + Player.BOUNDARY_MIN_OFFSET)
 
-	player.global_position = Vector2(5000.0, 5000.0)
+	player.global_position = Vector2(50000.0, 50000.0)
 	player._clamp_to_world_boundary()
 	assert(player.global_position == WorldBoundary.BOUNDS.end - Player.BOUNDARY_MAX_OFFSET)
 

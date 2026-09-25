@@ -1,31 +1,29 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=8 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
 [ext_resource type="Script" path="res://scripts/world_boundary.gd" id="3_boundary"]
 [ext_resource type="PackedScene" path="res://scenes/obstacle.tscn" id="4_obstacle"]
 [ext_resource type="PackedScene" path="res://scenes/touch_joystick.tscn" id="5_joystick"]
+[ext_resource type="Script" path="res://scripts/world_grid.gd" id="6_grid"]
+[ext_resource type="PackedScene" path="res://scenes/city_marker.tscn" id="7_city"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
 
-[node name="WorldReference" type="Node2D" parent="."]
-position = Vector2(640, 500)
-
-[node name="HorizontalGuide" type="Polygon2D" parent="WorldReference"]
-polygon = PackedVector2Array(-2000, -2, 2000, -2, 2000, 2, -2000, 2)
-color = Color(0.12, 0.2, 0.2, 1)
-
-[node name="VerticalGuide" type="Polygon2D" parent="WorldReference"]
-polygon = PackedVector2Array(-2, -2000, 2, -2000, 2, 2000, -2, 2000)
-color = Color(0.12, 0.2, 0.2, 1)
-
-[node name="OriginMarker" type="Polygon2D" parent="WorldReference"]
-polygon = PackedVector2Array(0, -20, 20, 0, 0, 20, -20, 0)
-color = Color(0.24, 0.36, 0.34, 1)
+[node name="WorldGrid" type="Node2D" parent="."]
+script = ExtResource("6_grid")
 
 [node name="WorldBoundary" type="Node2D" parent="."]
 script = ExtResource("3_boundary")
+
+[node name="Cities" type="Node2D" parent="."]
+
+[node name="CityA" parent="Cities" instance=ExtResource("7_city")]
+city_id = "A"
+
+[node name="CityB" parent="Cities" instance=ExtResource("7_city")]
+city_id = "B"
 
 [node name="Actors" type="Node2D" parent="."]
 y_sort_enabled = true
@@ -34,11 +32,11 @@ y_sort_enabled = true
 position = Vector2(950, 500)
 
 [node name="UpperObstacle" parent="Actors" instance=ExtResource("4_obstacle")]
-position = Vector2(640, 140)
+position = Vector2(640, 900)
 rotation = 1.5708
 
 [node name="Player" parent="Actors" instance=ExtResource("2_player")]
-position = Vector2(640, 500)
+position = Vector2(420, 500)
 touch_joystick_path = NodePath("../../TouchControls/Joystick")
 
 [node name="TouchControls" parent="." instance=ExtResource("5_joystick")]
@@ -74,11 +72,11 @@ horizontal_alignment = 1
 [node name="Subtitle" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.73, 0.79, 0.78, 1)
 theme_override_font_sizes/font_size = 20
-text = "Godot Migration M1-08 — World Portrait Orientation"
+text = "Godot Migration M2-01 — 40K World and Two Cities"
 horizontal_alignment = 1
 
 [node name="Scope" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.55, 0.65, 0.63, 1)
 theme_override_font_sizes/font_size = 15
-text = "Drag on the left half of the screen, or use W A S D, to move"
+text = "City A is top-left; walk east along the top edge to City B"
 horizontal_alignment = 1
