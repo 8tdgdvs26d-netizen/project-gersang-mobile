@@ -19,3 +19,10 @@ const CITY_ANCHORS := {
 }
 const ACTIVE_CITY_IDS := ["A", "B"]
 const RESERVED_CITY_IDS := ["C", "D"]
+
+## Where the player reappears in the world after leaving each active city:
+## beside the city on the A-B route, outside its entry trigger and collision.
+const CITY_RETURN_POINTS := {
+	"A": Vector2(540.0, 200.0),
+	"B": Vector2(39460.0, 200.0),
+}

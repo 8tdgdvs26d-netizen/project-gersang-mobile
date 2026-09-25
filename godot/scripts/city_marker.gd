@@ -24,6 +24,15 @@ func is_player_inside() -> bool:
 	return _player_inside
 
 
+## Direct geometric check of a body rectangle against the trigger circle.
+## The Area2D overlap only updates a few physics frames after a teleport,
+## so entry also checks where the player actually is right now.
+func trigger_overlaps(rect: Rect2) -> bool:
+	var radius := (($TriggerShape as CollisionShape2D).shape as CircleShape2D).radius
+	var closest := global_position.clamp(rect.position, rect.end)
+	return closest.distance_to(global_position) <= radius
+
+
 func _on_body_entered(body: Node2D) -> void:
 	if body is Player:
 		_player_inside = true
