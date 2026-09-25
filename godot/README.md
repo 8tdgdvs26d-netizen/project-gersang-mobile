@@ -5,7 +5,23 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
-M2-02 City Hub Foundation builds on the accepted M2-01 40K world and two corner cities:
+M2-03 Six Test Goods and Cargo Data Foundation builds on the accepted M2-02 city hub foundation:
+
+- six prototype goods (`test_good_01` … `test_good_06`) in one data source,
+  `scripts/goods_catalog.gd`; unit sizes and base values are TEST VALUES only,
+  not a formal economy balance or formal goods names
+- `scripts/cargo.gd`: a UI-independent cargo model with a prototype
+  `CARGO_CAPACITY` of 20 cargo units, where used capacity = Σ quantity × unit size
+- validated add/remove (unknown goods, non-positive or non-integer quantities and
+  overflow are rejected; removing to zero deletes the entry)
+- six-goods inventory support: all six goods can be held together within capacity
+- the cargo is session state owned by `scripts/main.gd`, so World ↔ City
+  transitions preserve it (it resets only when the game restarts; no disk save yet)
+- the City Hub shows a developer-only `Cargo: used / 20` line
+- the goods catalog is global: both active cities carry all six goods and there
+  are no per-city prices yet, so no per-city availability layer is needed
+
+M2-02 City Hub Foundation (accepted):
 
 - World → City A/B trigger → explicit Enter → shared Prototype City Hub → Leave →
   correct world return
@@ -58,15 +74,16 @@ Earlier accepted foundations:
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M2-02 city hub foundation ready`
+`Myrial: Unwritten M2-03 six goods and cargo foundation ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m2_02.gd`
+`godot --headless --path godot --script res://tests/verify_m2_03.gd`
 
 ## Deliberately not included
 
-M2-02 does not add markets, goods, buy/sell, cargo, money, storage, city facilities,
+M2-03 does not add buy/sell, money, pricing, price differences, market stock or UI,
+balancing, cargo item-list UI, save/load, storage, city facilities,
 NPCs, formal city content, a touch Enter button, gameplay for cities C and D, roads, minimap, fast travel, terrain features, battle mode, landscape battle orientation, runtime orientation switching,
 tap-to-move, pathfinding, sprint, dodge, interaction or combat buttons,
 multi-touch gestures, haptics, safe-area layout, final HUD art, camera smoothing, camera
