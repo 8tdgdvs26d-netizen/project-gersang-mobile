@@ -1,9 +1,10 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
 [ext_resource type="Script" path="res://scripts/world_boundary.gd" id="3_boundary"]
 [ext_resource type="PackedScene" path="res://scenes/obstacle.tscn" id="4_obstacle"]
+[ext_resource type="PackedScene" path="res://scenes/touch_joystick.tscn" id="5_joystick"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -38,6 +39,9 @@ rotation = 1.5708
 
 [node name="Player" parent="Actors" instance=ExtResource("2_player")]
 position = Vector2(640, 500)
+touch_joystick_path = NodePath("../../TouchControls/Joystick")
+
+[node name="TouchControls" parent="." instance=ExtResource("5_joystick")]
 
 [node name="Interface" type="CanvasLayer" parent="."]
 layer = -1
@@ -70,11 +74,11 @@ horizontal_alignment = 1
 [node name="Subtitle" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.73, 0.79, 0.78, 1)
 theme_override_font_sizes/font_size = 20
-text = "Godot Migration M1-06 — Y-Sort and Occlusion"
+text = "Godot Migration M1-07 — Mobile Touch Movement"
 horizontal_alignment = 1
 
 [node name="Scope" type="Label" parent="Interface/Content/Status"]
 theme_override_colors/font_color = Color(0.55, 0.65, 0.63, 1)
 theme_override_font_sizes/font_size = 15
-text = "Move above and below blocks to verify visual depth"
+text = "Drag on the left half of the screen, or use W A S D, to move"
 horizontal_alignment = 1
