@@ -5,7 +5,19 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
-M1-08 World Portrait Orientation builds on the accepted M1-07 mobile touch movement:
+M2-01 40K World and Two Corner Cities builds on the accepted M1-08 world portrait orientation:
+
+- a 40,000 × 40,000 square world (0 ≤ x, y ≤ 40,000) defined in `scripts/world_layout.gd`
+- four approved city anchors: A (200, 200) and B (39,800, 200) are active prototype
+  markers; C (200, 39,800) and D (39,800, 39,800) are reserved coordinates only
+- `scenes/city_marker.tscn`: a placeholder city footprint, label and `Area2D` entry
+  trigger that reports when the player is inside (no city content yet)
+- player spawn at (420, 500), just outside City A and with City A on screen
+- a lightweight line grid (`scripts/world_grid.gd`) as the only orientation aid
+- A → B is 39,600 units, about 180 seconds at the unchanged 220 units/second
+
+Earlier accepted foundations:
+
 
 - `project.godot` with a 720 × 1280 portrait base viewport and Compatibility renderer
 - handheld orientation locked to portrait for iPhone
@@ -15,7 +27,6 @@ M1-08 World Portrait Orientation builds on the accepted M1-07 mobile touch movem
 - free, normalized eight-direction movement using W, A, S, and D
 - an exported `move_speed` setting, defaulting to 220 pixels per second
 - a `Camera2D` owned by the player so the viewport follows its movement
-- minimal world reference guides used only to make camera movement observable
 - one shared rectangular world boundary used by both movement and its visual guide
 - player clamping that keeps the full placeholder body inside that boundary
 - matching player and obstacle collision shapes using Godot's 2D physics
@@ -32,15 +43,16 @@ M1-08 World Portrait Orientation builds on the accepted M1-07 mobile touch movem
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M1-08 world portrait orientation ready`
+`Myrial: Unwritten M2-01 40K world and two corner cities ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m1_08.gd`
+`godot --headless --path godot --script res://tests/verify_m2_01.gd`
 
 ## Deliberately not included
 
-M1-08 does not add battle mode, landscape battle orientation, runtime orientation switching,
+M2-01 does not add city hubs or interiors, gameplay for cities C and D, markets, goods,
+cargo, money, roads, minimap, fast travel, terrain features, battle mode, landscape battle orientation, runtime orientation switching,
 tap-to-move, pathfinding, sprint, dodge, interaction or combat buttons,
 multi-touch gestures, haptics, safe-area layout, final HUD art, camera smoothing, camera
 limits or shake, complex obstacle shapes, transparency effects, cities, economy, combat, monsters, online systems,

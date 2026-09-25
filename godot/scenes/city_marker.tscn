@@ -1,0 +1,46 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/city_marker.gd" id="1_city"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_trigger"]
+radius = 240.0
+
+[node name="CityMarker" type="Area2D"]
+collision_layer = 0
+script = ExtResource("1_city")
+
+[node name="Footprint" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(-120, -120, 120, -120, 120, 120, -120, 120)
+color = Color(0.88, 0.75, 0.36, 0.18)
+
+[node name="Outline" type="Line2D" parent="."]
+points = PackedVector2Array(-120, -120, 120, -120, 120, 120, -120, 120, -120, -120)
+width = 4.0
+default_color = Color(0.88, 0.75, 0.36, 0.8)
+
+[node name="CenterMarker" type="Polygon2D" parent="."]
+polygon = PackedVector2Array(0, -16, 16, 0, 0, 16, -16, 0)
+color = Color(0.88, 0.75, 0.36, 0.8)
+
+[node name="TriggerShape" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_trigger")
+
+[node name="NameLabel" type="Label" parent="."]
+offset_left = -180.0
+offset_top = -172.0
+offset_right = 180.0
+offset_bottom = -132.0
+theme_override_colors/font_color = Color(0.88, 0.75, 0.36, 1)
+theme_override_font_sizes/font_size = 28
+text = "City"
+horizontal_alignment = 1
+
+[node name="EnterLabel" type="Label" parent="."]
+offset_left = -180.0
+offset_top = 132.0
+offset_right = 180.0
+offset_bottom = 168.0
+theme_override_colors/font_color = Color(0.73, 0.79, 0.78, 1)
+theme_override_font_sizes/font_size = 22
+text = "Enter City"
+horizontal_alignment = 1
