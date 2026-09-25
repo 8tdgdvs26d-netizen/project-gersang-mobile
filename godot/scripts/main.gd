@@ -3,7 +3,9 @@ extends Node2D
 ## Minimal world/city state controller. The world scene stays loaded; entering
 ## a city pauses world movement and shows the shared City Hub overlay.
 
-const BOOTSTRAP_VERSION := "M2-04"
+const BOOTSTRAP_VERSION := "M2-05A"
+## Each market button press trades exactly one unit.
+const MARKET_TRADE_QUANTITY := 1
 
 var current_city_id := ""
 ## Session-owned player cargo. World/city transitions never reset it;
@@ -16,6 +18,7 @@ var _city_markers := {}
 @onready var _player := $Actors/Player as Player
 @onready var _joystick := $TouchControls/Joystick as TouchJoystick
 @onready var _city_hub := $CityHub as CityHub
+@onready var _enter_city_button := $EnterControls/EnterCityButton as Button
 
 
 func _ready() -> void:
@@ -23,7 +26,15 @@ func _ready() -> void:
 		if child is CityMarker and child.city_id in WorldLayout.ACTIVE_CITY_IDS:
 			_city_markers[child.city_id] = child
 	_city_hub.leave_requested.connect(leave_city)
-	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " money and buy/sell core ready")
+	_city_hub.buy_requested.connect(_on_market_buy_requested)
+	_city_hub.sell_requested.connect(_on_market_sell_requested)
+	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
+	_update_enter_city_button()
+	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " minimal player market with touch city entry ready")
+
+
+func _process(_delta: float) -> void:
+	_update_enter_city_button()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -44,16 +55,22 @@ func try_enter_city() -> bool:
 	return false
 
 
-func enter_city(city_id: String) -> bool:
+## The single entry rule shared by the E key, the touch button and its visibility.
+func can_enter_city(city_id: String) -> bool:
 	if is_in_city() or not _city_markers.has(city_id):
 		return false
 	var marker := _city_markers[city_id] as CityMarker
-	if not (marker.is_player_inside() and marker.trigger_overlaps(_player_body_rect())):
+	return marker.is_player_inside() and marker.trigger_overlaps(_player_body_rect())
+
+
+func enter_city(city_id: String) -> bool:
+	if not can_enter_city(city_id):
 		return false
 	current_city_id = city_id
 	_set_world_active(false)
 	_city_hub.open(city_id)
 	_refresh_hub_summary()
+	_update_enter_city_button()
 	return true
 
 
@@ -65,6 +82,7 @@ func leave_city() -> bool:
 	_city_hub.close()
 	_player.global_position = WorldLayout.CITY_RETURN_POINTS[city_id]
 	_set_world_active(true)
+	_update_enter_city_button()
 	return true
 
 
@@ -86,9 +104,35 @@ func sell_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	return result
 
 
+## Touch Enter City is only another way to request the normal entry path.
+func _on_enter_city_button_pressed() -> void:
+	try_enter_city()
+
+
+## Shows the touch Enter City button only in the world and only while an
+## active city can actually be entered from where the player stands.
+func _update_enter_city_button() -> void:
+	var enterable := false
+	for city_id in _city_markers:
+		if can_enter_city(city_id):
+			enterable = true
+	_enter_city_button.visible = enterable
+
+
 func _refresh_hub_summary() -> void:
 	_city_hub.show_money(wallet.get_balance())
 	_city_hub.show_cargo_summary(cargo.get_used_capacity(), Cargo.CARGO_CAPACITY)
+	_city_hub.show_market(cargo.get_items())
+
+
+func _on_market_buy_requested(good_id: String) -> void:
+	var result := buy_in_current_city(good_id, MARKET_TRADE_QUANTITY)
+	_city_hub.show_trade_feedback("buy", good_id, MARKET_TRADE_QUANTITY, result)
+
+
+func _on_market_sell_requested(good_id: String) -> void:
+	var result := sell_in_current_city(good_id, MARKET_TRADE_QUANTITY)
+	_city_hub.show_trade_feedback("sell", good_id, MARKET_TRADE_QUANTITY, result)
 
 
 func _player_body_rect() -> Rect2:
