@@ -5,6 +5,17 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
+M2-05A adds a minimal touch Enter City control to unblock mobile Market acceptance:
+
+- an `Enter City` touch button (`EnterControls/EnterCityButton` in `scenes/main.tscn`)
+  in the lower-right corner, outside the left-half joystick area and clear of every
+  City Hub button underneath it
+- the button only appears in the world while an active city can be entered from the
+  player's position, and hides inside the City Hub and at the safe return points
+- tapping it calls the same authoritative `try_enter_city()` path as the keyboard;
+  the E key is preserved, and both use one shared `can_enter_city()` rule
+- no auto-enter and no generic interaction framework
+
 M2-05 adds a minimal player-operable Market UI, building on the accepted M2-04 trade core:
 
 - the City Hub now shows a MARKET section directly (no extra navigation)
@@ -20,7 +31,7 @@ M2-05 adds a minimal player-operable Market UI, building on the accepted M2-04 t
 
 NOT INCLUDED in M2-05: formal UI or art, dynamic prices, market stock, quantity selection
 (Buy 10 / Buy Max / Sell All), trade history, save/load, formal balancing, and a touch way
-to enter a city from the world (entering still needs the E key).
+to enter a city from the world (added by M2-05A above).
 
 M2-04 Money, A/B Price Table and Buy/Sell Transaction Core (accepted):
 
@@ -108,11 +119,11 @@ Earlier accepted foundations:
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M2-05 minimal player market ready`
+`Myrial: Unwritten M2-05A minimal player market with touch city entry ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m2_05.gd`
+`godot --headless --path godot --script res://tests/verify_m2_05a.gd`
 
 ## Deliberately not included
 
