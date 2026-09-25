@@ -4,6 +4,16 @@ const APPROVED_PRICES := {
 	"A": {"test_good_01": 80, "test_good_02": 180, "test_good_03": 420, "test_good_04": 900, "test_good_05": 2100, "test_good_06": 3600},
 	"B": {"test_good_01": 120, "test_good_02": 300, "test_good_03": 650, "test_good_04": 1250, "test_good_05": 1700, "test_good_06": 4300},
 }
+## M2-07 supersedes the M2-05 same-price rule: the market shows a buy price of
+## ceil(reference x 1.05) and a sell (buyback) price of floor(reference x 0.95).
+const BUY_PRICES := {
+	"A": {"test_good_01": 84, "test_good_02": 189, "test_good_03": 441, "test_good_04": 945, "test_good_05": 2205, "test_good_06": 3780},
+	"B": {"test_good_01": 126, "test_good_02": 315, "test_good_03": 683, "test_good_04": 1313, "test_good_05": 1785, "test_good_06": 4515},
+}
+const BUYBACK_PRICES := {
+	"A": {"test_good_01": 76, "test_good_02": 171, "test_good_03": 399, "test_good_04": 855, "test_good_05": 1995, "test_good_06": 3420},
+	"B": {"test_good_01": 114, "test_good_02": 285, "test_good_03": 617, "test_good_04": 1187, "test_good_05": 1615, "test_good_06": 4085},
+}
 const APPROVED_SIZES := {"test_good_01": 1, "test_good_02": 1, "test_good_03": 2, "test_good_04": 2, "test_good_05": 3, "test_good_06": 4}
 const PORTRAIT_RECT := Rect2(0.0, 0.0, 720.0, 1280.0)
 const STRESS_PRESSES := 300
@@ -60,7 +70,10 @@ func _verify_architecture() -> void:
 		_check(not hub_source.contains(forbidden), "Market UI must not touch trade state directly (%s)" % forbidden)
 	for literal in ["test_good_0", "PRICES", "2100", "3600", "4300", "1700", "1250", "650"]:
 		_check(not hub_source.contains(literal), "Market UI must not hold its own goods or price data (%s)" % literal)
-	_check(hub_source.contains("GoodsCatalog.get_ids()") and hub_source.contains("MarketPrices.get_price("), "Market UI must read GoodsCatalog and MarketPrices")
+	# M2-07: the UI now only displays the market quotes it is given.
+	for forbidden in ["MarketPrices", "MarketRules", "MarketState", "105", "95", "ceil", "floor"]:
+		_check(not hub_source.contains(forbidden), "Market UI must not read or compute prices itself (%s)" % forbidden)
+	_check(hub_source.contains("GoodsCatalog.get_ids()") and hub_source.contains("func show_market(quotes"), "Market UI must read GoodsCatalog and display the given quotes")
 
 	var main_source := FileAccess.get_file_as_string("res://scripts/main.gd")
 	_check(main_source.contains("TradeService.buy(") and main_source.contains("TradeService.sell("), "TradeService must remain the transaction authority")
@@ -78,10 +91,10 @@ func _verify_display(city_id: String) -> void:
 	for good_id in GoodsCatalog.get_ids():
 		var texts := _hub.get_market_row_texts(good_id)
 		_check(texts.get("name") == GoodsCatalog.get_good(good_id)["display_name"], "%s row must show its display name" % good_id)
-		_check(_hub.get_market_button(good_id, "buy") != null and _hub.get_market_button(good_id, "buy").text == "Buy 1", "%s row must have Buy 1" % good_id)
-		_check(_hub.get_market_button(good_id, "sell") != null and _hub.get_market_button(good_id, "sell").text == "Sell 1", "%s row must have Sell 1" % good_id)
+		_check(_hub.get_market_button(good_id, "buy") != null and _hub.get_market_button(good_id, "buy").text == "買入 1", "%s row must have Buy 1" % good_id)
+		_check(_hub.get_market_button(good_id, "sell") != null and _hub.get_market_button(good_id, "sell").text == "賣出 1", "%s row must have Sell 1" % good_id)
 	_check(_ui_matches_model(), "City %s market must match prices, holdings, money and cargo" % city_id)
-	_check(_hub.get_city_label_text() == "[ City %s ]" % city_id, "Market must show the current city %s" % city_id)
+	_check(_hub.get_city_label_text() == "【%s 城】" % city_id, "Market must show the current city %s" % city_id)
 
 
 func _verify_layout() -> void:
@@ -108,24 +121,25 @@ func _verify_buy_and_sell_ui() -> void:
 		var before_money: int = _main.wallet.get_balance()
 		var before_items: Dictionary = _main.cargo.get_items()
 		await _click(_hub.get_market_button(good_id, "buy"), false)
-		var price: int = APPROVED_PRICES["A"][good_id]
-		_check(_main.wallet.get_balance() == before_money - price, "One Buy 1 press on %s must cost exactly one A price" % good_id)
+		var price: int = BUY_PRICES["A"][good_id]
+		_check(_main.wallet.get_balance() == before_money - price, "One Buy 1 press on %s must cost exactly one A buy price" % good_id)
 		var expected_items := before_items.duplicate()
 		expected_items[good_id] = before_items.get(good_id, 0) + 1
 		_check(_main.cargo.get_items() == expected_items, "Buy 1 on %s must add exactly one of that good only" % good_id)
 		_check(_ui_matches_model(), "Money, cargo and held must refresh after buying %s" % good_id)
-		_check(_hub.get_feedback_text() == "Bought 1 %s for %d" % [GoodsCatalog.get_good(good_id)["display_name"], price], "Buy feedback for %s" % good_id)
+		_check(_hub.get_feedback_text() == "已買入 1 件%s，支付 %d" % [GoodsCatalog.get_good(good_id)["display_name"], price], "Buy feedback for %s" % good_id)
 
 	for good_id in GoodsCatalog.get_ids():
 		var before_money: int = _main.wallet.get_balance()
 		var before_held: int = _main.cargo.get_quantity(good_id)
 		await _click(_hub.get_market_button(good_id, "sell"), true)
-		var price: int = APPROVED_PRICES["A"][good_id]
-		_check(_main.wallet.get_balance() == before_money + price, "One Sell 1 touch on %s must earn exactly one A price" % good_id)
+		var price: int = BUYBACK_PRICES["A"][good_id]
+		_check(_main.wallet.get_balance() == before_money + price, "One Sell 1 touch on %s must earn exactly one A buyback price" % good_id)
 		_check(_main.cargo.get_quantity(good_id) == before_held - 1, "Sell 1 on %s must remove exactly one" % good_id)
 		_check(_ui_matches_model(), "Money, cargo and held must refresh after selling %s" % good_id)
-		_check(_hub.get_feedback_text() == "Sold 1 %s for %d" % [GoodsCatalog.get_good(good_id)["display_name"], price], "Sell feedback for %s" % good_id)
-	_check(_main.wallet.get_balance() == 10000 and _main.cargo.is_empty(), "Buying and selling each good once in A must round-trip")
+		_check(_hub.get_feedback_text() == "已賣出 1 件%s，收入 %d" % [GoodsCatalog.get_good(good_id)["display_name"], price], "Sell feedback for %s" % good_id)
+	# M2-07: a same-city round trip now always loses the spread (8+18+42+90+210+360).
+	_check(_main.wallet.get_balance() == 10000 - 728 and _main.cargo.is_empty(), "Buying and selling each good once in A must lose exactly the spread")
 
 
 func _verify_failures() -> void:
@@ -133,75 +147,76 @@ func _verify_failures() -> void:
 	await _reset_session_in("A")
 	var snapshot := _snapshot()
 	await _click(_hub.get_market_button("test_good_02", "sell"), false)
-	_check(_hub.get_feedback_text() == "Not enough goods", "Selling an unheld good must say Not enough goods")
+	_check(_hub.get_feedback_text() == "持有貨物不足", "Selling an unheld good must say Not enough goods")
 	_check(_snapshot() == snapshot and _ui_matches_model(), "Failed sell must leave model and UI unchanged")
 
-	# Not enough cargo space: fill with 10 x good 3 (20 units, 4200 money).
+	# Not enough cargo space: fill with 10 x good 3 (20 units, 4410 money).
 	for press in range(10):
 		await _click(_hub.get_market_button("test_good_03", "buy"), false)
-	_check(_main.cargo.get_used_capacity() == 20 and _main.wallet.get_balance() == 5800, "Ten good 3 buys must fill the cargo")
+	_check(_main.cargo.get_used_capacity() == 20 and _main.wallet.get_balance() == 5590, "Ten good 3 buys must fill the cargo")
 	snapshot = _snapshot()
 	await _click(_hub.get_market_button("test_good_01", "buy"), false)
-	_check(_hub.get_feedback_text() == "Not enough cargo space", "Buying into a full cargo must say Not enough cargo space")
+	_check(_hub.get_feedback_text() == "貨物容量不足", "Buying into a full cargo must say Not enough cargo space")
 	_check(_snapshot() == snapshot and _ui_matches_model(), "Failed full-cargo buy must leave model and UI unchanged")
 
 	# Not enough money: sell down, then spend to below the good 5 price.
 	await _reset_session_in("A")
 	for press in range(4):
 		await _click(_hub.get_market_button("test_good_05", "buy"), false)
-	_check(_main.wallet.get_balance() == 10000 - 8400, "Four good 5 buys must leave 1600")
+	_check(_main.wallet.get_balance() == 10000 - 8820, "Four good 5 buys must leave 1180")
 	snapshot = _snapshot()
 	await _click(_hub.get_market_button("test_good_05", "buy"), false)
-	_check(_hub.get_feedback_text() == "Not enough money", "Buying without enough money must say Not enough money")
+	_check(_hub.get_feedback_text() == "金錢不足", "Buying without enough money must say Not enough money")
 	_check(_snapshot() == snapshot and _ui_matches_model(), "Failed money buy must leave model and UI unchanged")
 
 	# The market stays usable after failures.
 	await _click(_hub.get_market_button("test_good_01", "buy"), false)
-	_check(_hub.get_feedback_text() == "Bought 1 Test Good 1 for 80" and _main.cargo.get_quantity("test_good_01") == 1, "Player must be able to keep trading after a failure")
+	_check(_hub.get_feedback_text() == "已買入 1 件測試商品一，支付 84" and _main.cargo.get_quantity("test_good_01") == 1, "Player must be able to keep trading after a failure")
 	_check(_ui_matches_model(), "UI must stay consistent after recovering from failures")
 
 
 func _verify_a_to_b_loop() -> void:
 	await _reset_session_in("A")
-	_check(_hub.get_money_label_text() == "Money: 10000" and _hub.get_cargo_label_text() == "Cargo: 0 / 20", "A must start at 10000 money and 0 / 20 cargo")
-	_check(_hub.get_market_row_texts("test_good_01")["price"] == "Price 80", "A must show Good 1 at 80")
-	_check(_hub.get_market_row_texts("test_good_05")["price"] == "Price 2100", "A must show Good 5 at 2100")
+	_check(_hub.get_money_label_text() == "金錢：10000" and _hub.get_cargo_label_text() == "貨物容量：0 / 20", "A must start at 10000 money and 0 / 20 cargo")
+	_check(_hub.get_market_row_texts("test_good_01")["buy_price"] == "買入價 84" and _hub.get_market_row_texts("test_good_01")["buyback_price"] == "賣出價 76", "A must show Good 1 at 84 / 76")
+	_check(_hub.get_market_row_texts("test_good_05")["buy_price"] == "買入價 2205" and _hub.get_market_row_texts("test_good_05")["buyback_price"] == "賣出價 1995", "A must show Good 5 at 2205 / 1995")
 	var single_steps := true
 	for press in range(10):
 		await _click(_hub.get_market_button("test_good_01", "buy"), false)
-		if _main.wallet.get_balance() != 10000 - 80 * (press + 1) or _main.cargo.get_quantity("test_good_01") != press + 1:
+		if _main.wallet.get_balance() != 10000 - 84 * (press + 1) or _main.cargo.get_quantity("test_good_01") != press + 1:
 			single_steps = false
-	_check(single_steps, "Every Buy 1 click in A must move exactly 80 money and 1 good")
-	_check(_hub.get_money_label_text() == "Money: 9200" and _main.wallet.get_balance() == 9200, "Ten Buy 1 clicks in A must show 9200")
-	_check(_hub.get_cargo_label_text() == "Cargo: 10 / 20", "Ten buys must show Cargo 10 / 20")
-	_check(_hub.get_market_row_texts("test_good_01")["held"] == "Held 10", "Ten buys must show Held 10")
+	_check(single_steps, "Every Buy 1 click in A must move exactly 84 money and 1 good")
+	_check(_hub.get_money_label_text() == "金錢：9160" and _main.wallet.get_balance() == 9160, "Ten Buy 1 clicks in A must show 9160")
+	_check(_hub.get_cargo_label_text() == "貨物容量：10 / 20", "Ten buys must show Cargo 10 / 20")
+	_check(_hub.get_market_row_texts("test_good_01")["held"] == "持有 10", "Ten buys must show Held 10")
 
 	_check(_main.leave_city(), "Must leave A")
 	await _settle()
-	_check(_main.wallet.get_balance() == 9200 and _main.cargo.get_quantity("test_good_01") == 10, "A purchases must survive leaving")
-	_check(_hub.get_market_row_texts("test_good_01")["price"] == "", "Closed hub must not keep stale prices")
+	_check(_main.wallet.get_balance() == 9160 and _main.cargo.get_quantity("test_good_01") == 10, "A purchases must survive leaving")
+	_check(_hub.get_market_row_texts("test_good_01")["buy_price"] == "" and _hub.get_market_row_texts("test_good_01")["buyback_price"] == "", "Closed hub must not keep stale prices")
 
 	await _enter("B")
-	_check(_hub.get_money_label_text() == "Money: 9200", "B market must show carried money")
-	_check(_hub.get_cargo_label_text() == "Cargo: 10 / 20", "B market must show carried cargo")
-	_check(_hub.get_market_row_texts("test_good_01")["held"] == "Held 10", "B market must show carried holdings")
-	_check(_hub.get_market_row_texts("test_good_01")["price"] == "Price 120", "B must show Good 1 at 120")
-	_check(_hub.get_market_row_texts("test_good_05")["price"] == "Price 1700", "B must show Good 5 at 1700")
+	_check(_hub.get_money_label_text() == "金錢：9160", "B market must show carried money")
+	_check(_hub.get_cargo_label_text() == "貨物容量：10 / 20", "B market must show carried cargo")
+	_check(_hub.get_market_row_texts("test_good_01")["held"] == "持有 10", "B market must show carried holdings")
+	_check(_hub.get_market_row_texts("test_good_01")["buy_price"] == "買入價 126" and _hub.get_market_row_texts("test_good_01")["buyback_price"] == "賣出價 114", "B must show Good 1 at 126 / 114")
+	_check(_hub.get_market_row_texts("test_good_05")["buy_price"] == "買入價 1785" and _hub.get_market_row_texts("test_good_05")["buyback_price"] == "賣出價 1615", "B must show Good 5 at 1785 / 1615")
 	var stale := false
 	for good_id in GoodsCatalog.get_ids():
-		if _hub.get_market_row_texts(good_id)["price"] != "Price %d" % APPROVED_PRICES["B"][good_id]:
+		if _hub.get_market_row_texts(good_id)["buy_price"] != "買入價 %d" % BUY_PRICES["B"][good_id] \
+				or _hub.get_market_row_texts(good_id)["buyback_price"] != "賣出價 %d" % BUYBACK_PRICES["B"][good_id]:
 			stale = true
 	_check(not stale, "Entering B must replace every A price")
 	single_steps = true
 	for press in range(10):
 		await _click(_hub.get_market_button("test_good_01", "sell"), true)
-		if _main.wallet.get_balance() != 9200 + 120 * (press + 1) or _main.cargo.get_quantity("test_good_01") != 9 - press \
-				or _hub.get_market_row_texts("test_good_01")["held"] != "Held %d" % (9 - press):
+		if _main.wallet.get_balance() != 9160 + 114 * (press + 1) or _main.cargo.get_quantity("test_good_01") != 9 - press \
+				or _hub.get_market_row_texts("test_good_01")["held"] != "持有 %d" % (9 - press):
 			single_steps = false
-	_check(single_steps, "Every Sell 1 touch in B must move exactly 120 money and 1 good, and refresh Held")
-	_check(_hub.get_money_label_text() == "Money: 10400" and _main.wallet.get_balance() == 10400, "Ten Sell 1 touches in B must show 10400")
-	_check(_hub.get_cargo_label_text() == "Cargo: 0 / 20" and _hub.get_market_row_texts("test_good_01")["held"] == "Held 0", "Selling all must show Cargo 0 / 20 and Held 0")
-	_check(_main.wallet.get_balance() - Wallet.STARTING_MONEY == 400, "A to B Good 1 loop must profit +400")
+	_check(single_steps, "Every Sell 1 touch in B must move exactly 114 money and 1 good, and refresh Held")
+	_check(_hub.get_money_label_text() == "金錢：10300" and _main.wallet.get_balance() == 10300, "Ten Sell 1 touches in B must show 10300")
+	_check(_hub.get_cargo_label_text() == "貨物容量：0 / 20" and _hub.get_market_row_texts("test_good_01")["held"] == "持有 0", "Selling all must show Cargo 0 / 20 and Held 0")
+	_check(_main.wallet.get_balance() - Wallet.STARTING_MONEY == 300, "A to B Good 1 loop must profit +300")
 
 
 # --- Stress ------------------------------------------------------------------
@@ -230,20 +245,20 @@ func _verify_stress() -> void:
 		var bits := seed >> 8
 		var good_id: String = ids[bits % ids.size()]
 		var is_buy := (bits >> 4) % 2 == 0
-		var price: int = APPROVED_PRICES[city_id][good_id]
+		var price: int = BUY_PRICES[city_id][good_id] if is_buy else BUYBACK_PRICES[city_id][good_id]
 		var money_before: int = _main.wallet.get_balance()
 		var expected_reason := ""
 		if is_buy:
 			if _model_used(model_cargo) + APPROVED_SIZES[good_id] > 20:
-				expected_reason = "Not enough cargo space"
+				expected_reason = "貨物容量不足"
 			elif price > model_money:
-				expected_reason = "Not enough money"
+				expected_reason = "金錢不足"
 			else:
 				model_money -= price
 				model_cargo[good_id] = model_cargo.get(good_id, 0) + 1
 		else:
 			if model_cargo.get(good_id, 0) < 1:
-				expected_reason = "Not enough goods"
+				expected_reason = "持有貨物不足"
 			else:
 				model_money += price
 				model_cargo[good_id] -= 1
@@ -262,7 +277,7 @@ func _verify_stress() -> void:
 		if not _ui_matches_model():
 			ui_breaks += 1
 		var name: String = GoodsCatalog.get_good(good_id)["display_name"]
-		var expected_feedback := expected_reason if not ok else "%s 1 %s for %d" % ["Bought" if is_buy else "Sold", name, price]
+		var expected_feedback := expected_reason if not ok else ("已買入 1 件%s，支付 %d" if is_buy else "已賣出 1 件%s，收入 %d") % [name, price]
 		if _hub.get_feedback_text() != expected_feedback:
 			feedback_breaks += 1
 	_check(model_breaks == 0, "Stress: session state must match the reference model on all %d presses (%d breaks)" % [STRESS_PRESSES, model_breaks])
@@ -299,17 +314,20 @@ func _verify_leave_and_movement() -> void:
 
 func _ui_matches_model() -> bool:
 	var city_id: String = _main.current_city_id
-	if _hub.get_money_label_text() != "Money: %d" % _main.wallet.get_balance():
+	if _hub.get_money_label_text() != "金錢：%d" % _main.wallet.get_balance():
 		return false
-	if _hub.get_cargo_label_text() != "Cargo: %d / 20" % _main.cargo.get_used_capacity():
+	if _hub.get_cargo_label_text() != "貨物容量：%d / 20" % _main.cargo.get_used_capacity():
 		return false
 	for good_id in GoodsCatalog.get_ids():
 		var texts := _hub.get_market_row_texts(good_id)
-		if texts.get("price") != "Price %d" % MarketPrices.get_price(city_id, good_id):
+		var quote: Dictionary = _main.market.get_quote(city_id, good_id)
+		if texts.get("buy_price") != "買入價 %d" % quote["buy_price"] or texts.get("buyback_price") != "賣出價 %d" % quote["buyback_price"]:
 			return false
-		if texts.get("price") != "Price %d" % APPROVED_PRICES[city_id][good_id]:
+		if texts.get("buy_price") != "買入價 %d" % BUY_PRICES[city_id][good_id] or texts.get("buyback_price") != "賣出價 %d" % BUYBACK_PRICES[city_id][good_id]:
 			return false
-		if texts.get("held") != "Held %d" % _main.cargo.get_quantity(good_id):
+		if texts.get("held") != "持有 %d" % _main.cargo.get_quantity(good_id):
+			return false
+		if texts.get("stock") != "庫存 %d" % quote["stock"]:
 			return false
 	return true
 
@@ -370,6 +388,7 @@ func _reset_session_in(city_id: String) -> void:
 		await _settle()
 	_main.wallet = Wallet.new()
 	_main.cargo = Cargo.new()
+	_main.market = MarketState.create_default()
 	await _enter(city_id)
 
 

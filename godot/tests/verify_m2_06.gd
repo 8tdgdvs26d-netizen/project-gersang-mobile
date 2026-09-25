@@ -8,6 +8,16 @@ const APPROVED_PRICES := {
 	"A": {"test_good_01": 80, "test_good_02": 180, "test_good_03": 420, "test_good_04": 900, "test_good_05": 2100, "test_good_06": 3600},
 	"B": {"test_good_01": 120, "test_good_02": 300, "test_good_03": 650, "test_good_04": 1250, "test_good_05": 1700, "test_good_06": 4300},
 }
+## M2-07 supersedes the M2-06 same-price trades: players buy at
+## ceil(reference x 1.05) and sell at floor(reference x 0.95).
+const BUY_PRICES := {
+	"A": {"test_good_01": 84, "test_good_02": 189, "test_good_03": 441, "test_good_04": 945, "test_good_05": 2205, "test_good_06": 3780},
+	"B": {"test_good_01": 126, "test_good_02": 315, "test_good_03": 683, "test_good_04": 1313, "test_good_05": 1785, "test_good_06": 4515},
+}
+const BUYBACK_PRICES := {
+	"A": {"test_good_01": 76, "test_good_02": 171, "test_good_03": 399, "test_good_04": 855, "test_good_05": 1995, "test_good_06": 3420},
+	"B": {"test_good_01": 114, "test_good_02": 285, "test_good_03": 617, "test_good_04": 1187, "test_good_05": 1615, "test_good_06": 4085},
+}
 const APPROVED_SIZES := {"test_good_01": 1, "test_good_02": 1, "test_good_03": 2, "test_good_04": 2, "test_good_05": 3, "test_good_06": 4}
 const STRESS_STEPS := 320
 
@@ -93,7 +103,7 @@ func _verify_trade_triggers() -> void:
 	_check(not main.sell_in_current_city("test_good_01", 1)["success"] and not FileAccess.file_exists(TEST_SAVE), "A failed first sell must not create a save")
 
 	_check(main.buy_in_current_city("test_good_02", 2)["success"], "Buy must succeed")
-	_check(_saved() == {"money": 9640, "cargo": {"test_good_02": 2}}, "Successful buy must write money and cargo")
+	_check(_saved() == {"money": 9622, "cargo": {"test_good_02": 2}}, "Successful buy must write money and cargo")
 
 	var before := _read(TEST_SAVE)
 	for attempt in [["test_good_06", 3], ["bad_good", 1], ["test_good_01", 0], ["test_good_01", -2], ["test_good_01", 1.5], ["test_good_01", 25]]:
@@ -102,10 +112,10 @@ func _verify_trade_triggers() -> void:
 	for attempt in [["test_good_02", 3], ["test_good_05", 1], ["bad_good", 1], ["test_good_02", 0], ["test_good_02", -1]]:
 		main.sell_in_current_city(attempt[0], attempt[1])
 		_check(_read(TEST_SAVE) == before, "Failed sell %s must not change the save" % str(attempt))
-	_check(main.wallet.get_balance() == 9640 and main.cargo.get_items() == {"test_good_02": 2}, "Failed trades must not change runtime state")
+	_check(main.wallet.get_balance() == 9622 and main.cargo.get_items() == {"test_good_02": 2}, "Failed trades must not change runtime state")
 
 	_check(main.sell_in_current_city("test_good_02", 2)["success"], "Sell must succeed")
-	_check(_saved() == {"money": 10000, "cargo": {}}, "Successful sell must write money and cargo; same-city round trip stays zero-profit")
+	_check(_saved() == {"money": 9964, "cargo": {}}, "Successful sell must write money and cargo; the same-city round trip loses the spread")
 	await _destroy(main)
 
 
@@ -119,31 +129,31 @@ func _verify_full_journey() -> void:
 	var hub := first.get_node("CityHub") as CityHub
 	for press in range(10):
 		hub.get_market_button("test_good_01", "buy").pressed.emit()
-	_check(first.wallet.get_balance() == 9200 and first.cargo.get_quantity("test_good_01") == 10 and first.cargo.get_used_capacity() == 10, "Journey: A buy must reach 9200 / 10 units")
+	_check(first.wallet.get_balance() == 9160 and first.cargo.get_quantity("test_good_01") == 10 and first.cargo.get_used_capacity() == 10, "Journey: A buy must reach 9160 / 10 units")
 	var first_wallet: Wallet = first.wallet
 	var first_cargo: Cargo = first.cargo
 	await _destroy(first)
 
 	var second := await _new_main(TEST_SAVE)
 	_check(second.wallet != first_wallet and second.cargo != first_cargo, "Journey: restart must create new wallet and cargo objects")
-	_check(second.wallet.get_balance() == 9200, "Journey restart #1: money must be restored to 9200")
+	_check(second.wallet.get_balance() == 9160, "Journey restart #1: money must be restored to 9160")
 	_check(second.cargo.get_quantity("test_good_01") == 10 and second.cargo.get_used_capacity() == 10, "Journey restart #1: cargo must be restored to 10")
 	_check((second.get_node("Actors/Player") as Player).global_position == SPAWN, "Restart must use the normal world spawn, not a saved position")
 	_check(second.current_city_id == "" and not (second.get_node("CityHub") as CityHub).is_open(), "Restart must not restore the city or hub state")
 	await _enter(second, "B")
 	var hub_b := second.get_node("CityHub") as CityHub
-	_check(hub_b.get_money_label_text() == "Money: 9200", "Market must show restored money")
-	_check(hub_b.get_cargo_label_text() == "Cargo: 10 / 20", "Market must show restored cargo capacity")
-	_check(hub_b.get_market_row_texts("test_good_01")["held"] == "Held 10", "Market must show restored held quantity")
+	_check(hub_b.get_money_label_text() == "金錢：9160", "Market must show restored money")
+	_check(hub_b.get_cargo_label_text() == "貨物容量：10 / 20", "Market must show restored cargo capacity")
+	_check(hub_b.get_market_row_texts("test_good_01")["held"] == "持有 10", "Market must show restored held quantity")
 	for press in range(10):
 		hub_b.get_market_button("test_good_01", "sell").pressed.emit()
-	_check(second.wallet.get_balance() == 10400 and second.cargo.is_empty(), "Journey: B sell must reach 10400 / 0")
+	_check(second.wallet.get_balance() == 10300 and second.cargo.is_empty(), "Journey: B sell must reach 10300 / 0")
 	await _destroy(second)
 
 	var third := await _new_main(TEST_SAVE)
-	_check(third.wallet.get_balance() == 10400, "Journey restart #2: money must be restored to 10400")
+	_check(third.wallet.get_balance() == 10300, "Journey restart #2: money must be restored to 10300")
 	_check(third.cargo.is_empty() and third.cargo.get_used_capacity() == 0, "Journey restart #2: cargo must be restored empty")
-	_check(third.wallet.get_balance() - Wallet.STARTING_MONEY == 400, "Journey: saved profit must be +400")
+	_check(third.wallet.get_balance() - Wallet.STARTING_MONEY == 300, "Journey: saved profit must be +300")
 	await _destroy(third)
 
 
@@ -172,7 +182,7 @@ func _verify_invalid_saves() -> void:
 		['{"money": 9200, "cargo": {"test_good_06": 6}}', "L over capacity (24 units)"],
 		['{"money": 9200, "cargo": {"test_good_01": 10, "test_good_05": 4}}', "L2 over capacity mixed (22 units)"],
 		['{"money": 9200, "cargo": {"test_good_01": 3, "unknown": 1}}', "M valid money + invalid cargo"],
-		['{"version": 2, "money": 9200, "cargo": {}}', "N incompatible version"],
+		['{"version": 3, "money": 9200, "cargo": {}}', "N incompatible version"],
 		['{"money": 9200, "cargo": {}, "position": [1, 2]}', "O unexpected field"],
 	]
 	for case in cases:
@@ -188,7 +198,7 @@ func _verify_invalid_saves() -> void:
 	var main := await _new_main(TEST_SAVE)
 	await _enter(main, "A")
 	_check(main.buy_in_current_city("test_good_01", 1)["success"], "Trading must work after an invalid save")
-	_check(_saved() == {"money": 9920, "cargo": {"test_good_01": 1}}, "A successful trade must write a fresh valid save over the invalid one")
+	_check(_saved() == {"money": 9916, "cargo": {"test_good_01": 1}}, "A successful trade must write a fresh valid save over the invalid one")
 	await _destroy(main)
 
 
@@ -196,9 +206,9 @@ func _verify_write_failure() -> void:
 	var main := await _new_main(UNWRITABLE_SAVE)
 	await _enter(main, "A")
 	var result: Dictionary = main.buy_in_current_city("test_good_01", 2)
-	_check(result["success"] and main.wallet.get_balance() == 9840 and main.cargo.get_quantity("test_good_01") == 2, "A failed save write must not roll back a successful trade")
+	_check(result["success"] and main.wallet.get_balance() == 9832 and main.cargo.get_quantity("test_good_01") == 2, "A failed save write must not roll back a successful trade")
 	_check(not FileAccess.file_exists(UNWRITABLE_SAVE), "The unwritable save must not exist")
-	_check(main.sell_in_current_city("test_good_01", 2)["success"] and main.wallet.get_balance() == 10000, "Trading must keep working after a failed write")
+	_check(main.sell_in_current_city("test_good_01", 2)["success"] and main.wallet.get_balance() == 9984, "Trading must keep working after a failed write")
 	await _destroy(main)
 
 
@@ -249,7 +259,7 @@ func _verify_stress() -> void:
 				var held := model_cargo.keys()
 				held.sort()
 				good_id = held[(bits >> 12) % held.size()]
-			var price: int = APPROVED_PRICES[city_id].get(good_id, 0)
+			var price: int = (BUY_PRICES if is_buy else BUYBACK_PRICES)[city_id].get(good_id, 0)
 			var file_before := _read(TEST_SAVE)
 			var expected := false
 			if is_buy:
