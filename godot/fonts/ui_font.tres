@@ -1,0 +1,8 @@
+[gd_resource type="FontVariation" load_steps=2 format=3]
+
+[ext_resource type="FontFile" uid="uid://i2ua3yhhe084" path="res://fonts/NotoSansTC-Regular.otf" id="1_notosanstc"]
+
+[resource]
+base_font = ExtResource("1_notosanstc")
+spacing_top = -1
+spacing_bottom = -1

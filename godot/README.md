@@ -3,6 +3,16 @@
 This directory contains the Godot 4.x + GDScript migration project for
 《萬行誌：白手》.
 
+## UI font (Traditional Chinese)
+
+All UI text uses the bundled `fonts/NotoSansTC-Regular.otf` (Noto Sans TC, SIL Open
+Font License 1.1, see `fonts/OFL.txt`) through the project default font
+`gui/theme/custom_font = res://fonts/ui_font.tres`. That FontVariation only tightens line
+spacing by 1px so the existing portrait layout is unchanged. System font fallback is off,
+so iPhone never depends on device fonts, and desktop runs show the same glyphs. Keep the
+export filter on all resources (or include `fonts/`) so the font is packaged.
+`tests/verify_tc_font.gd` checks that every player-visible character is in the font.
+
 ## Current work package
 
 M2-09 Intercity Paid Passenger Transport lets the main character ride between the
