@@ -31,10 +31,12 @@ class FailingSellMarket extends MarketState:
 func _initialize() -> void:
 	_delete_save()
 	_verify_stats_and_items()
+	_verify_authoritative_costs()
 	_verify_transfer()
 	_verify_market_and_rollback()
 	_verify_over_capacity()
 	_verify_save_reload()
+	_verify_saved_balance_decoupling()
 	_verify_legacy_migration()
 	_verify_corrupt_save_safety()
 	_delete_save()
@@ -48,12 +50,22 @@ func _verify_stats_and_items() -> void:
 	var strong := CharacterStats.new(15)
 	_check(weak.get_max_capacity() == 15 and strong.get_max_capacity() == 25, "max capacity must come from the Strength interface")
 	_check(CharacterStats.PROTOTYPE_BASE_CAPACITY == 10 and CharacterStats.PROTOTYPE_CAPACITY_PER_STRENGTH == 1, "prototype capacity formula must be explicit parameters")
-	var inventory := CharacterInventory.new("hero", strong)
+	var inventory := CharacterInventory.new("hero", strong, Callable(self, "_general_test_cost"))
 	_check(inventory.add("test_good_03", 3), "three cost-2 goods must fit")
 	_check(inventory.get_quantity("test_good_03") == 3 and inventory.get_used_capacity() == 6, "stack display quantity must still cost quantity x capacity_cost")
-	_check(inventory.add("equipped_test_blade", 1, 7), "future equipped items must share the generic item model")
+	_check(inventory.add("equipped_test_blade", 1), "future equipped items must use the generic authoritative resolver")
 	_check(inventory.get_used_capacity() == 13 and inventory.get_capacity_cost("equipped_test_blade") == 7, "equipped placeholder must count toward the same capacity")
-	_check(not inventory.add("unknown_without_cost", 1), "unknown items without a capacity-cost interface must be rejected")
+	var default_inventory := CharacterInventory.new("hero", strong)
+	_check(not default_inventory.add("unknown_without_cost", 1), "unknown items without an authoritative capacity-cost interface must be rejected")
+
+
+func _verify_authoritative_costs() -> void:
+	var source_text := FileAccess.get_file_as_string("res://scripts/character_inventory.gd")
+	_check(not source_text.contains("capacity_cost: Variant = null"), "normal add/can_add must not expose a per-call capacity override")
+	var inventory := CharacterInventory.new("hero", CharacterStats.new(20))
+	_check(not inventory.restore_stacks({"test_good_06": {"quantity": 1, "capacity_cost": 1}}), "rollback restore must reject a fake lower capacity cost")
+	_check(inventory.restore_stacks({"test_good_06": {"quantity": 1, "capacity_cost": 4}}), "rollback restore must accept the authoritative capacity cost")
+	_check(inventory.get_used_capacity() == 4, "restored known good must use the authoritative catalog cost")
 
 
 func _verify_transfer() -> void:
@@ -67,6 +79,15 @@ func _verify_transfer() -> void:
 	var destination_before := destination.get_stacks()
 	_check(not source.transfer_to(destination, "test_good_05", 1), "transfer must reject when destination lacks capacity")
 	_check(source.get_stacks() == source_before and destination.get_stacks() == destination_before, "failed transfer must change neither inventory")
+
+	var light_source := CharacterInventory.new("source", CharacterStats.new(0), Callable(self, "_source_transfer_cost"))
+	var strict_destination := CharacterInventory.new("destination", CharacterStats.new(0), Callable(self, "_destination_transfer_cost"))
+	_check(light_source.add("transfer_probe", 1), "source resolver must allow the transfer probe at source cost")
+	_check(strict_destination.add("test_good_01", 7), "destination setup must leave only three capacity units")
+	var light_before := light_source.get_items()
+	var strict_before := strict_destination.get_items()
+	_check(not light_source.transfer_to(strict_destination, "transfer_probe", 1), "destination must price transfer capacity with its own authoritative resolver")
+	_check(light_source.get_items() == light_before and strict_destination.get_items() == strict_before, "authoritative-cost transfer rejection must be atomic")
 
 
 func _verify_market_and_rollback() -> void:
@@ -116,12 +137,34 @@ func _verify_save_reload() -> void:
 	var wallet := Wallet.new()
 	var market := MarketState.create_default()
 	_check(SaveStore.save(TEST_SAVE, wallet, inventory, market), "version 3 character inventory save must write")
+	var raw := _read_json()
+	var saved_stack: Dictionary = raw.get("character", {}).get("inventory", {}).get("items", {}).get("test_good_01", {})
+	_check(saved_stack == {"quantity": 25}, "version 3 save must persist quantity without freezing capacity balance data")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["inventory"] is CharacterInventory, "version 3 save must rebuild a CharacterInventory")
 	var restored: CharacterInventory = loaded["inventory"]
 	_check(restored.character_id == "hero" and restored.get_stats().get_strength() == 10, "save/reload must preserve character owner and Strength")
 	_check(restored.get_quantity("test_good_01") == 25 and restored.is_over_capacity(), "save/reload must preserve valid over-capacity items without deletion")
 	_check(not restored.add("test_good_02", 1), "reloaded over-capacity inventory must still reject additions")
+
+
+func _verify_saved_balance_decoupling() -> void:
+	var early_v3 := {
+		"version": 3,
+		"money": 8765,
+		"character": {
+			"id": "hero",
+			"stats": {"strength": 10},
+			"inventory": {"items": {"test_good_01": {"quantity": 2, "capacity_cost": 99}}},
+		},
+		"market": MarketState.create_default().get_snapshot(),
+	}
+	_write_json(early_v3)
+	var loaded := SaveStore.load_session(TEST_SAVE)
+	_check(not loaded.is_empty(), "an otherwise-valid early v3 save must not become corrupt because saved balance cost differs")
+	var restored: CharacterInventory = loaded.get("inventory")
+	_check(restored != null and restored.get_quantity("test_good_01") == 2, "balance-decoupled load must preserve saved quantity")
+	_check(restored != null and restored.get_capacity_cost("test_good_01") == GoodsCatalog.get_capacity_cost("test_good_01") and restored.get_used_capacity() == 2, "load must apply the current authoritative catalog capacity cost")
 
 
 func _verify_legacy_migration() -> void:
@@ -131,14 +174,42 @@ func _verify_legacy_migration() -> void:
 	_check(not loaded.is_empty() and loaded["wallet"].get_balance() == 4321, "legacy Cargo save must keep money")
 	var migrated: CharacterInventory = loaded["inventory"]
 	_check(migrated.character_id == "player" and migrated.get_quantity("test_good_03") == 4, "legacy Cargo must migrate into the player CharacterInventory")
-	_check(migrated.get_used_capacity() == 8 and migrated.get_max_capacity() == 20, "legacy migration must preserve placeholder costs and use prototype Strength capacity")
+	_check(migrated.get_used_capacity() == 8 and migrated.get_max_capacity() == 20, "legacy migration must preserve quantities and apply current placeholder costs with prototype Strength capacity")
 	_check(int(_read_json().get("version", 0)) == 2, "loading legacy data must not rewrite the source save")
 
 
 func _verify_corrupt_save_safety() -> void:
-	_write_text('{"version":3,"money":1,"character":{"id":"hero","stats":{"strength":10},"inventory":{"items":{"test_good_01":{"quantity":2,"capacity_cost":99}}}},"market":{}}')
-	_check(SaveStore.load_session(TEST_SAVE).is_empty(), "corrupt v3 payload must be rejected as a whole")
+	var corrupt := {
+		"version": 3,
+		"money": 1,
+		"character": {
+			"id": "hero",
+			"stats": {"strength": 10},
+			"inventory": {"items": {"unknown_item": {"quantity": 2}}},
+		},
+		"market": MarketState.create_default().get_snapshot(),
+	}
+	_write_json(corrupt)
+	_check(SaveStore.load_session(TEST_SAVE).is_empty(), "corrupt v3 payload with an unknown item must be rejected as a whole")
 	_check(_read_json().get("money") == 1, "rejected corrupt save must not be overwritten")
+
+
+func _general_test_cost(item_id: Variant) -> int:
+	if item_id == "equipped_test_blade":
+		return 7
+	return GoodsCatalog.get_capacity_cost(item_id)
+
+
+func _source_transfer_cost(item_id: Variant) -> int:
+	if item_id == "transfer_probe":
+		return 1
+	return GoodsCatalog.get_capacity_cost(item_id)
+
+
+func _destination_transfer_cost(item_id: Variant) -> int:
+	if item_id == "transfer_probe":
+		return 4
+	return GoodsCatalog.get_capacity_cost(item_id)
 
 
 func _write_json(data: Dictionary) -> void:
