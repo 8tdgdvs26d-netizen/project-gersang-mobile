@@ -1,9 +1,13 @@
 class_name MarketPrices
 extends RefCounted
 
-## Fixed prototype prices for the two active cities. Buying and selling use
-## the same city price (no spread, tax or fee). All values are TEST VALUES,
-## not a formal economy balance.
+## Prototype market baseline for the two active cities: the reference price of
+## every good plus the starting and target stock. MarketState copies these into
+## the runtime market; MarketRules turns a reference price into buy and buyback
+## prices. All values are TEST VALUES, not a formal economy balance.
+
+const INITIAL_STOCK := 100
+const TARGET_STOCK := 100
 
 const PRICES := {
 	"A": {
@@ -29,7 +33,7 @@ static func has_price(city_id: Variant, good_id: Variant) -> bool:
 	return get_price(city_id, good_id) > 0
 
 
-## Returns the positive int price, or 0 for unknown or reserved cities,
+## Returns the baseline reference price, or 0 for unknown or reserved cities,
 ## unknown goods and missing or invalid entries.
 static func get_price(city_id: Variant, good_id: Variant) -> int:
 	if typeof(city_id) != TYPE_STRING or not city_id in WorldLayout.ACTIVE_CITY_IDS:

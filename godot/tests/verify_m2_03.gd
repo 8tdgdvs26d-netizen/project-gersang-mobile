@@ -1,12 +1,12 @@
 extends SceneTree
 
 const APPROVED_GOODS := [
-	["test_good_01", "Test Good 1", 1, 100],
-	["test_good_02", "Test Good 2", 1, 250],
-	["test_good_03", "Test Good 3", 2, 500],
-	["test_good_04", "Test Good 4", 2, 1000],
-	["test_good_05", "Test Good 5", 3, 2000],
-	["test_good_06", "Test Good 6", 4, 4000],
+	["test_good_01", "測試商品一", 1, 100],
+	["test_good_02", "測試商品二", 1, 250],
+	["test_good_03", "測試商品三", 2, 500],
+	["test_good_04", "測試商品四", 2, 1000],
+	["test_good_05", "測試商品五", 3, 2000],
+	["test_good_06", "測試商品六", 4, 4000],
 ]
 const INVALID_IDS := ["", "test_good_07", "TEST_GOOD_01", "unknown", null, 1, 3.5]
 const INVALID_QUANTITIES := [0, -1, -20, 1.5, NAN, INF, "2", null]
@@ -269,7 +269,7 @@ func _verify_transitions() -> void:
 	await _settle()
 	_check(main.try_enter_city() and main.current_city_id == "A", "Must enter City A")
 	_check(main.cargo == cargo and cargo.get_items() == expected, "Cargo must remain after entering City A")
-	_check(hub.get_cargo_label_text() == "Cargo: 8 / 20", "City A hub must show the cargo debug summary")
+	_check(hub.get_cargo_label_text() == "貨物容量：8 / 20", "City A hub must show the cargo debug summary")
 	_check(main.leave_city(), "Must leave City A")
 	_check(main.cargo == cargo and cargo.get_items() == expected, "Cargo must remain after leaving City A")
 	await _settle()
@@ -278,7 +278,7 @@ func _verify_transitions() -> void:
 	await _settle()
 	_check(main.try_enter_city() and main.current_city_id == "B", "Must enter City B")
 	_check(main.cargo == cargo and cargo.get_items() == expected, "Cargo must remain after entering City B")
-	_check(hub.get_city_label_text() == "[ City B ]" and hub.get_cargo_label_text() == "Cargo: 8 / 20", "City B hub must show B and the same cargo")
+	_check(hub.get_city_label_text() == "【B 城】" and hub.get_cargo_label_text() == "貨物容量：8 / 20", "City B hub must show B and the same cargo")
 	_check(main.leave_city(), "Must leave City B")
 	_check(main.cargo == cargo and cargo.get_items() == expected and cargo.get_used_capacity() == 8, "Cargo must remain after leaving City B")
 	_check(player.global_position == WorldLayout.CITY_RETURN_POINTS["B"], "City Hub return point must be unchanged")

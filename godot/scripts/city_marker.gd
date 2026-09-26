@@ -14,7 +14,7 @@ var _player_inside := false
 
 func _ready() -> void:
 	position = WorldLayout.CITY_ANCHORS[city_id]
-	($NameLabel as Label).text = "City %s (prototype)" % city_id
+	($NameLabel as Label).text = "%s 城（原型）" % city_id
 	($EnterLabel as Label).visible = false
 	body_entered.connect(_on_body_entered)
 	body_exited.connect(_on_body_exited)

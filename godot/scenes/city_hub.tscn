@@ -32,19 +32,19 @@ horizontal_alignment = 1
 [node name="TitleLabel" type="Label" parent="Center/Content"]
 theme_override_colors/font_color = Color(0.73, 0.79, 0.78, 1)
 theme_override_font_sizes/font_size = 26
-text = "Prototype City Hub"
+text = "城市（原型）"
 horizontal_alignment = 1
 
 [node name="MarketLabel" type="Label" parent="Center/Content"]
 theme_override_colors/font_color = Color(0.88, 0.75, 0.36, 1)
 theme_override_font_sizes/font_size = 28
-text = "MARKET"
+text = "市場"
 horizontal_alignment = 1
 
 [node name="NoteLabel" type="Label" parent="Center/Content"]
 theme_override_colors/font_color = Color(0.55, 0.65, 0.63, 1)
 theme_override_font_sizes/font_size = 16
-text = "Developer prototype — buy or sell 1 at a time"
+text = "開發原型：每次買入或賣出 1 件"
 horizontal_alignment = 1
 
 [node name="MoneyLabel" type="Label" parent="Center/Content"]
@@ -70,4 +70,4 @@ theme_override_constants/separation = 12
 custom_minimum_size = Vector2(240, 72)
 size_flags_horizontal = 4
 theme_override_font_sizes/font_size = 24
-text = "Leave City"
+text = "離開城市"

@@ -5,6 +5,30 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
+M2-07 Basic Market Foundation turns the fixed price table into a stateful city market:
+
+- per-city Market State (`scripts/market_state.gd`): each active city × good has its own
+  reference price, current stock and target stock; the market belongs to the world, not
+  the player (`main.gd` only holds it for the session)
+- baseline values in `scripts/market_prices.gd`: the M2-04 A/B test prices become the
+  prototype reference prices, with prototype initial stock 100 and target stock 100
+- prototype 5% spread in `scripts/market_rules.gd`: players buy at ceil(reference × 1.05)
+  and sell at floor(reference × 0.95), computed with integer maths (for example 80 → 84 / 76,
+  1250 → 1313 / 1187); buy price is always above the buyback price
+- buying lowers the city's stock and is rejected when the stock is too low (no partial
+  fill); selling raises it and may go above the target stock
+- a same-city buy-then-sell always loses money (for example A Good 1 × 10: −80)
+- `TradeService` takes the market, uses its quote, and keeps every trade atomic across
+  money, cargo and stock
+- market persistence: the save (version 2) also stores every city × good reference price,
+  stock and target stock; an M2-06 save without a market keeps its money and cargo and gets
+  a fresh default market; a market that is present but invalid rejects the whole save
+- player-facing rule: all text players see is Traditional Chinese; the City Hub market
+  shows 買入價 / 賣出價 / 持有 / 庫存 with 買入 1 / 賣出 1, and goods show the placeholder
+  names 測試商品一 … 六 (internal ids stay `test_good_01` … `06`)
+- NOT YET implemented: dynamic pricing (reference prices never move with trades), supply and
+  demand, restocking, market ticks, partial fills, formal balancing and formal goods names
+
 M2-06 adds minimal local persistence (prototype persistence only):
 
 - saves only the player's Money and Cargo to `user://myrial_save.json` as small JSON
@@ -135,11 +159,11 @@ Earlier accepted foundations:
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M2-06 minimal money and cargo persistence ready`
+`Myrial: Unwritten M2-07 basic market foundation ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m2_06.gd`
+`godot --headless --path godot --script res://tests/verify_m2_07.gd`
 
 ## Deliberately not included
 

@@ -54,7 +54,7 @@ func _verify_regression_baseline() -> void:
 
 
 func _verify_architecture() -> void:
-	_check(_button != null and _button.text == "Enter City", "Main scene must contain the Enter City touch button")
+	_check(_button != null and _button.text == "進入城市", "Main scene must contain the Enter City touch button (text 進入城市)")
 	_check(InputMap.has_action("interact"), "Keyboard interact (E) action must still exist")
 	_check(_button.pressed.get_connections().size() == 1, "Enter City button must be connected exactly once")
 	_check(_hub.leave_requested.get_connections().size() == 1 and _hub.buy_requested.get_connections().size() == 1 and _hub.sell_requested.get_connections().size() == 1, "Hub signals must stay connected once")
@@ -106,10 +106,10 @@ func _verify_touch_enter_a_with_market() -> void:
 	_check(_button.visible, "Button must be visible before touching in A")
 	await _touch(_button_center())
 	_check(_main.current_city_id == "A", "Touch Enter in A must enter City A")
-	_check(_hub.is_open() and _hub.get_city_label_text() == "[ City A ]", "City A Hub must open")
+	_check(_hub.is_open() and _hub.get_city_label_text() == "【A 城】", "City A Hub must open")
 	_check(not _button.visible, "Button must hide once inside the city")
 	_check(not _player.is_physics_processing() and not _joystick.is_processing_input(), "World controls must pause inside the city")
-	_check(_hub.get_market_row_texts("test_good_01").get("price") == "Price 80" and _hub.get_market_good_ids().size() == 6, "Market must be available after touch entry")
+	_check(_hub.get_market_row_texts("test_good_01").get("buy_price") == "買入價 84" and _hub.get_market_good_ids().size() == 6, "Market must be available after touch entry")
 
 	# A second touch on the same spot must not enter again or trigger anything.
 	var money: int = _main.wallet.get_balance()
@@ -118,8 +118,8 @@ func _verify_touch_enter_a_with_market() -> void:
 
 	# M2-05 Buy still works after touch entry.
 	await _touch(_control_center(_hub.get_market_button("test_good_01", "buy")))
-	_check(_main.wallet.get_balance() == 9920 and _main.cargo.get_quantity("test_good_01") == 1, "Touch Buy 1 must still work after touch entry")
-	_check(_hub.get_money_label_text() == "Money: 9920" and _hub.get_cargo_label_text() == "Cargo: 1 / 20", "Market must refresh after touch buy")
+	_check(_main.wallet.get_balance() == 9916 and _main.cargo.get_quantity("test_good_01") == 1, "Touch Buy 1 must still work after touch entry")
+	_check(_hub.get_money_label_text() == "金錢：9916" and _hub.get_cargo_label_text() == "貨物容量：1 / 20", "Market must refresh after touch buy")
 
 	await _touch(_control_center(_hub.get_node("Center/Content/LeaveButton") as Control))
 	_check(not _main.is_in_city() and not _hub.is_open(), "Leave City must return to the world")
@@ -127,17 +127,17 @@ func _verify_touch_enter_a_with_market() -> void:
 	_check(not _button.visible, "Button must stay hidden right after leaving")
 	await _settle()
 	_check(not _button.visible, "Button must stay hidden at the safe return point")
-	_check(_main.wallet.get_balance() == 9920 and _main.cargo.get_quantity("test_good_01") == 1, "Leaving must keep money and cargo")
+	_check(_main.wallet.get_balance() == 9916 and _main.cargo.get_quantity("test_good_01") == 1, "Leaving must keep money and cargo")
 
 
 func _verify_touch_enter_b() -> void:
 	await _place(WorldLayout.CITY_B)
 	await _touch(_button_center())
-	_check(_main.current_city_id == "B" and _hub.get_city_label_text() == "[ City B ]", "Touch Enter in B must enter City B")
+	_check(_main.current_city_id == "B" and _hub.get_city_label_text() == "【B 城】", "Touch Enter in B must enter City B")
 	_check(not _button.visible, "Button must hide inside City B")
-	_check(_hub.get_market_row_texts("test_good_01").get("price") == "Price 120", "City B market must show B prices")
+	_check(_hub.get_market_row_texts("test_good_01").get("buy_price") == "買入價 126", "City B market must show B prices")
 	await _touch(_control_center(_hub.get_market_button("test_good_01", "sell")))
-	_check(_main.wallet.get_balance() == 9920 + 120 and _main.cargo.is_empty(), "Touch Sell 1 must still work in B")
+	_check(_main.wallet.get_balance() == 9916 + 114 and _main.cargo.is_empty(), "Touch Sell 1 must still work in B")
 	_check(_main.leave_city() and _player.global_position == WorldLayout.CITY_RETURN_POINTS["B"], "Leave B must use the City B return point")
 	await _settle()
 	_check(not _button.visible, "Button must stay hidden at the City B return point")

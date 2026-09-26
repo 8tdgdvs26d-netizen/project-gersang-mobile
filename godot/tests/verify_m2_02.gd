@@ -155,7 +155,7 @@ func _verify_repeated_cycles() -> void:
 		await _place(WorldLayout.CITY_ANCHORS[city_id])
 		var entered: bool = _main.try_enter_city()
 		var shown_ok: bool = _main.current_city_id == city_id and _hub.city_id == city_id \
-			and _hub.get_city_label_text() == "[ City %s ]" % city_id
+			and _hub.get_city_label_text() == "【%s 城】" % city_id
 		var left: bool = _main.leave_city()
 		var returned_ok: bool = _player.global_position == WorldLayout.CITY_RETURN_POINTS[city_id]
 		await _settle()
@@ -179,7 +179,7 @@ func _verify_hub_shows(city_id: String) -> void:
 	var other := "B" if city_id == "A" else "A"
 	_check(_hub.is_open(), "City Hub must be active after entering %s" % city_id)
 	_check(_hub.city_id == city_id, "Hub current city must be %s" % city_id)
-	_check(_hub.get_city_label_text() == "[ City %s ]" % city_id, "Hub must display City %s" % city_id)
+	_check(_hub.get_city_label_text() == "【%s 城】" % city_id, "Hub must display City %s" % city_id)
 	_check(not _hub.get_city_label_text().contains(other), "Hub for %s must not display City %s" % [city_id, other])
 
 
