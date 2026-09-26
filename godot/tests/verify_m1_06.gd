@@ -6,6 +6,7 @@ func _init() -> void:
 	assert(main_scene != null, "Main scene must load")
 
 	var main := main_scene.instantiate()
+	main.save_path = ""  # M2-09: entering a city now saves; never touch the real save
 	root.add_child(main)
 	var actors := main.get_node("Actors") as Node2D
 	var player := actors.get_node("Player") as CharacterBody2D

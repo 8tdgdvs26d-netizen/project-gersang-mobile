@@ -16,6 +16,7 @@ func _initialize() -> void:
 	var main_scene := load("res://scenes/main.tscn") as PackedScene
 	_check(main_scene != null, "Main scene must load")
 	var main := main_scene.instantiate()
+	main.save_path = ""  # M2-09: entering a city now saves; never touch the real save
 	root.add_child(main)
 	# Wait until the scene is inside the tree so _ready, areas and physics exist.
 	await physics_frame

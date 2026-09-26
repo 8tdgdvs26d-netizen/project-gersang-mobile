@@ -22,7 +22,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Content" type="VBoxContainer" parent="Center"]
-theme_override_constants/separation = 14
+theme_override_constants/separation = 12
 
 [node name="CityLabel" type="Label" parent="Center/Content"]
 theme_override_colors/font_color = Color(0.88, 0.75, 0.36, 1)
@@ -35,11 +35,21 @@ theme_override_font_sizes/font_size = 26
 text = "城市（原型）"
 horizontal_alignment = 1
 
-[node name="MarketLabel" type="Label" parent="Center/Content"]
-theme_override_colors/font_color = Color(0.88, 0.75, 0.36, 1)
-theme_override_font_sizes/font_size = 28
+[node name="FacilityTabs" type="HBoxContainer" parent="Center/Content"]
+size_flags_horizontal = 4
+theme_override_constants/separation = 16
+
+[node name="MarketTabButton" type="Button" parent="Center/Content/FacilityTabs"]
+custom_minimum_size = Vector2(180, 64)
+focus_mode = 0
+theme_override_font_sizes/font_size = 24
 text = "市場"
-horizontal_alignment = 1
+
+[node name="TransportTabButton" type="Button" parent="Center/Content/FacilityTabs"]
+custom_minimum_size = Vector2(180, 64)
+focus_mode = 0
+theme_override_font_sizes/font_size = 24
+text = "交通"
 
 [node name="NoteLabel" type="Label" parent="Center/Content"]
 theme_override_colors/font_color = Color(0.55, 0.65, 0.63, 1)
@@ -65,6 +75,24 @@ horizontal_alignment = 1
 
 [node name="MarketRows" type="VBoxContainer" parent="Center/Content"]
 theme_override_constants/separation = 12
+
+[node name="TransportRows" type="VBoxContainer" parent="Center/Content"]
+visible = false
+theme_override_constants/separation = 12
+
+[node name="TravelPanel" type="VBoxContainer" parent="Center/Content"]
+visible = false
+theme_override_constants/separation = 12
+
+[node name="DestinationLabel" type="Label" parent="Center/Content/TravelPanel"]
+theme_override_colors/font_color = Color(0.88, 0.75, 0.36, 1)
+theme_override_font_sizes/font_size = 32
+horizontal_alignment = 1
+
+[node name="RemainingLabel" type="Label" parent="Center/Content/TravelPanel"]
+theme_override_colors/font_color = Color(0.73, 0.79, 0.78, 1)
+theme_override_font_sizes/font_size = 26
+horizontal_alignment = 1
 
 [node name="LeaveButton" type="Button" parent="Center/Content"]
 custom_minimum_size = Vector2(240, 72)
