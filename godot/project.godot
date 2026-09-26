@@ -23,6 +23,10 @@ window/size/window_height_override=720
 window/stretch/mode="canvas_items"
 window/handheld/orientation=1
 
+[gui]
+
+theme/custom_font="res://fonts/ui_font.tres"
+
 [input]
 
 move_left={
