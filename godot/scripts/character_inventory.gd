@@ -3,13 +3,16 @@ extends RefCounted
 
 ## Per-character inventory model. Every carried item uses the same capacity
 ## rule, including items that a future Equipment system marks as equipped.
-## M2-08 only supplies the six test goods through GoodsCatalog; the optional
-## resolver is the extension point for equipment/material catalogs later.
+## Capacity cost is authoritative item-definition data: normal callers cannot
+## inject a cheaper cost per add/transfer. M2-08 supplies the six test goods
+## through GoodsCatalog; the optional resolver is the extension point for
+## equipment/material catalogs later.
 
 var character_id: String
 var _stats: CharacterStats
 var _capacity_cost_resolver: Callable
 ## item_id -> {"quantity": positive int, "capacity_cost": positive int}
+## capacity_cost is captured only from the authoritative resolver/catalog.
 var _items := {}
 
 
@@ -50,8 +53,8 @@ func is_over_capacity() -> bool:
 	return get_used_capacity() > get_max_capacity()
 
 
-func can_add(item_id: Variant, quantity: Variant, capacity_cost: Variant = null) -> bool:
-	var cost := _validated_cost(item_id, capacity_cost)
+func can_add(item_id: Variant, quantity: Variant) -> bool:
+	var cost := _resolve_capacity_cost(item_id)
 	if cost <= 0 or not _is_positive_int(quantity) or is_over_capacity():
 		return false
 	if _items.has(item_id) and _items[item_id]["capacity_cost"] != cost:
@@ -59,9 +62,9 @@ func can_add(item_id: Variant, quantity: Variant, capacity_cost: Variant = null)
 	return quantity <= get_remaining_capacity() / cost
 
 
-func add(item_id: Variant, quantity: Variant, capacity_cost: Variant = null) -> bool:
-	var cost := _validated_cost(item_id, capacity_cost)
-	if not can_add(item_id, quantity, cost):
+func add(item_id: Variant, quantity: Variant) -> bool:
+	var cost := _resolve_capacity_cost(item_id)
+	if not can_add(item_id, quantity):
 		return false
 	_items[item_id] = {"quantity": get_quantity(item_id) + quantity, "capacity_cost": cost}
 	return true
@@ -82,20 +85,21 @@ func remove(item_id: Variant, quantity: Variant) -> bool:
 	return true
 
 
-## Atomic model-level transfer. A rejected transfer changes neither inventory.
+## Atomic model-level transfer. The destination resolves its own authoritative
+## capacity cost; the source/caller cannot smuggle a cheaper cost across.
 func transfer_to(destination: CharacterInventory, item_id: Variant, quantity: Variant) -> bool:
 	if destination == null or destination == self or not can_remove(item_id, quantity):
 		return false
-	var cost := get_capacity_cost(item_id)
-	if not destination.can_add(item_id, quantity, cost):
+	if not destination.can_add(item_id, quantity):
 		return false
+	var source_cost := get_capacity_cost(item_id)
 	if not remove(item_id, quantity):
 		return false
-	if destination.add(item_id, quantity, cost):
+	if destination.add(item_id, quantity):
 		return true
 	# Defensive rollback for a future destination implementation that changes
 	# between can_add and add. This cannot fail because removal freed the space.
-	_restore_stack(item_id, quantity, cost)
+	_restore_stack(item_id, quantity, source_cost)
 	return false
 
 
@@ -119,31 +123,44 @@ func get_stacks() -> Dictionary:
 	return _items.duplicate(true)
 
 
-## Persistence-only restore path. It preserves a valid over-capacity state
-## without deleting items; normal add() remains blocked until capacity is legal.
+## Rollback-only snapshot restore. Any supplied capacity cost must still match
+## the authoritative resolver/catalog, so this path cannot inject fake weight.
+## It preserves a valid over-capacity state without deleting items.
 func restore_stacks(stacks: Dictionary) -> bool:
 	var restored := {}
 	for item_id in stacks:
 		if typeof(item_id) != TYPE_STRING or typeof(stacks[item_id]) != TYPE_DICTIONARY:
 			return false
 		var quantity: Variant = stacks[item_id].get("quantity")
-		var cost: Variant = stacks[item_id].get("capacity_cost")
-		if not _is_positive_int(quantity) or not _is_positive_int(cost):
+		var supplied_cost: Variant = stacks[item_id].get("capacity_cost")
+		var authoritative_cost := _resolve_capacity_cost(item_id)
+		if not _is_positive_int(quantity) or not _is_positive_int(supplied_cost) or authoritative_cost <= 0 \
+			or int(supplied_cost) != authoritative_cost:
 			return false
-		restored[item_id] = {"quantity": quantity, "capacity_cost": cost}
+		restored[item_id] = {"quantity": quantity, "capacity_cost": authoritative_cost}
 	_items = restored
 	return true
 
 
-func _validated_cost(item_id: Variant, supplied: Variant) -> int:
-	if typeof(item_id) != TYPE_STRING or item_id == "":
-		return 0
-	if supplied != null:
-		return supplied if _is_positive_int(supplied) else 0
-	return _resolve_capacity_cost(item_id)
+## Persistence-only restore path. Save files store quantities, not balance
+## values. Current authoritative item definitions are applied on load. Capacity
+## may end up over the current maximum; normal add() then remains blocked.
+func restore_items(quantities: Dictionary) -> bool:
+	var restored := {}
+	for item_id in quantities:
+		if typeof(item_id) != TYPE_STRING or item_id == "" or not _is_positive_int(quantities[item_id]):
+			return false
+		var cost := _resolve_capacity_cost(item_id)
+		if cost <= 0:
+			return false
+		restored[item_id] = {"quantity": quantities[item_id], "capacity_cost": cost}
+	_items = restored
+	return true
 
 
 func _resolve_capacity_cost(item_id: Variant) -> int:
+	if typeof(item_id) != TYPE_STRING or item_id == "":
+		return 0
 	if _capacity_cost_resolver.is_valid():
 		var value: Variant = _capacity_cost_resolver.call(item_id)
 		return value if _is_positive_int(value) else 0
