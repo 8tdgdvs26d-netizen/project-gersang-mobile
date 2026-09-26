@@ -2,9 +2,12 @@ class_name SaveStore
 extends RefCounted
 
 ## Prototype local persistence. Version 3 stores a character-owned inventory
-## and the Strength input used to derive max capacity. Legacy v1/v2 Cargo saves
-## remain readable and migrate in memory without rewriting the source file.
-## Loading validates the complete payload before returning any runtime object.
+## and the Strength input used to derive max capacity. Item capacity costs are
+## balance data and are deliberately NOT authoritative save data: current item
+## definitions are applied when rebuilding the inventory. Legacy v1/v2 Cargo
+## saves remain readable and migrate in memory without rewriting the source
+## file. Loading validates the complete payload before returning any runtime
+## object.
 
 const DEFAULT_PATH := "user://myrial_save.json"
 const VERSION := 3
@@ -15,17 +18,21 @@ const LEGACY_KEYS := ["version", "money", "cargo", "market"]
 const CHARACTER_KEYS := ["id", "stats", "inventory"]
 const STATS_KEYS := ["strength"]
 const INVENTORY_KEYS := ["items"]
-const STACK_KEYS := ["quantity", "capacity_cost"]
+const CURRENT_SAVED_STACK_KEYS := ["quantity"]
+const EARLY_V3_STACK_KEYS := ["quantity", "capacity_cost"]
 
 
 static func serialize(wallet: Wallet, inventory: CharacterInventory, market: MarketState) -> Dictionary:
+	var saved_items := {}
+	for item_id in inventory.get_items():
+		saved_items[item_id] = {"quantity": inventory.get_quantity(item_id)}
 	return {
 		"version": VERSION,
 		"money": wallet.get_balance(),
 		"character": {
 			"id": inventory.character_id,
 			"stats": {"strength": inventory.get_stats().get_strength()},
-			"inventory": {"items": inventory.get_stacks()},
+			"inventory": {"items": saved_items},
 		},
 		"market": market.get_snapshot(),
 	}
@@ -89,10 +96,10 @@ static func _validate_v3(data: Dictionary) -> Dictionary:
 	var strength := _to_int(stats["strength"])
 	if strength < 0 or strength > CharacterStats.MAX_STRENGTH:
 		return {}
-	var stacks: Variant = _valid_stacks(inventory["items"])
-	if stacks == null:
+	var items: Variant = _valid_saved_items(inventory["items"])
+	if items == null:
 		return {}
-	return {"money": money, "character_id": character["id"], "strength": strength, "items": stacks, "market": market}
+	return {"money": money, "character_id": character["id"], "strength": strength, "items": items, "market": market}
 
 
 static func _validate_legacy(data: Dictionary, version: int) -> Dictionary:
@@ -108,7 +115,7 @@ static func _validate_legacy(data: Dictionary, version: int) -> Dictionary:
 		market = _valid_market(data["market"])
 		if market == null:
 			return {}
-	var stacks := {}
+	var items := {}
 	var used := 0
 	for item_id in data["cargo"]:
 		if not GoodsCatalog.has_good(item_id):
@@ -118,31 +125,40 @@ static func _validate_legacy(data: Dictionary, version: int) -> Dictionary:
 		if quantity <= 0:
 			return {}
 		used += quantity * cost
-		stacks[item_id] = {"quantity": quantity, "capacity_cost": cost}
+		items[item_id] = quantity
 	# Preserve the original corrupt-save safety: legacy Cargo never legally held
 	# more than its fixed capacity, so an over-capacity legacy payload is invalid.
 	if used > Cargo.CARGO_CAPACITY:
 		return {}
-	return {"money": money, "character_id": "player", "strength": CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "items": stacks, "market": market}
+	return {"money": money, "character_id": "player", "strength": CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "items": items, "market": market}
 
 
-static func _valid_stacks(data: Variant) -> Variant:
+## Version 3 currently writes item_id -> {quantity}. Early unmerged M2-08 builds
+## briefly also wrote capacity_cost. Accept that shape for developer-save
+## compatibility, but ignore the saved cost completely. Capacity is balance
+## data and is resolved from the current authoritative item definition on load.
+static func _valid_saved_items(data: Variant) -> Variant:
 	if typeof(data) != TYPE_DICTIONARY:
 		return null
-	var stacks := {}
+	var items := {}
 	for item_id in data:
+		if typeof(item_id) != TYPE_STRING or item_id == "" or not GoodsCatalog.has_good(item_id):
+			return null
 		var stack: Variant = data[item_id]
-		if typeof(item_id) != TYPE_STRING or item_id == "" or typeof(stack) != TYPE_DICTIONARY \
-			or not _has_only_keys(stack, STACK_KEYS) or not stack.has_all(STACK_KEYS):
+		if typeof(stack) != TYPE_DICTIONARY:
+			return null
+		var allowed_keys := CURRENT_SAVED_STACK_KEYS
+		if stack.has("capacity_cost"):
+			allowed_keys = EARLY_V3_STACK_KEYS
+		if not _has_only_keys(stack, allowed_keys) or not stack.has("quantity"):
 			return null
 		var quantity := _to_int(stack["quantity"])
-		var cost := _to_int(stack["capacity_cost"])
-		if quantity <= 0 or cost <= 0:
+		if quantity <= 0:
 			return null
-		if GoodsCatalog.has_good(item_id) and cost != GoodsCatalog.get_capacity_cost(item_id):
+		if stack.has("capacity_cost") and _to_int(stack["capacity_cost"]) <= 0:
 			return null
-		stacks[item_id] = {"quantity": quantity, "capacity_cost": cost}
-	return stacks
+		items[item_id] = quantity
+	return items
 
 
 static func _valid_market(data: Variant) -> MarketState:
@@ -178,7 +194,7 @@ static func _rebuild(payload: Dictionary) -> Dictionary:
 		return {}
 	var stats := CharacterStats.new(payload["strength"])
 	var inventory := CharacterInventory.new(payload["character_id"], stats)
-	if not inventory.restore_stacks(payload["items"]):
+	if not inventory.restore_items(payload["items"]):
 		return {}
 	if wallet.get_balance() != payload["money"] or payload["market"] == null:
 		return {}
