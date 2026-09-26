@@ -98,9 +98,13 @@ func _verify_trade_triggers() -> void:
 	var main := await _new_main(TEST_SAVE)
 	await _enter(main, "A")
 
+	# M2-09 supersedes "no save before the first trade": entering a city now
+	# saves the location. Failed trades must still leave that save untouched.
+	var entered := _read(TEST_SAVE)
+	_check(_saved() == {"money": 10000, "cargo": {}}, "Entering a city saves the unchanged money and cargo with the location")
 	var rejected: Dictionary = main.buy_in_current_city("test_good_06", 3)
-	_check(not rejected["success"] and not FileAccess.file_exists(TEST_SAVE), "A failed first buy must not create a save")
-	_check(not main.sell_in_current_city("test_good_01", 1)["success"] and not FileAccess.file_exists(TEST_SAVE), "A failed first sell must not create a save")
+	_check(not rejected["success"] and _read(TEST_SAVE) == entered, "A failed first buy must not change the save")
+	_check(not main.sell_in_current_city("test_good_01", 1)["success"] and _read(TEST_SAVE) == entered, "A failed first sell must not change the save")
 
 	_check(main.buy_in_current_city("test_good_02", 2)["success"], "Buy must succeed")
 	_check(_saved() == {"money": 9622, "cargo": {"test_good_02": 2}}, "Successful buy must write money and cargo")
@@ -139,7 +143,8 @@ func _verify_full_journey() -> void:
 	_check(second.wallet.get_balance() == 9160, "Journey restart #1: money must be restored to 9160")
 	_check(second.cargo.get_quantity("test_good_01") == 10 and second.cargo.get_used_capacity() == 10, "Journey restart #1: cargo must be restored to 10")
 	_check((second.get_node("Actors/Player") as Player).global_position == SPAWN, "Restart must use the normal world spawn, not a saved position")
-	_check(second.current_city_id == "" and not (second.get_node("CityHub") as CityHub).is_open(), "Restart must not restore the city or hub state")
+	# M2-09 supersedes "restart never restores the city": the saved city A hub reopens.
+	_check(second.current_city_id == "A" and (second.get_node("CityHub") as CityHub).is_open(), "Restart must restore the saved City A hub")
 	await _enter(second, "B")
 	var hub_b := second.get_node("CityHub") as CityHub
 	_check(hub_b.get_money_label_text() == "金錢：9160", "Market must show restored money")
@@ -322,7 +327,14 @@ func _destroy(main: Node) -> void:
 	await process_frame
 
 
+## M2-09: a reopened game restores the saved city, so an already-open target
+## city counts as entered and another open city is left first.
 func _enter(main: Node, city_id: String) -> void:
+	if main.current_city_id == city_id:
+		_check((main.get_node("CityHub") as CityHub).is_open(), "Must be inside City %s" % city_id)
+		return
+	if main.is_in_city():
+		main.leave_city()
 	var player := main.get_node("Actors/Player") as Player
 	player.global_position = WorldLayout.CITY_ANCHORS[city_id]
 	await _settle()

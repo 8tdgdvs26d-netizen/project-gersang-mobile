@@ -5,6 +5,38 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
+M2-09 Intercity Paid Passenger Transport lets the main character ride between the
+two active cities for a fare. Transport carries people, never goods:
+
+- `TransportService` (UI-independent) validates the request, charges the fare through
+  `Wallet`, starts a journey and settles the arrival exactly once. It never receives
+  `CharacterInventory`, `CharacterStats`, `MarketState`, `Cargo` or any warehouse; goods
+  stay in the character's personal inventory and the vehicle adds no capacity
+- `TransportRoutes` is the single source of the A → B and B → A fare (300) and travel
+  time (90 s). These are PROTOTYPE PARAMETERS, not formal balance, and not the old
+  Phaser bus formula
+- `PlayerLocation` records WORLD / IN_CITY / TRAVELING, the current city (or the last
+  city left, whose return point is used after a reopen) and the journey (id, origin,
+  destination, start, arrival time, fare, status). Exact world coordinates are not saved
+- `TimeSource` is the only clock gameplay reads (local system time for now; tests use a
+  fixed, manually advanced clock)
+- City Hub facilities: 市場 / 交通 tabs. 交通 shows 目的地 / 車費 / 預計時間 and 乘搭.
+  During a journey the hub shows 旅途中 / 前往 X 城 / 預計抵達：N 秒; movement, city
+  entry/exit and trading are locked, and on arrival the destination hub opens directly
+- duplicate protection: each shown offer carries a request id, and a request id can
+  start at most one journey, so a double tap charges once and can never turn A → B
+  into an immediate B → A
+- rollback: if the journey cannot be created or saved after the charge, money and
+  location are restored and the player sees 無法儲存，乘搭已取消
+- save version 4 adds `location`; v1/v2/v3 saves still load at the normal world spawn.
+  Entering or leaving a city now also saves, so a reopen restores the city, the world
+  return point, or the journey (arriving immediately, once, if the ETA has passed)
+- PROTOTYPE LIMITATION: journeys have no encounters. Transport risk / encounter
+  interaction must be revisited when the Stage 3 Encounter system is integrated
+- NOT INCLUDED: freight, vehicle cargo/storage, warehouse, mercenary travel or roster,
+  stations, timetable, vehicle sprites/animation, rerouting, cancellation, refunds,
+  cities C/D, road network, formal fare/time balance
+
 M2-08 Character Inventory / Carrying Foundation replaces the player-global
 Cargo runtime model with a character-owned inventory foundation:
 
@@ -184,11 +216,11 @@ Earlier accepted foundations:
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M2-08 character inventory foundation ready`
+`Myrial: Unwritten M2-09 passenger transport ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m2_08.gd`
+`godot --headless --path godot --script res://tests/verify_m2_09.gd`
 
 ## Deliberately not included
 

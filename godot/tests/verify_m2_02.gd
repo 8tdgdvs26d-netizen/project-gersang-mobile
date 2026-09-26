@@ -16,6 +16,7 @@ func _initialize() -> void:
 	var main_scene := load("res://scenes/main.tscn") as PackedScene
 	_check(main_scene != null, "Main world scene must load")
 	_main = main_scene.instantiate()
+	_main.save_path = ""  # M2-09: entering a city now saves; never touch the real save
 	root.add_child(_main)
 	await _settle()
 

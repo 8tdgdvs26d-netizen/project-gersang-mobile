@@ -419,7 +419,8 @@ func _ui_matches(main: Node) -> bool:
 
 
 ## True when every visible label and button in the hub has no Latin letters,
-## apart from the placeholder city code in the city title.
+## apart from the placeholder city code in the city title and (M2-09) in the
+## transport destination label.
 func _player_text_is_chinese(hub: CityHub) -> bool:
 	var latin := RegEx.new()
 	latin.compile("[A-Za-z]")
@@ -431,6 +432,9 @@ func _player_text_is_chinese(hub: CityHub) -> bool:
 		var checked: String = text
 		if text == city_title:
 			checked = text.replace(hub.city_id, "")
+		for destination in hub.get_transport_destinations():
+			if text == "目的地：%s 城" % destination:
+				checked = text.replace(destination, "")
 		if latin.search(checked) != null:
 			push_error("Latin text in hub: %s" % text)
 			return false
@@ -519,7 +523,14 @@ func _destroy(main: Node) -> void:
 	await process_frame
 
 
+## M2-09: a reopened game restores the saved city, so an already-open target
+## city counts as entered and another open city is left first.
 func _enter(main: Node, city: String) -> void:
+	if main.current_city_id == city:
+		_check((main.get_node("CityHub") as CityHub).is_open(), "Must be inside City %s" % city)
+		return
+	if main.is_in_city():
+		main.leave_city()
 	var player := main.get_node("Actors/Player") as Player
 	player.global_position = WorldLayout.CITY_ANCHORS[city]
 	await _settle()
