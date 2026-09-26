@@ -3,14 +3,24 @@ extends Node2D
 ## Minimal world/city state controller. The world scene stays loaded; entering
 ## a city pauses world movement and shows the shared City Hub overlay.
 
-const BOOTSTRAP_VERSION := "M2-07"
+const BOOTSTRAP_VERSION := "M2-08"
 ## Each market button press trades exactly one unit.
 const MARKET_TRADE_QUANTITY := 1
 
 var current_city_id := ""
-## Session-owned player cargo. World/city transitions never reset it;
-## it only resets when the game restarts (no disk save yet).
-var cargo := Cargo.new()
+## Session-owned player character data. World/city transitions never reset it;
+## valid local saves restore it on startup.
+var character_stats := CharacterStats.new()
+var inventory := CharacterInventory.new("player", character_stats)
+## Temporary code-compatibility alias for pre-M2-08 callers and historical
+## regression scripts. Runtime trades and persistence use inventory directly.
+var cargo: CharacterInventory:
+	get:
+		return inventory
+	set(value):
+		inventory = value
+		if value != null:
+			character_stats = value.get_stats()
 ## Session-owned player money, with the same lifetime as the cargo.
 var wallet := Wallet.new()
 ## City market state (reference price, stock and target stock per city x good).
@@ -37,7 +47,7 @@ func _ready() -> void:
 	_city_hub.sell_requested.connect(_on_market_sell_requested)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	_update_enter_city_button()
-	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " basic market foundation ready")
+	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " character inventory foundation ready")
 
 
 func _process(_delta: float) -> void:
@@ -98,7 +108,7 @@ func leave_city() -> bool:
 func buy_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "total_value": 0, "reason": "not_in_city"}
-	var result := TradeService.buy(current_city_id, good_id, quantity, wallet, cargo, market)
+	var result := TradeService.buy(current_city_id, good_id, quantity, wallet, inventory, market)
 	if result["success"]:
 		_save_session()
 	_refresh_hub_summary()
@@ -108,7 +118,7 @@ func buy_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 func sell_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "total_value": 0, "reason": "not_in_city"}
-	var result := TradeService.sell(current_city_id, good_id, quantity, wallet, cargo, market)
+	var result := TradeService.sell(current_city_id, good_id, quantity, wallet, inventory, market)
 	if result["success"]:
 		_save_session()
 	_refresh_hub_summary()
@@ -121,7 +131,8 @@ func _load_saved_session() -> void:
 	var loaded := SaveStore.load_session(save_path)
 	if not loaded.is_empty():
 		wallet = loaded["wallet"]
-		cargo = loaded["cargo"]
+		inventory = loaded["inventory"]
+		character_stats = loaded["character_stats"]
 		market = loaded["market"]
 
 
@@ -130,7 +141,7 @@ func _load_saved_session() -> void:
 func _save_session() -> void:
 	if save_path == "":
 		return
-	if not SaveStore.save(save_path, wallet, cargo, market):
+	if not SaveStore.save(save_path, wallet, inventory, market):
 		push_warning("Myrial: could not write save file %s" % save_path)
 
 
@@ -151,11 +162,11 @@ func _update_enter_city_button() -> void:
 
 func _refresh_hub_summary() -> void:
 	_city_hub.show_money(wallet.get_balance())
-	_city_hub.show_cargo_summary(cargo.get_used_capacity(), Cargo.CARGO_CAPACITY)
+	_city_hub.show_cargo_summary(inventory.get_used_capacity(), inventory.get_max_capacity())
 	var quotes := {}
 	for good_id in GoodsCatalog.get_ids():
 		quotes[good_id] = market.get_quote(current_city_id, good_id)
-	_city_hub.show_market(quotes, cargo.get_items())
+	_city_hub.show_market(quotes, inventory.get_items())
 
 
 func _on_market_buy_requested(good_id: String) -> void:

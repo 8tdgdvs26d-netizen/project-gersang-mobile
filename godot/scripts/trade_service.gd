@@ -8,8 +8,8 @@ extends RefCounted
 
 
 ## Player buys from the city at the quote's buy price; market stock goes down.
-static func buy(city_id: Variant, good_id: Variant, quantity: Variant, wallet: Wallet, cargo: Cargo, market: MarketState) -> Dictionary:
-	if wallet == null or cargo == null or market == null:
+static func buy(city_id: Variant, good_id: Variant, quantity: Variant, wallet: Wallet, inventory: CharacterInventory, market: MarketState) -> Dictionary:
+	if wallet == null or inventory == null or market == null:
 		return _result(false, 0, "invalid_state")
 	var quote := market.get_quote(city_id, good_id)
 	if quote.is_empty() or quote["buy_price"] <= 0:
@@ -19,26 +19,28 @@ static func buy(city_id: Variant, good_id: Variant, quantity: Variant, wallet: W
 	if not market.can_remove_stock(city_id, good_id, quantity):
 		return _result(false, 0, "insufficient_market_stock")
 	# can_add bounds quantity by capacity, which also keeps price x quantity small.
-	if not cargo.can_add(good_id, quantity):
+	if not inventory.can_add(good_id, quantity):
 		return _result(false, 0, "insufficient_cargo_space")
 	var total: int = quote["buy_price"] * quantity
 	if not wallet.can_spend(total):
 		return _result(false, total, "insufficient_money")
+	var inventory_before := inventory.get_stacks()
 	if not wallet.spend(total):
 		return _result(false, total, "invalid_state")
-	if not cargo.add(good_id, quantity):
+	if not inventory.add(good_id, quantity):
 		wallet.add(total)
+		inventory.restore_stacks(inventory_before)
 		return _result(false, total, "invalid_state")
 	if not market.remove_stock(city_id, good_id, quantity):
-		cargo.remove(good_id, quantity)
+		inventory.restore_stacks(inventory_before)
 		wallet.add(total)
 		return _result(false, total, "invalid_state")
 	return _result(true, total, "")
 
 
 ## Player sells to the city at the quote's buyback price; market stock goes up.
-static func sell(city_id: Variant, good_id: Variant, quantity: Variant, wallet: Wallet, cargo: Cargo, market: MarketState) -> Dictionary:
-	if wallet == null or cargo == null or market == null:
+static func sell(city_id: Variant, good_id: Variant, quantity: Variant, wallet: Wallet, inventory: CharacterInventory, market: MarketState) -> Dictionary:
+	if wallet == null or inventory == null or market == null:
 		return _result(false, 0, "invalid_state")
 	var quote := market.get_quote(city_id, good_id)
 	if quote.is_empty() or quote["buyback_price"] <= 0:
@@ -46,19 +48,20 @@ static func sell(city_id: Variant, good_id: Variant, quantity: Variant, wallet: 
 	if typeof(quantity) != TYPE_INT or quantity <= 0:
 		return _result(false, 0, "invalid_quantity")
 	# can_remove bounds quantity by what is held, which keeps price x quantity small.
-	if not cargo.can_remove(good_id, quantity):
+	if not inventory.can_remove(good_id, quantity):
 		return _result(false, 0, "insufficient_cargo")
 	var total: int = quote["buyback_price"] * quantity
 	if not wallet.can_add(total) or not market.can_add_stock(city_id, good_id, quantity):
 		return _result(false, total, "invalid_state")
-	if not cargo.remove(good_id, quantity):
+	var inventory_before := inventory.get_stacks()
+	if not inventory.remove(good_id, quantity):
 		return _result(false, total, "invalid_state")
 	if not wallet.add(total):
-		cargo.add(good_id, quantity)
+		inventory.restore_stacks(inventory_before)
 		return _result(false, total, "invalid_state")
 	if not market.add_stock(city_id, good_id, quantity):
 		wallet.spend(total)
-		cargo.add(good_id, quantity)
+		inventory.restore_stacks(inventory_before)
 		return _result(false, total, "invalid_state")
 	return _result(true, total, "")
 
