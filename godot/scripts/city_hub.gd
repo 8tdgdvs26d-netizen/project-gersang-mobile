@@ -28,6 +28,7 @@ const TRANSPORT_FAILURE_MESSAGES := {
 	"ERR_SAVE_FAILED": "無法儲存，乘搭已取消",
 }
 const TRANSPORT_GENERIC_FAILURE := "無法乘搭"
+const ARRIVAL_RETRY_MESSAGE := "無法儲存，正在重試抵達"
 
 const INFO_WIDTH := 400.0
 const TRADE_BUTTON_SIZE := Vector2(120, 88)
@@ -97,6 +98,12 @@ func open_traveling(destination_city_id: String, remaining_ms: int) -> void:
 	show_travel_remaining(remaining_ms)
 	_apply_view(FACILITY_MARKET)
 	visible = true
+
+
+## Arrival could not be saved yet; the journey is still in progress.
+func show_arrival_retry() -> void:
+	if _traveling:
+		_feedback_label.text = ARRIVAL_RETRY_MESSAGE
 
 
 func show_travel_remaining(remaining_ms: int) -> void:

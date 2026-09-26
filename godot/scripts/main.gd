@@ -8,6 +8,11 @@ extends Node2D
 const BOOTSTRAP_VERSION := "M2-09"
 ## Each market button press trades exactly one unit.
 const MARKET_TRADE_QUANTITY := 1
+## After a failed arrival save the journey stays unfinished; retry this often.
+const ARRIVAL_RETRY_MS := 1000
+
+## Emitted once per journey, after its arrival has been saved.
+signal journey_arrived(journey_id: String, city_id: String)
 
 ## World / city / journey state of the main character (saved from M2-09).
 var location := PlayerLocation.new()
@@ -40,6 +45,7 @@ var market := MarketState.create_default()
 var save_path := SaveStore.DEFAULT_PATH
 var _city_markers := {}
 var _request_counter := 0
+var _next_arrival_attempt_ms := 0
 
 @onready var _player := $Actors/Player as Player
 @onready var _joystick := $TouchControls/Joystick as TouchJoystick
@@ -133,12 +139,20 @@ func update_journey() -> bool:
 	if TransportService.remaining_ms(location, now) > 0:
 		_city_hub.show_travel_remaining(TransportService.remaining_ms(location, now))
 		return false
+	_city_hub.show_travel_remaining(0)
+	if now < _next_arrival_attempt_ms:
+		return false
 	var result := TransportService.settle_arrival(location, now, _persist)
 	if not result["success"]:
+		if result["reason"] == TransportService.ERR_SAVE_FAILED:
+			# Nothing changed: runtime and save still hold the same journey.
+			push_warning("Myrial: could not write save file %s" % save_path)
+			_next_arrival_attempt_ms = now + ARRIVAL_RETRY_MS
+			_city_hub.show_arrival_retry()
 		return false
-	if not result["saved"]:
-		push_warning("Myrial: could not write save file %s" % save_path)
+	_next_arrival_attempt_ms = 0
 	_show_city(result["city_id"])
+	journey_arrived.emit(result["journey_id"], result["city_id"])
 	return true
 
 

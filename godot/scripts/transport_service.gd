@@ -88,9 +88,11 @@ static func begin_journey(location: PlayerLocation, wallet: Wallet, destination_
 
 
 ## Completes the current journey once its arrival time has been reached. The
-## character arrives inside the destination city. A failed save keeps the
-## arrival (it changes no money or items) and reports saved = false; the old
-## saved journey then settles to the same city again on the next load.
+## character arrives inside the destination city only if the arrival is also
+## saved: when `persist` fails, the journey is restored exactly, so runtime
+## and save both still hold the same unfinished journey and the caller can
+## retry. A journey therefore settles exactly once, and settling never
+## charges or refunds money.
 static func settle_arrival(location: PlayerLocation, now_ms: Variant, persist: Callable = Callable()) -> Dictionary:
 	if location == null or typeof(now_ms) != TYPE_INT:
 		return _result(false, ERR_INVALID_STATE)
@@ -99,11 +101,14 @@ static func settle_arrival(location: PlayerLocation, now_ms: Variant, persist: C
 	var journey := location.get_journey()
 	if now_ms < journey["arrives_at_ms"]:
 		return _result(false, ERR_NOT_ARRIVED)
+	var location_before := location.to_dict()
 	var city_id := location.complete_journey()
 	if city_id == "":
 		return _result(false, ERR_ARRIVAL_FAILED)
-	var saved := not persist.is_valid() or bool(persist.call())
-	return _result(true, "", {"city_id": city_id, "journey_id": journey["journey_id"], "saved": saved})
+	if persist.is_valid() and not persist.call():
+		location.restore(location_before)
+		return _result(false, ERR_SAVE_FAILED)
+	return _result(true, "", {"city_id": city_id, "journey_id": journey["journey_id"]})
 
 
 ## Milliseconds left on the current journey (0 when none or already due).

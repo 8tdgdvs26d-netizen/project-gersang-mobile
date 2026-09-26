@@ -45,9 +45,10 @@ func _initialize() -> void:
 	await _verify_return_point()
 	await _verify_over_capacity_and_goods()
 	await _verify_ui_failures()
+	await _verify_arrival_save_failure()
 	await _verify_stress()
 	_delete(TEST_SAVE)
-	_check(_sections_done.size() == 15, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 16, "Every test section must run to completion (%s)" % str(_sections_done))
 
 	if _failures == 0:
 		print("M2-09 passenger transport verification passed (%d checks)" % _checks)
@@ -138,7 +139,7 @@ func _verify_journey_model() -> void:
 		var early := TransportService.settle_arrival(location, T0 + DURATION - 1, persist)
 		_check(not early["success"] and early["reason"] == "ERR_NOT_ARRIVED" and location.is_traveling(), "Arrival must wait for the ETA")
 		var arrived := TransportService.settle_arrival(location, T0 + DURATION, persist)
-		_check(arrived["success"] and arrived["city_id"] == destination and arrived["saved"], "%s->%s must arrive at the ETA" % pair)
+		_check(arrived["success"] and arrived["city_id"] == destination and arrived["journey_id"] == "ride-" + origin, "%s->%s must arrive at the ETA" % pair)
 		_check(location.is_in_city() and location.get_city_id() == destination and location.get_journey().is_empty() and location.get_journey_status() == "none", "Arrival must put the character inside %s and clear the journey" % destination)
 		var again := TransportService.settle_arrival(location, T0 + DURATION * 5, persist)
 		_check(not again["success"] and again["reason"] == "ERR_NOT_TRAVELING" and location.get_city_id() == destination, "A journey must settle only once")
@@ -149,8 +150,21 @@ func _verify_journey_model() -> void:
 	exact.spend(10000 - FARE)
 	var location := _location_in("A")
 	_check(TransportService.begin_journey(location, exact, "B", "exact", T0)["success"] and exact.get_balance() == 0, "Exactly the fare must succeed and leave 0")
-	var arrived_saved_false := TransportService.settle_arrival(location, T0 + DURATION, func() -> bool: return false)
-	_check(arrived_saved_false["success"] and not arrived_saved_false["saved"] and location.get_city_id() == "B", "A failed arrival save keeps the arrival (no money involved) and reports it")
+
+	# A failed arrival save must leave the journey exactly as it was saved.
+	var traveling := location.to_dict()
+	var attempts := []
+	var failing := func() -> bool:
+		attempts.append(location.get_mode())
+		return false
+	var failed := TransportService.settle_arrival(location, T0 + DURATION, failing)
+	_check(not failed["success"] and failed["reason"] == "ERR_SAVE_FAILED", "A failed arrival save must reject the arrival")
+	_check(attempts == ["IN_CITY"], "The arrival save must have been attempted with the arrived state")
+	_check(location.to_dict() == traveling and location.is_traveling() and location.get_city_id() == "", "A failed arrival save must restore the unfinished journey exactly")
+	_check(exact.get_balance() == 0, "A failed arrival must not change money")
+	var retried := TransportService.settle_arrival(location, T0 + DURATION + 5, func() -> bool: return true)
+	_check(retried["success"] and retried["city_id"] == "B" and location.get_city_id() == "B", "Retrying after a failed arrival save must arrive once")
+	_check(not TransportService.settle_arrival(location, T0 + DURATION + 10)["success"] and exact.get_balance() == 0, "The retried journey must not settle again")
 	_sections_done.append("_verify_journey_model")
 
 
@@ -548,6 +562,88 @@ func _verify_ui_failures() -> void:
 	_check(not FileAccess.file_exists(UNWRITABLE_SAVE), "The unwritable save must not exist")
 	await _destroy(main)
 	_sections_done.append("_verify_ui_failures")
+
+## PR #77 blocker: an arrival whose save fails must not leave "arrived at
+## runtime, still traveling on disk". Runtime and save must stay the same
+## unfinished journey, and the journey must settle exactly once.
+func _verify_arrival_save_failure() -> void:
+	_delete(TEST_SAVE)
+	var main := await _new_main(TEST_SAVE, T0)
+	await _walk_in(main, "A")
+	var arrivals := []
+	main.journey_arrived.connect(func(journey_id: String, city_id: String) -> void: arrivals.append([journey_id, city_id]))
+	_check(main.request_transport("B", "fragile")["success"], "Setup: A->B must start")
+	var traveling_save := _read(TEST_SAVE)
+	var goods: Dictionary = main.inventory.get_stacks()
+	var market: Dictionary = main.market.get_snapshot()
+	_check(_read_json()["location"]["mode"] == "TRAVELING", "Setup: the journey must be saved")
+
+	# ETA reached while saving is broken.
+	main.save_path = UNWRITABLE_SAVE
+	main.time_source.set_now_ms(T0 + DURATION)
+	await process_frame
+	var hub := main.get_node("CityHub") as CityHub
+	_check(main.is_traveling() and main.current_city_id == "" and main.location.get_journey()["journey_id"] == "fragile", "A failed arrival save must keep the runtime journey unfinished")
+	_check(hub.get_facility() == "traveling" and hub.get_feedback_text() == "無法儲存，正在重試抵達" and hub.get_travel_texts()["remaining"] == "預計抵達：0 秒", "The traveling view must explain the retry in Chinese")
+	_check(_movement_locked(main) and not main.leave_city() and main.buy_in_current_city("test_good_01", 1)["reason"] == "not_in_city", "Nothing city-side may happen before the arrival is saved")
+	_check(arrivals.is_empty(), "A failed arrival save must produce no arrival side effect")
+	_check(_read(TEST_SAVE) == traveling_save, "The persisted journey must be exactly the unfinished journey")
+	_check(main.wallet.get_balance() == 10000 - FARE, "A failed arrival must not change money")
+	_check(main.inventory.get_stacks() == goods and main.market.get_snapshot() == market, "A failed arrival must not change goods or market")
+	# Retries are throttled while saving keeps failing, and stay consistent.
+	main.time_source.advance_ms(200)
+	await process_frame
+	main.time_source.advance_ms(2000)
+	await process_frame
+	_check(main.is_traveling() and arrivals.is_empty() and _read(TEST_SAVE) == traveling_save, "Repeated failed retries must keep runtime and save consistent")
+
+	# Reopen from the persisted state: the journey settles exactly once.
+	await _destroy(main)
+	arrivals.clear()
+	main = await _new_main(TEST_SAVE, T0 + DURATION + 60000)
+	_check(main.current_city_id == "B" and not main.is_traveling() and (main.get_node("CityHub") as CityHub).get_city_label_text() == "【B 城】", "Reopening must settle the saved journey into City B")
+	_check(main.wallet.get_balance() == 10000 - FARE, "Settling on reopen must not charge again")
+	var settled := _read_json()
+	_check(settled["location"] == {"mode": "IN_CITY", "city_id": "B", "journey": null, "last_journey_id": "fragile"}, "The single settlement must be saved")
+	_check(main.request_transport("A", "fragile")["reason"] == "ERR_DUPLICATE_REQUEST" and main.wallet.get_balance() == 10000 - FARE, "The settled journey's request must not start another journey")
+	await _destroy(main)
+	var settled_text := _read(TEST_SAVE)
+	for repeat in range(3):
+		main = await _new_main(TEST_SAVE, T0 + DURATION * (5 + repeat))
+		main.journey_arrived.connect(func(journey_id: String, city_id: String) -> void: arrivals.append([journey_id, city_id]))
+		await process_frame
+		_check(main.current_city_id == "B" and not main.is_traveling() and main.wallet.get_balance() == 10000 - FARE, "Reopen #%d after settlement: no double settlement or charge" % repeat)
+		_check(_read(TEST_SAVE) == settled_text, "Reopen #%d after settlement must not rewrite the save" % repeat)
+		await _destroy(main)
+	_check(arrivals.is_empty(), "No reopen after settlement may emit another arrival")
+
+	# Recovery in the same session: once saving works again, arrive once.
+	_delete(TEST_SAVE)
+	main = await _new_main(TEST_SAVE, T0)
+	await _walk_in(main, "B")
+	arrivals.clear()
+	main.journey_arrived.connect(func(journey_id: String, city_id: String) -> void: arrivals.append([journey_id, city_id]))
+	_check(main.request_transport("A", "recover")["success"], "Setup: B->A must start")
+	main.save_path = UNWRITABLE_SAVE
+	main.time_source.set_now_ms(T0 + DURATION)
+	await process_frame
+	_check(main.is_traveling() and arrivals.is_empty(), "The first arrival save fails")
+	main.save_path = TEST_SAVE
+	await process_frame
+	_check(main.is_traveling() and arrivals.is_empty(), "The retry waits for its retry time")
+	main.time_source.advance_ms(main.ARRIVAL_RETRY_MS)
+	await process_frame
+	_check(main.current_city_id == "A" and arrivals == [["recover", "A"]], "Once saving works the journey arrives exactly once")
+	_check(_read_json()["location"] == {"mode": "IN_CITY", "city_id": "A", "journey": null, "last_journey_id": "recover"} and int(_read_json()["money"]) == 10000 - FARE, "The recovered arrival must be saved with one fare charged")
+	for extra in range(3):
+		main.time_source.advance_ms(main.ARRIVAL_RETRY_MS)
+		await process_frame
+	_check(arrivals.size() == 1 and main.wallet.get_balance() == 10000 - FARE, "No further arrival or charge after recovery")
+	_check((main.get_node("CityHub") as CityHub).get_feedback_text() == "", "The retry message must clear on arrival")
+	await _destroy(main)
+	_check(not FileAccess.file_exists(UNWRITABLE_SAVE), "The unwritable save must never exist")
+	_delete(TEST_SAVE)
+	_sections_done.append("_verify_arrival_save_failure")
 
 
 # --- Stress -----------------------------------------------------------------------------------------

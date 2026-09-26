@@ -27,7 +27,9 @@ two active cities for a fare. Transport carries people, never goods:
   start at most one journey, so a double tap charges once and can never turn A → B
   into an immediate B → A
 - rollback: if the journey cannot be created or saved after the charge, money and
-  location are restored and the player sees 無法儲存，乘搭已取消
+  location are restored and the player sees 無法儲存，乘搭已取消. Arrival is saved
+  atomically too: if the arrival cannot be saved, the journey stays unfinished in both
+  the game and the save (無法儲存，正在重試抵達) and is retried, so it settles exactly once
 - save version 4 adds `location`; v1/v2/v3 saves still load at the normal world spawn.
   Entering or leaving a city now also saves, so a reopen restores the city, the world
   return point, or the journey (arriving immediately, once, if the ETA has passed)
