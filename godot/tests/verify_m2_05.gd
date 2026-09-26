@@ -80,7 +80,7 @@ func _verify_architecture() -> void:
 	_check(main_source.contains("buy_in_current_city(good_id, MARKET_TRADE_QUANTITY)") and main_source.contains("sell_in_current_city(good_id, MARKET_TRADE_QUANTITY)"), "Market presses must go through the existing trade path")
 	_check(_main.MARKET_TRADE_QUANTITY == 1, "Market buttons must trade exactly 1")
 	_check(_hub.buy_requested.get_connections().size() == 1 and _hub.sell_requested.get_connections().size() == 1, "Market signals must be connected exactly once")
-	_check(_main.wallet is Wallet and _main.cargo is Cargo, "Wallet and cargo must stay owned by the session controller")
+	_check(_main.wallet is Wallet and _main.inventory is CharacterInventory and _main.cargo == _main.inventory, "Wallet and per-character inventory must stay owned by the session controller")
 
 
 # --- Display -----------------------------------------------------------------
