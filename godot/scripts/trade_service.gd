@@ -3,8 +3,10 @@ extends RefCounted
 
 ## UI-independent buy/sell core. Prices and stock come from the city market's
 ## quote. Every check runs before any state changes, so a rejected trade leaves
-## the wallet, the cargo and the market untouched. Cargo and stock are only
+## the wallet, inventory and market untouched. Inventory and stock are only
 ## changed through their own validated APIs.
+
+const INT64_MAX := 9223372036854775807
 
 
 ## Player buys from the city at the quote's buy price; market stock goes down.
@@ -18,10 +20,12 @@ static func buy(city_id: Variant, good_id: Variant, quantity: Variant, wallet: W
 		return _result(false, 0, "invalid_quantity")
 	if not market.can_remove_stock(city_id, good_id, quantity):
 		return _result(false, 0, "insufficient_market_stock")
-	# can_add bounds quantity by capacity, which also keeps price x quantity small.
 	if not inventory.can_add(good_id, quantity):
 		return _result(false, 0, "insufficient_cargo_space")
-	var total: int = quote["buy_price"] * quantity
+	var unit_price: int = quote["buy_price"]
+	if quantity > INT64_MAX / unit_price:
+		return _result(false, 0, "invalid_quantity")
+	var total: int = unit_price * quantity
 	if not wallet.can_spend(total):
 		return _result(false, total, "insufficient_money")
 	var inventory_before := inventory.get_stacks()
@@ -47,10 +51,12 @@ static func sell(city_id: Variant, good_id: Variant, quantity: Variant, wallet: 
 		return _result(false, 0, "invalid_city_or_good")
 	if typeof(quantity) != TYPE_INT or quantity <= 0:
 		return _result(false, 0, "invalid_quantity")
-	# can_remove bounds quantity by what is held, which keeps price x quantity small.
 	if not inventory.can_remove(good_id, quantity):
 		return _result(false, 0, "insufficient_cargo")
-	var total: int = quote["buyback_price"] * quantity
+	var unit_price: int = quote["buyback_price"]
+	if quantity > INT64_MAX / unit_price:
+		return _result(false, 0, "invalid_quantity")
+	var total: int = unit_price * quantity
 	if not wallet.can_add(total) or not market.can_add_stock(city_id, good_id, quantity):
 		return _result(false, total, "invalid_state")
 	var inventory_before := inventory.get_stacks()
