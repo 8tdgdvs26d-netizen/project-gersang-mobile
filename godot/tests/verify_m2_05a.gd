@@ -54,7 +54,7 @@ func _verify_regression_baseline() -> void:
 
 
 func _verify_architecture() -> void:
-	_check(_button != null and _button.text == "Enter City", "Main scene must contain the Enter City touch button")
+	_check(_button != null and _button.text == "進入城市", "Main scene must contain the Enter City touch button (text 進入城市)")
 	_check(InputMap.has_action("interact"), "Keyboard interact (E) action must still exist")
 	_check(_button.pressed.get_connections().size() == 1, "Enter City button must be connected exactly once")
 	_check(_hub.leave_requested.get_connections().size() == 1 and _hub.buy_requested.get_connections().size() == 1 and _hub.sell_requested.get_connections().size() == 1, "Hub signals must stay connected once")
