@@ -5,6 +5,31 @@ This directory contains the Godot 4.x + GDScript migration project for
 
 ## Current work package
 
+M2-08 Character Inventory / Carrying Foundation replaces the player-global
+Cargo runtime model with a character-owned inventory foundation:
+
+- `CharacterInventory` owns item stacks per character and exposes deterministic
+  used/max capacity, add/remove checks and atomic model-level transfers
+- capacity is `quantity × capacity_cost`; stacking is display-only and gives no
+  capacity discount
+- `CharacterStats` is the capacity source. The current base, default Strength and
+  capacity-per-Strength values are explicitly marked prototype parameters, not
+  formal balance
+- every carried item shares the same capacity interface. The six test goods keep
+  the M2-07 placeholder costs, while an explicit cost resolver/stack cost lets a
+  future Equipment system count equipped items without splitting capacity pools
+- an inventory may become over capacity after a stat change or reload; existing
+  items remain, removal remains possible, and new additions are rejected
+- Market buy/sell now use the player's `CharacterInventory` while preserving the
+  existing spread, stock checks and defensive transaction rollback
+- save version 3 stores character id, Strength and inventory stacks; valid v1/v2
+  Cargo saves migrate in memory, while corrupt saves still reject as a whole
+- `Cargo` remains only as a temporary compatibility wrapper for historical tests
+  and callers; the runtime session uses `CharacterInventory`
+- NOT INCLUDED: warehouse changes, mercenary roster/centre, recruitment/dismissal,
+  transport, battle loot UI, full Equipment, formal Strength/goods balance,
+  dynamic markets, partial fill, restock, market ticks or UI/art polish
+
 M2-07 Basic Market Foundation turns the fixed price table into a stateful city market:
 
 - per-city Market State (`scripts/market_state.gd`): each active city × good has its own
@@ -159,11 +184,11 @@ Earlier accepted foundations:
 Open `project.godot` in Godot 4.x and run the project. A static bootstrap screen
 should appear and the output should contain:
 
-`Myrial: Unwritten M2-07 basic market foundation ready`
+`Myrial: Unwritten M2-08 character inventory foundation ready`
 
 Headless verification scripts live in `tests/` and run with, for example:
 
-`godot --headless --path godot --script res://tests/verify_m2_07.gd`
+`godot --headless --path godot --script res://tests/verify_m2_08.gd`
 
 ## Deliberately not included
 

@@ -131,7 +131,7 @@ func _verify_full_journey() -> void:
 		hub.get_market_button("test_good_01", "buy").pressed.emit()
 	_check(first.wallet.get_balance() == 9160 and first.cargo.get_quantity("test_good_01") == 10 and first.cargo.get_used_capacity() == 10, "Journey: A buy must reach 9160 / 10 units")
 	var first_wallet: Wallet = first.wallet
-	var first_cargo: Cargo = first.cargo
+	var first_cargo: CharacterInventory = first.cargo
 	await _destroy(first)
 
 	var second := await _new_main(TEST_SAVE)
@@ -335,8 +335,9 @@ func _saved() -> Dictionary:
 	if parser.parse(_read(TEST_SAVE)) != OK or typeof(parser.data) != TYPE_DICTIONARY:
 		return {"invalid": true}
 	var cargo := {}
-	for good_id in parser.data.get("cargo", {}):
-		cargo[good_id] = int(parser.data["cargo"][good_id])
+	var stacks: Dictionary = parser.data.get("character", {}).get("inventory", {}).get("items", {})
+	for good_id in stacks:
+		cargo[good_id] = int(stacks[good_id]["quantity"])
 	return {"money": int(parser.data.get("money", -1)), "cargo": cargo}
 
 

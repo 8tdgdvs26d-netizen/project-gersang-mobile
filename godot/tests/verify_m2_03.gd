@@ -45,9 +45,9 @@ func _verify_catalog() -> void:
 		var good := GoodsCatalog.get_good(approved[0])
 		_check(ids[index] == approved[0], "Good %d must be %s" % [index + 1, approved[0]])
 		_check(good.get("display_name") == approved[1], "%s display name must be %s" % [approved[0], approved[1]])
-		_check(typeof(good.get("unit_size")) == TYPE_INT and good["unit_size"] > 0, "%s unit size must be a positive int" % approved[0])
+		_check(typeof(good.get("capacity_cost")) == TYPE_INT and good["capacity_cost"] > 0, "%s capacity cost must be a positive int" % approved[0])
 		_check(typeof(good.get("base_value")) == TYPE_INT and good["base_value"] > 0, "%s base value must be a positive int" % approved[0])
-		_check(good["unit_size"] == approved[2] and good["base_value"] == approved[3], "%s must match the approved test values" % approved[0])
+		_check(good["capacity_cost"] == approved[2] and good["base_value"] == approved[3], "%s must match the approved test values" % approved[0])
 		_check(GoodsCatalog.get_unit_size(approved[0]) == approved[2], "%s unit size lookup must match" % approved[0])
 
 	for invalid_id in INVALID_IDS:
@@ -56,7 +56,7 @@ func _verify_catalog() -> void:
 		_check(GoodsCatalog.get_unit_size(invalid_id) == 0, "Unknown good %s unit size must be 0" % str(invalid_id))
 
 	var copy := GoodsCatalog.get_good("test_good_06")
-	copy["unit_size"] = 1
+	copy["capacity_cost"] = 1
 	_check(GoodsCatalog.get_unit_size("test_good_06") == 4, "Catalog lookups must return copies")
 
 	var cargo_source := FileAccess.get_file_as_string("res://scripts/cargo.gd")
@@ -260,7 +260,7 @@ func _verify_transitions() -> void:
 	_check(WorldLayout.CITY_A == Vector2(200.0, 200.0) and WorldLayout.CITY_B == Vector2(39800.0, 200.0), "City anchors must be unchanged")
 	_check(player.move_speed == 220.0, "Movement speed must be unchanged")
 
-	var cargo := main.cargo as Cargo
+	var cargo := main.cargo as CharacterInventory
 	_check(cargo != null and cargo.is_empty(), "Session cargo must exist and start empty")
 	_check(cargo.add("test_good_03", 2) and cargo.add("test_good_06", 1), "Session cargo must accept goods")
 	var expected := {"test_good_03": 2, "test_good_06": 1}

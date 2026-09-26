@@ -337,7 +337,7 @@ func _verify_trade_loop_in_game() -> void:
 	var player := main.get_node("Actors/Player") as Player
 	var hub := main.get_node("CityHub") as CityHub
 	var wallet := main.wallet as Wallet
-	var cargo := main.cargo as Cargo
+	var cargo := main.cargo as CharacterInventory
 
 	_check(Cargo.CARGO_CAPACITY == 20, "Cargo capacity must stay 20")
 	_check(GoodsCatalog.get_ids().size() == 6 and GoodsCatalog.get_unit_size("test_good_06") == 4 and GoodsCatalog.get_good("test_good_06")["base_value"] == 4000, "Six goods must be unchanged")
