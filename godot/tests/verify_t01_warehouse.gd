@@ -276,7 +276,8 @@ func _verify_save_versions() -> void:
 	var v5 := raw.duplicate(true)
 	v5["warehouses"]["A"]["items"] = {"test_good_06": 60}
 	# T05: a v7 save's cost lots must account for the stored units exactly.
-	v5["cost_ledger"]["warehouses"]["A"] = {"test_good_06": [{"quantity": 60, "unknown": true}]}
+	# (seq 2 is the migrated unknown lot of A's test_good_06: backpack, then A in catalog order.)
+	v5["cost_ledger"]["warehouses"]["A"] = {"test_good_06": [{"seq": 2, "quantity": 60, "unknown": true}]}
 	_write_json(v5)
 	var over := SaveStore.load_session(TEST_SAVE)
 	_check(not over.is_empty() and over["warehouses"].get_quantity("A", "test_good_06") == 60 and over["warehouses"].get_used_capacity("A") > over["warehouses"].get_max_capacity("A"), "An over-capacity warehouse save keeps its items")

@@ -71,6 +71,7 @@ func _initialize() -> void:
 	_verify_trade_accounting()
 	_verify_unknown_trades()
 	_verify_warehouse_accounting()
+	_verify_acquisition_order()
 	_verify_atomic_rollback()
 	_verify_save_and_migration()
 	_verify_save_validation()
@@ -81,7 +82,7 @@ func _initialize() -> void:
 	await _verify_ui_and_layout()
 	_verify_stress()
 	_delete(TEST_SAVE)
-	_check(_sections_done.size() == 15, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 16, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("T05 profit / loss verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -117,45 +118,47 @@ func _verify_static() -> void:
 func _verify_ledger_lots() -> void:
 	var ledger := TradeCostLedger.new()
 	_check(ledger.add_purchase(BP, "test_good_01", 1, 80), "Buy 1 creates a lot")
-	_check(ledger.get_lots(BP, "test_good_01") == [{"quantity": 1, "unit_cost": 80}], "One known-cost lot of 1 @ 80")
+	_check(_lots(ledger, BP, "test_good_01") == [{"quantity": 1, "unit_cost": 80}], "One known-cost lot of 1 @ 80")
 	var ten := TradeCostLedger.new()
-	_check(ten.add_purchase(BP, "test_good_01", 10, 80) and ten.get_lots(BP, "test_good_01") == [{"quantity": 10, "unit_cost": 80}], "Buy 10 creates ONE 10-unit lot at one price")
-	_check(ten.add_purchase(BP, "test_good_01", 10, 90) and ten.get_lots(BP, "test_good_01") == [{"quantity": 10, "unit_cost": 80}, {"quantity": 10, "unit_cost": 90}], "A second price creates a second lot (no 20 @ 85 average)")
+	_check(ten.add_purchase(BP, "test_good_01", 10, 80) and _lots(ten, BP, "test_good_01") == [{"quantity": 10, "unit_cost": 80}], "Buy 10 creates ONE 10-unit lot at one price")
+	_check(ten.add_purchase(BP, "test_good_01", 10, 90) and _lots(ten, BP, "test_good_01") == [{"quantity": 10, "unit_cost": 80}, {"quantity": 10, "unit_cost": 90}], "A second price creates a second lot (no 20 @ 85 average)")
 	_check(ten.get_quantity(BP, "test_good_01") == 20, "The combined quantity is 20")
 	_check(ten.preview_fifo(BP, "test_good_01", 10) == {"success": true, "cost_known": true, "acquisition_cost": 800, "known_quantity": 10, "unknown_quantity": 0}, "FIFO 10: 10 @ 80 = 800")
 	_check(ten.preview_fifo(BP, "test_good_01", 15)["acquisition_cost"] == 1250, "FIFO 15: 10 @ 80 + 5 @ 90 = 1250")
 	_check(ten.preview_fifo(BP, "test_good_01", 20)["acquisition_cost"] == 1700 and ten.get_quantity(BP, "test_good_01") == 20, "Previews change nothing")
 	var consumed := ten.consume_fifo(BP, "test_good_01", 15)
-	_check(consumed["acquisition_cost"] == 1250 and ten.get_lots(BP, "test_good_01") == [{"quantity": 5, "unit_cost": 90}], "Consuming 15 leaves 5 @ 90")
+	_check(consumed["acquisition_cost"] == 1250 and _lots(ten, BP, "test_good_01") == [{"quantity": 5, "unit_cost": 90}], "Consuming 15 leaves 5 @ 90")
 	var exact := TradeCostLedger.new()
 	exact.add_purchase(BP, "test_good_02", 10, 180)
 	exact.add_purchase(BP, "test_good_02", 10, 200)
 	exact.consume_fifo(BP, "test_good_02", 10)
-	_check(exact.get_lots(BP, "test_good_02") == [{"quantity": 10, "unit_cost": 200}], "Exact lot consumption removes that lot cleanly")
+	_check(_lots(exact, BP, "test_good_02") == [{"quantity": 10, "unit_cost": 200}], "Exact lot consumption removes that lot cleanly")
 	exact.consume_fifo(BP, "test_good_02", 10)
-	_check(exact.get_lots(BP, "test_good_02") == [] and exact.get_snapshot() == {} and exact.get_quantity(BP, "test_good_02") == 0, "Consuming everything leaves no empty lots")
+	_check(_lots(exact, BP, "test_good_02") == [] and exact.get_all_lots() == {} and exact.get_quantity(BP, "test_good_02") == 0, "Consuming everything leaves no empty lots")
 	var partial := TradeCostLedger.new()
 	partial.add_purchase(BP, "test_good_03", 10, 400)
 	partial.consume_fifo(BP, "test_good_03", 1)
-	_check(partial.get_lots(BP, "test_good_03") == [{"quantity": 9, "unit_cost": 400}], "Partial consumption keeps the remainder of that lot")
-	# Same adjacent cost merges (FIFO-identical); different or non-adjacent never.
+	_check(_lots(partial, BP, "test_good_03") == [{"quantity": 9, "unit_cost": 400}], "Partial consumption keeps the remainder of that lot")
+	# Every purchase is its own lot with its own acquisition seq, even at the same price.
 	var merge := TradeCostLedger.new()
 	merge.add_purchase(BP, "test_good_01", 10, 84)
 	merge.add_purchase(BP, "test_good_01", 1, 84)
 	merge.add_purchase(BP, "test_good_01", 1, 85)
+	merge.add_purchase(BP, "test_good_02", 1, 180)
 	merge.add_purchase(BP, "test_good_01", 1, 84)
-	_check(merge.get_lots(BP, "test_good_01") == [{"quantity": 11, "unit_cost": 84}, {"quantity": 1, "unit_cost": 85}, {"quantity": 1, "unit_cost": 84}], "Only adjacent equal-cost lots merge; order is kept")
+	_check(merge.get_lots(BP, "test_good_01") == [{"seq": 1, "quantity": 10, "unit_cost": 84}, {"seq": 2, "quantity": 1, "unit_cost": 84}, {"seq": 3, "quantity": 1, "unit_cost": 85}, {"seq": 5, "quantity": 1, "unit_cost": 84}], "Each purchase keeps its own seq in purchase order; nothing merges")
+	_check(merge.get_lots(BP, "test_good_02") == [{"seq": 4, "quantity": 1, "unit_cost": 180}] and merge.get_next_seq() == 6, "One global acquisition counter across goods")
 	# Invalid input changes nothing.
 	var guard := TradeCostLedger.new()
 	var rejected := true
 	for bad in [[BP, "test_good_01", 0, 80], [BP, "test_good_01", -1, 80], [BP, "test_good_01", 1, 0], [BP, "test_good_01", 1, -5], [BP, "test_good_01", 1, 1.5], [BP, "test_good_01", 1.0, 80], [BP, "unknown_good", 1, 80], ["cart", "test_good_01", 1, 80], ["warehouse:C", "test_good_01", 1, 80], [BP, "test_good_01", 1, "80"], [BP, "test_good_01", 1, TradeCostLedger.MAX_UNIT_COST + 1]]:
 		if guard.add_purchase(bad[0], bad[1], bad[2], bad[3]):
 			rejected = false
-	_check(rejected and guard.get_snapshot() == {}, "Negative / zero / non-integer costs and quantities, unknown goods and containers are rejected")
+	_check(rejected and guard.get_all_lots() == {}, "Negative / zero / non-integer costs and quantities, unknown goods and containers are rejected")
 	_check(not ten.preview_fifo(BP, "test_good_01", 6)["success"] and not ten.consume_fifo(BP, "test_good_01", 6)["success"] and ten.get_quantity(BP, "test_good_01") == 5, "Cannot consume more than the lots hold")
 	for bad_quantity in [0, -1, 1.0, "1", null]:
 		_check(not ten.preview_fifo(BP, "test_good_01", bad_quantity)["success"], "preview_fifo(%s) must fail" % str(bad_quantity))
-	var copy := ten.get_lots(BP, "test_good_01")
+	var copy := _lots(ten, BP, "test_good_01")
 	copy[0]["quantity"] = 999
 	_check(ten.get_quantity(BP, "test_good_01") == 5, "Changing a returned copy never changes the ledger")
 	_sections_done.append("ledger_lots")
@@ -168,7 +171,7 @@ func _verify_ledger_unknown_and_moves() -> void:
 	_check(preview["success"] and not preview["cost_known"] and preview["acquisition_cost"] == null and preview["unknown_quantity"] == 5 and preview["known_quantity"] == 5, "A preview over unknown units has no cost number (never 0)")
 	_check(ledger.preview_fifo(BP, "test_good_01", 5)["acquisition_cost"] == null, "Unknown is never treated as zero")
 	var consumed := ledger.consume_fifo(BP, "test_good_01", 10)
-	_check(not consumed["cost_known"] and ledger.get_lots(BP, "test_good_01") == [{"quantity": 5, "unit_cost": 80}], "Mixed FIFO: 5 unknown + 5 @ 80 consumed, 5 @ 80 remain")
+	_check(not consumed["cost_known"] and _lots(ledger, BP, "test_good_01") == [{"quantity": 5, "unit_cost": 80}], "Mixed FIFO: 5 unknown + 5 @ 80 consumed, 5 @ 80 remain")
 	_check(ledger.preview_fifo(BP, "test_good_01", 5) == {"success": true, "cost_known": true, "acquisition_cost": 400, "known_quantity": 5, "unknown_quantity": 0}, "After the unknown units are gone the cost is known again")
 
 	# Moves carry exact costs, oldest first, appended at the destination's end.
@@ -177,15 +180,16 @@ func _verify_ledger_unknown_and_moves() -> void:
 	moves.add_purchase(BP, "test_good_01", 10, 90)
 	var wa := TradeCostLedger.warehouse("A")
 	var wb := TradeCostLedger.warehouse("B")
-	_check(moves.move_fifo(BP, wa, "test_good_01", 1) and moves.get_lots(wa, "test_good_01") == [{"quantity": 1, "unit_cost": 80}], "Deposit 1 carries cost 80")
+	_check(moves.move_fifo(BP, wa, "test_good_01", 1) and _lots(moves, wa, "test_good_01") == [{"quantity": 1, "unit_cost": 80}], "Deposit 1 carries cost 80")
 	for i in range(10):
 		moves.move_fifo(BP, wa, "test_good_01", 1)
-	_check(moves.get_lots(wa, "test_good_01") == [{"quantity": 10, "unit_cost": 80}, {"quantity": 1, "unit_cost": 90}], "After the first lot, deposits take the next lot")
-	_check(moves.get_lots(BP, "test_good_01") == [{"quantity": 9, "unit_cost": 90}], "The backpack keeps the rest in order")
-	_check(moves.move_fifo(wa, BP, "test_good_01", 2) and moves.get_lots(BP, "test_good_01") == [{"quantity": 9, "unit_cost": 90}, {"quantity": 2, "unit_cost": 80}], "Withdraw takes the warehouse's oldest (80) and appends it to the backpack")
-	_check(moves.get_lots(wa, "test_good_01") == [{"quantity": 8, "unit_cost": 80}, {"quantity": 1, "unit_cost": 90}], "The warehouse keeps FIFO order")
+	_check(_lots(moves, wa, "test_good_01") == [{"quantity": 10, "unit_cost": 80}, {"quantity": 1, "unit_cost": 90}], "After the first lot, deposits take the next lot")
+	_check(_lots(moves, BP, "test_good_01") == [{"quantity": 9, "unit_cost": 90}], "The backpack keeps the rest in order")
+	_check(moves.move_fifo(wa, BP, "test_good_01", 2) and moves.get_lots(BP, "test_good_01") == [{"seq": 1, "quantity": 2, "unit_cost": 80}, {"seq": 2, "quantity": 9, "unit_cost": 90}], "Withdrawn units keep their acquisition seq: the older 80s stay ahead of the 90s")
+	_check(moves.get_lots(wa, "test_good_01") == [{"seq": 1, "quantity": 8, "unit_cost": 80}, {"seq": 2, "quantity": 1, "unit_cost": 90}], "The warehouse keeps acquisition order")
 	moves.add_purchase(BP, "test_good_01", 3, 70)
-	_check(moves.move_fifo(BP, wb, "test_good_01", 9) and moves.get_lots(wb, "test_good_01") == [{"quantity": 9, "unit_cost": 90}] and moves.get_lots(wa, "test_good_01").size() == 2, "City warehouses keep independent lots")
+	_check(moves.move_fifo(BP, wb, "test_good_01", 9) and moves.get_lots(wb, "test_good_01") == [{"seq": 1, "quantity": 2, "unit_cost": 80}, {"seq": 2, "quantity": 7, "unit_cost": 90}] and _lots(moves, wa, "test_good_01").size() == 2, "City warehouses keep independent lots; deposits take the oldest acquisitions")
+	_check(moves.get_lots(BP, "test_good_01") == [{"seq": 2, "quantity": 2, "unit_cost": 90}, {"seq": 3, "quantity": 3, "unit_cost": 70}], "The backpack keeps the newer purchases")
 	_check(not moves.move_fifo(BP, BP, "test_good_01", 1) and not moves.move_fifo(BP, wa, "test_good_01", 99) and not moves.move_fifo(BP, "warehouse:C", "test_good_01", 1) and not moves.move_fifo(BP, wa, "test_good_01", 0), "Invalid moves change nothing")
 	var total := 0
 	for container in [BP, wa, wb]:
@@ -195,7 +199,7 @@ func _verify_ledger_unknown_and_moves() -> void:
 	var old := TradeCostLedger.new()
 	old.add_unknown(BP, "test_good_02", 3)
 	old.move_fifo(BP, wa, "test_good_02", 2)
-	_check(old.get_lots(wa, "test_good_02") == [{"quantity": 2, "unknown": true}] and old.get_lots(BP, "test_good_02") == [{"quantity": 1, "unknown": true}], "Unknown cost stays unknown through the warehouse")
+	_check(_lots(old, wa, "test_good_02") == [{"quantity": 2, "unknown": true}] and _lots(old, BP, "test_good_02") == [{"quantity": 1, "unknown": true}], "Unknown cost stays unknown through the warehouse")
 	# Invariant helper.
 	var ws := WarehouseState.create_default()
 	ws._warehouse("A").restore_items({"test_good_01": 9})
@@ -205,7 +209,7 @@ func _verify_ledger_unknown_and_moves() -> void:
 	ws._warehouse("B").restore_items({"test_good_01": 8})
 	_check(not moves.matches({"test_good_01": 5}, ws), "Warehouse mismatches are detected")
 	var unknown := TradeCostLedger.unknown_for({"test_good_01": 4}, ws)
-	_check(unknown.get_lots(BP, "test_good_01") == [{"quantity": 4, "unknown": true}] and unknown.get_lots(wa, "test_good_01") == [{"quantity": 9, "unknown": true}] and unknown.matches({"test_good_01": 4}, ws), "Migration lots: every unit unknown, quantities exact")
+	_check(_lots(unknown, BP, "test_good_01") == [{"quantity": 4, "unknown": true}] and _lots(unknown, wa, "test_good_01") == [{"quantity": 9, "unknown": true}] and unknown.matches({"test_good_01": 4}, ws), "Migration lots: every unit unknown, quantities exact")
 	_sections_done.append("ledger_unknown_moves")
 
 
@@ -216,29 +220,29 @@ func _verify_trade_accounting() -> void:
 	var q1 := one.market.get_quote("A", "test_good_01")
 	var buy1 := TradeService.buy("A", "test_good_01", 1, one.wallet, one.inventory, one.market, one.ledger)
 	_check(buy1["success"] and buy1["total_value"] == q1["buy_price"] and buy1["unit_price"] == q1["buy_price"], "Buy 1 pays the locked price (T03 unchanged)")
-	_check(one.ledger.get_lots(BP, "test_good_01") == [{"quantity": 1, "unit_cost": q1["buy_price"]}], "Buy 1 creates one known-cost lot")
+	_check(_lots(one.ledger, BP, "test_good_01") == [{"quantity": 1, "unit_cost": q1["buy_price"]}], "Buy 1 creates one known-cost lot")
 	var s := _session()
 	var p1: int = s.market.get_quote("A", "test_good_01")["buy_price"]
 	var buy10 := TradeService.buy("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
 	_check(buy10["success"] and buy10["total_value"] == p1 * 10 and buy10["unit_price"] == p1, "Buy 10 pays one locked price x 10 (T03 unchanged)")
-	_check(s.ledger.get_lots(BP, "test_good_01") == [{"quantity": 10, "unit_cost": p1}], "Buy 10 creates ONE 10-unit lot at the locked price")
+	_check(_lots(s.ledger, BP, "test_good_01") == [{"quantity": 10, "unit_cost": p1}], "Buy 10 creates ONE 10-unit lot at the locked price")
 	var p2: int = s.market.get_quote("A", "test_good_01")["buy_price"]
 	_check(p2 != p1 and p2 == DynamicPriceModel.buy(80, 90), "Post-order repricing: the next quote follows stock 90")
 	TradeService.buy("A", "test_good_01", 1, s.wallet, s.inventory, s.market, s.ledger)
-	_check(s.ledger.get_lots(BP, "test_good_01") == [{"quantity": 10, "unit_cost": p1}, {"quantity": 1, "unit_cost": p2}], "A purchase at another price creates another lot (no average)")
+	_check(_lots(s.ledger, BP, "test_good_01") == [{"quantity": 10, "unit_cost": p1}, {"quantity": 1, "unit_cost": p2}], "A purchase at another price creates another lot (no average)")
 	_check(s.inventory.get_items() == {"test_good_01": 11}, "The inventory shows one combined stack of 11")
 	# Sell 1: FIFO takes one unit of the oldest lot.
 	var sq := s.market.get_quote("A", "test_good_01")
 	var sell1 := TradeService.sell("A", "test_good_01", 1, s.wallet, s.inventory, s.market, s.ledger)
 	_check(sell1["success"] and sell1["total_value"] == sq["buyback_price"] and sell1["revenue"] == sq["buyback_price"] and sell1["unit_price"] == sq["buyback_price"], "Sell 1 revenue = locked buyback (T03 unchanged)")
 	_check(sell1["cost_known"] and sell1["acquisition_cost"] == p1 and sell1["realized_profit"] == sq["buyback_price"] - p1, "Sell 1 consumes FIFO: exact cost and result")
-	_check(s.ledger.get_lots(BP, "test_good_01") == [{"quantity": 9, "unit_cost": p1}, {"quantity": 1, "unit_cost": p2}], "Partial consumption leaves 9 of the first lot")
+	_check(_lots(s.ledger, BP, "test_good_01") == [{"quantity": 9, "unit_cost": p1}, {"quantity": 1, "unit_cost": p2}], "Partial consumption leaves 9 of the first lot")
 	# Sell 10 across both lots.
 	var sq10 := s.market.get_quote("A", "test_good_01")
 	var sell10 := TradeService.sell("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
 	_check(sell10["total_value"] == sq10["buyback_price"] * 10 and sell10["acquisition_cost"] == p1 * 9 + p2, "Sell 10: one locked buyback x 10, FIFO cost 9 @ %d + 1 @ %d" % [p1, p2])
 	_check(sell10["realized_profit"] == sq10["buyback_price"] * 10 - (p1 * 9 + p2) and sell10["realized_profit"] < 0, "Same-city round trip: exact loss (spread)")
-	_check(s.ledger.get_snapshot() == {} and s.inventory.is_empty(), "Everything sold: no lots, no goods")
+	_check(s.ledger.get_all_lots() == {} and s.inventory.is_empty(), "Everything sold: no lots, no goods")
 	# Sale across two lots at different costs.
 	var across := _session()
 	p1 = across.market.get_quote("A", "test_good_02")["buy_price"]
@@ -304,7 +308,7 @@ func _verify_unknown_trades() -> void:
 	s.ledger.add_unknown(BP, "test_good_01", 5)
 	var price: int = s.market.get_quote("A", "test_good_01")["buy_price"]
 	TradeService.buy("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
-	_check(s.ledger.get_lots(BP, "test_good_01") == [{"quantity": 5, "unknown": true}, {"quantity": 10, "unit_cost": price}], "FIFO order: old unknown first, then the new purchase")
+	_check(_lots(s.ledger, BP, "test_good_01") == [{"quantity": 5, "unknown": true}, {"quantity": 10, "unit_cost": price}], "FIFO order: old unknown first, then the new purchase")
 	var preview := TradeService.preview_sell("B", "test_good_01", 10, s.inventory, s.market, s.ledger)
 	_check(preview["success"] and not preview["cost_known"] and preview["realized_profit"] == null and preview["acquisition_cost"] == null, "The preview of a mixed sale shows no P/L number")
 	var money: int = s.wallet.get_balance()
@@ -312,7 +316,7 @@ func _verify_unknown_trades() -> void:
 	var sold := TradeService.sell("B", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
 	_check(sold["success"] and sold["revenue"] == bb * 10 and s.wallet.get_balance() - money == bb * 10, "A sale with unknown units still pays full revenue")
 	_check(not sold["cost_known"] and sold["acquisition_cost"] == null and sold["realized_profit"] == null, "Any unknown unit: cost_known = false and no invented P/L")
-	_check(s.ledger.get_lots(BP, "test_good_01") == [{"quantity": 5, "unit_cost": price}], "Remaining after the mixed sale: 5 @ %d" % price)
+	_check(_lots(s.ledger, BP, "test_good_01") == [{"quantity": 5, "unit_cost": price}], "Remaining after the mixed sale: 5 @ %d" % price)
 	var next := TradeService.sell("B", "test_good_01", 1, s.wallet, s.inventory, s.market, s.ledger)
 	_check(next["cost_known"] and next["acquisition_cost"] == price, "The next sale uses the known lot")
 	# Pure unknown.
@@ -320,7 +324,7 @@ func _verify_unknown_trades() -> void:
 	old.inventory.add("test_good_02", 10)
 	old.ledger.add_unknown(BP, "test_good_02", 10)
 	var u := TradeService.sell("A", "test_good_02", 10, old.wallet, old.inventory, old.market, old.ledger)
-	_check(u["success"] and not u["cost_known"] and u["realized_profit"] == null and old.ledger.get_snapshot() == {}, "An all-unknown sale succeeds with no P/L")
+	_check(u["success"] and not u["cost_known"] and u["realized_profit"] == null and old.ledger.get_all_lots() == {}, "An all-unknown sale succeeds with no P/L")
 	_sections_done.append("unknown_trades")
 
 
@@ -330,27 +334,27 @@ func _verify_warehouse_accounting() -> void:
 	var s := _session()
 	s.wallet.add(1000000)
 	TradeService.buy("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
-	var first := s.ledger.get_lots(BP, "test_good_01")[0]["unit_cost"] as int
+	var first := _lots(s.ledger, BP, "test_good_01")[0]["unit_cost"] as int
 	TradeService.buy("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
-	var second := s.ledger.get_lots(BP, "test_good_01")[1]["unit_cost"] as int
+	var second := _lots(s.ledger, BP, "test_good_01")[1]["unit_cost"] as int
 	var money: int = s.wallet.get_balance()
 	var market: Dictionary = s.market.get_snapshot()
 	var wa := TradeCostLedger.warehouse("A")
 	var d := WarehouseService.deposit(s.location, s.inventory, s.warehouses, "A", "test_good_01", 1, "", Callable(), s.ledger)
-	_check(d["success"] and s.ledger.get_lots(wa, "test_good_01") == [{"quantity": 1, "unit_cost": first}], "Deposit 1 carries the oldest cost")
+	_check(d["success"] and _lots(s.ledger, wa, "test_good_01") == [{"quantity": 1, "unit_cost": first}], "Deposit 1 carries the oldest cost")
 	for i in range(10):
 		WarehouseService.deposit(s.location, s.inventory, s.warehouses, "A", "test_good_01", 1, "", Callable(), s.ledger)
-	_check(s.ledger.get_lots(wa, "test_good_01") == [{"quantity": 10, "unit_cost": first}, {"quantity": 1, "unit_cost": second}], "Partial deposits keep FIFO across lots")
+	_check(_lots(s.ledger, wa, "test_good_01") == [{"quantity": 10, "unit_cost": first}, {"quantity": 1, "unit_cost": second}], "Partial deposits keep FIFO across lots")
 	_check(s.ledger.matches(s.inventory.get_items(), s.warehouses), "Invariant after deposits")
 	var w := WarehouseService.withdraw(s.location, s.inventory, s.warehouses, "A", "test_good_01", 1, "", Callable(), s.ledger)
-	_check(w["success"] and s.ledger.get_lots(BP, "test_good_01") == [{"quantity": 9, "unit_cost": second}, {"quantity": 1, "unit_cost": first}], "Withdraw 1 brings the warehouse's oldest (cost %d) back" % first)
+	_check(w["success"] and _lots(s.ledger, BP, "test_good_01") == [{"quantity": 1, "unit_cost": first}, {"quantity": 9, "unit_cost": second}], "Withdraw 1 brings back the oldest purchase (cost %d), still ahead of the newer one" % first)
 	_check(s.wallet.get_balance() == money and s.market.get_snapshot() == market and not d.has("realized_profit"), "Deposit / withdraw realizes no profit and touches no money or market")
 	# Withdraw all back and sell: the exact costs survived.
 	for i in range(10):
 		WarehouseService.withdraw(s.location, s.inventory, s.warehouses, "A", "test_good_01", 1, "", Callable(), s.ledger)
 	_check(s.warehouses.get_quantity("A", "test_good_01") == 0 and s.ledger.get_quantity(wa, "test_good_01") == 0 and s.inventory.get_quantity("test_good_01") == 20, "Everything withdrawn")
 	var sold := TradeService.sell("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
-	_check(sold["acquisition_cost"] == second * 9 + first, "Selling after a round trip through the warehouse uses the carried costs")
+	_check(sold["acquisition_cost"] == first * 10, "After a warehouse round trip Sell 10 still uses the first purchase (10 @ %d), not the newer one" % first)
 	# City independence.
 	s.location.leave_city()
 	s.location.enter_city("B")
@@ -379,6 +383,109 @@ func _verify_warehouse_accounting() -> void:
 	drift.inventory.add("test_good_02", 2)
 	_check(WarehouseService.deposit(drift.location, drift.inventory, drift.warehouses, "A", "test_good_02", 1, "", Callable(), drift.ledger)["reason"] == WarehouseService.ERR_INVALID_STATE and drift.inventory.get_quantity("test_good_02") == 2, "A ledger out of step with the goods is refused")
 	_sections_done.append("warehouse_accounting")
+
+
+# --- Acquisition-order FIFO (T05 review fix) -------------------------------------------------------
+
+func _verify_acquisition_order() -> void:
+	var wa := TradeCostLedger.warehouse("A")
+	var wb := TradeCostLedger.warehouse("B")
+	# Required scenario: 10 @ 80, 10 @ 90; the 80s go into the warehouse and come back.
+	var s := _session()
+	_stock_lot(s, "test_good_01", 10, 80)
+	_stock_lot(s, "test_good_01", 10, 90)
+	var original := s.ledger.get_lots(BP, "test_good_01")
+	_check(original == [{"seq": 1, "quantity": 10, "unit_cost": 80}, {"seq": 2, "quantity": 10, "unit_cost": 90}], "Lot #1: 10 @ 80, lot #2: 10 @ 90")
+	_check(_deposit(s, "A", "test_good_01", 10) and s.ledger.get_lots(wa, "test_good_01") == [{"seq": 1, "quantity": 10, "unit_cost": 80}], "All of lot #1 (the 80s) goes into warehouse A")
+	_check(s.ledger.get_lots(BP, "test_good_01") == [{"seq": 2, "quantity": 10, "unit_cost": 90}], "Only lot #2 stays carried")
+	_check(_withdraw(s, "A", "test_good_01", 10) and s.ledger.get_lots(BP, "test_good_01") == original, "Withdrawn, lot #1 is again ahead of lot #2")
+	var sold := TradeService.sell("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
+	_check(sold["success"] and sold["acquisition_cost"] == 800, "Sell 10 after the round trip costs 800 (10 @ 80), not 900")
+	_check(s.ledger.get_lots(BP, "test_good_01") == [{"seq": 2, "quantity": 10, "unit_cost": 90}], "Lot #2 remains")
+
+	# Partial deposit / withdraw: the same seq splits and rejoins.
+	var p := _session()
+	_stock_lot(p, "test_good_02", 10, 80)
+	_stock_lot(p, "test_good_02", 10, 90)
+	var before := p.ledger.get_lots(BP, "test_good_02")
+	_check(_deposit(p, "A", "test_good_02", 3), "Deposit 3")
+	_check(p.ledger.get_lots(BP, "test_good_02") == [{"seq": 1, "quantity": 7, "unit_cost": 80}, {"seq": 2, "quantity": 10, "unit_cost": 90}] and p.ledger.get_lots(wa, "test_good_02") == [{"seq": 1, "quantity": 3, "unit_cost": 80}], "Lot #1 splits: 7 carried, 3 stored, same seq")
+	var preview := TradeService.preview_sell("A", "test_good_02", 10, p.inventory, p.market, p.ledger)
+	_check(preview["acquisition_cost"] == 7 * 80 + 3 * 90, "While 3 are stored, Sell 10 uses the carried units in acquisition order")
+	_check(_withdraw(p, "A", "test_good_02", 3) and p.ledger.get_lots(BP, "test_good_02") == before and p.ledger.get_lots(wa, "test_good_02") == [], "Withdrawing the 3 rejoins lot #1 exactly")
+	_check(TradeService.preview_sell("A", "test_good_02", 10, p.inventory, p.market, p.ledger)["acquisition_cost"] == 800, "Partial round trip: FIFO unchanged (800)")
+	# Deposit one at a time, withdraw one at a time.
+	for i in range(13):
+		_deposit(p, "A", "test_good_02", 1)
+	_check(p.ledger.get_lots(wa, "test_good_02") == [{"seq": 1, "quantity": 10, "unit_cost": 80}, {"seq": 2, "quantity": 3, "unit_cost": 90}], "One-at-a-time deposits finish lot #1 before taking lot #2")
+	for i in range(13):
+		_withdraw(p, "A", "test_good_02", 1)
+	_check(p.ledger.get_lots(BP, "test_good_02") == before, "One-at-a-time withdrawals restore the exact lots")
+
+	# Multiple round trips through both warehouses, in any order.
+	var m := _session()
+	_stock_lot(m, "test_good_03", 10, 400)
+	_stock_lot(m, "test_good_03", 10, 430)
+	_stock_lot(m, "test_good_03", 1, 390)
+	var start := m.ledger.get_lots(BP, "test_good_03")
+	_deposit(m, "A", "test_good_03", 12)
+	_withdraw(m, "A", "test_good_03", 5)
+	_deposit(m, "A", "test_good_03", 7)
+	_move_to(m, "B")
+	_deposit(m, "B", "test_good_03", 2)
+	_check(m.ledger.get_lots(wb, "test_good_03") == [{"seq": 2, "quantity": 2, "unit_cost": 430}] and m.ledger.get_lots(wa, "test_good_03") == [{"seq": 1, "quantity": 10, "unit_cost": 400}, {"seq": 2, "quantity": 4, "unit_cost": 430}], "A and B warehouses hold independent parts of the same lots")
+	_withdraw(m, "B", "test_good_03", 2)
+	_move_to(m, "A")
+	_withdraw(m, "A", "test_good_03", 14)
+	_check(m.ledger.get_lots(BP, "test_good_03") == start and m.ledger.get_all_lots().size() == 1, "After many round trips the backpack holds exactly the original lots")
+	var trip := TradeService.sell("A", "test_good_03", 10, m.wallet, m.inventory, m.market, m.ledger)
+	_check(trip["acquisition_cost"] == 4000, "Multiple round trips: Sell 10 still takes lot #1 (10 @ 400)")
+
+	# Known + unknown lots keep a stable order through the warehouse.
+	var k := _session()
+	k.inventory.add("test_good_04", 5)
+	k.ledger.add_unknown(BP, "test_good_04", 5)
+	_stock_lot(k, "test_good_04", 10, 900)
+	var mixed := k.ledger.get_lots(BP, "test_good_04")
+	_check(mixed == [{"seq": 1, "quantity": 5, "unknown": true}, {"seq": 2, "quantity": 10, "unit_cost": 900}], "Unknown lot #1 before known lot #2")
+	_deposit(k, "A", "test_good_04", 7)
+	_check(k.ledger.get_lots(wa, "test_good_04") == [{"seq": 1, "quantity": 5, "unknown": true}, {"seq": 2, "quantity": 2, "unit_cost": 900}], "The unknown lot moves first and stays first")
+	_withdraw(k, "A", "test_good_04", 3)
+	_check(k.ledger.get_lots(BP, "test_good_04") == [{"seq": 1, "quantity": 3, "unknown": true}, {"seq": 2, "quantity": 8, "unit_cost": 900}], "Withdrawn unknown units rejoin lot #1 ahead of lot #2")
+	_withdraw(k, "A", "test_good_04", 4)
+	_check(k.ledger.get_lots(BP, "test_good_04") == mixed, "Known + unknown round trip restores the exact order")
+	var mixed_sale := TradeService.preview_sell("A", "test_good_04", 10, k.inventory, k.market, k.ledger)
+	_check(not mixed_sale["cost_known"] and mixed_sale["acquisition_cost"] == null, "Sell 10 still starts with the unknown units: no P/L number")
+
+	# Save / reload keeps seqs, split parts and the counter.
+	var r := _session()
+	_stock_lot(r, "test_good_05", 1, 2000)
+	_stock_lot(r, "test_good_05", 1, 2100)
+	_stock_lot(r, "test_good_05", 1, 2200)
+	_deposit(r, "A", "test_good_05", 2)
+	_withdraw(r, "A", "test_good_05", 1)
+	var lots_before := r.ledger.get_all_lots()
+	_check(SaveStore.save(TEST_SAVE, r.wallet, r.inventory, r.market, r.location, r.warehouses, MarketRecovery.new(), r.ledger), "Save after moves")
+	var loaded := SaveStore.load_session(TEST_SAVE)
+	var ledger: TradeCostLedger = loaded.get("cost_ledger")
+	_check(ledger != null and ledger.get_all_lots() == lots_before and ledger.get_next_seq() == 4, "Reload restores every seq, split part and the counter")
+	_check(ledger.get_lots(BP, "test_good_05") == [{"seq": 1, "quantity": 1, "unit_cost": 2000}, {"seq": 3, "quantity": 1, "unit_cost": 2200}] and ledger.get_lots(wa, "test_good_05") == [{"seq": 2, "quantity": 1, "unit_cost": 2100}], "Reloaded order is acquisition order")
+	_check(ledger.add_purchase(BP, "test_good_05", 1, 2300) and ledger.get_lots(BP, "test_good_05").back()["seq"] == 4, "A purchase after reload continues the sequence")
+	_check(ledger.move_fifo(wa, BP, "test_good_05", 1) and _lots(ledger, BP, "test_good_05") == [{"quantity": 1, "unit_cost": 2000}, {"quantity": 1, "unit_cost": 2100}, {"quantity": 1, "unit_cost": 2200}, {"quantity": 1, "unit_cost": 2300}], "After reload a withdrawal still slots in by acquisition order")
+
+	# Migration order is deterministic and documented: backpack, then A, then B.
+	var ws := WarehouseState.create_default()
+	ws._warehouse("A").restore_items({"test_good_06": 2, "test_good_01": 3})
+	ws._warehouse("B").restore_items({"test_good_01": 4})
+	var migrated := TradeCostLedger.unknown_for({"test_good_03": 1, "test_good_01": 5}, ws)
+	var again := TradeCostLedger.unknown_for({"test_good_01": 5, "test_good_03": 1}, ws)
+	_check(migrated.get_all_lots() == again.get_all_lots() and migrated.get_next_seq() == again.get_next_seq(), "Migration order does not depend on dictionary order")
+	_check(migrated.get_lots(BP, "test_good_01")[0]["seq"] < migrated.get_lots(wa, "test_good_01")[0]["seq"] and migrated.get_lots(wa, "test_good_01")[0]["seq"] < migrated.get_lots(wb, "test_good_01")[0]["seq"], "Migrated good 01: backpack older than warehouse A older than warehouse B")
+	_check(migrated.get_lots(BP, "test_good_01")[0]["seq"] == 1 and migrated.get_lots(BP, "test_good_03")[0]["seq"] == 2 and migrated.get_lots(wa, "test_good_01")[0]["seq"] == 3 and migrated.get_lots(wa, "test_good_06")[0]["seq"] == 4 and migrated.get_lots(wb, "test_good_01")[0]["seq"] == 5 and migrated.get_next_seq() == 6, "Migration numbers containers in order, goods in catalog order")
+	migrated.move_fifo(TradeCostLedger.warehouse("B"), BP, "test_good_01", 4)
+	migrated.move_fifo(wa, BP, "test_good_01", 3)
+	_check(migrated.get_lots(BP, "test_good_01") == [{"seq": 1, "quantity": 5, "unknown": true}, {"seq": 3, "quantity": 3, "unknown": true}, {"seq": 5, "quantity": 4, "unknown": true}], "Unknown lots never reorder when moved")
+	_sections_done.append("acquisition_order")
 
 
 # --- Atomicity --------------------------------------------------------------------------------
@@ -427,14 +534,14 @@ func _verify_save_and_migration() -> void:
 	var snapshot := s.ledger.get_snapshot()
 	_check(SaveStore.save(TEST_SAVE, s.wallet, s.inventory, s.market, s.location, s.warehouses, MarketRecovery.new(), s.ledger), "v7 save writes")
 	var raw := _read_json()
-	_check(int(raw["version"]) == 7 and raw.has("cost_ledger") and raw["cost_ledger"].keys().size() == 2, "The save holds the cost ledger")
+	_check(int(raw["version"]) == 7 and raw.has("cost_ledger") and raw["cost_ledger"].size() == 3 and raw["cost_ledger"].has_all(["next_seq", "backpack", "warehouses"]), "The save holds the cost ledger (next_seq, backpack, warehouses)")
 	_check(not JSON.stringify(raw).contains("profit") and not JSON.stringify(raw).contains("preview") and not JSON.stringify(raw).contains("acquisition"), "No derived P/L or preview state is saved")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	var ledger: TradeCostLedger = loaded.get("cost_ledger")
 	_check(ledger != null and ledger.get_snapshot() == snapshot, "Reload restores every lot exactly (order, quantity, unit cost, unknown)")
-	_check(ledger.get_lots(BP, "test_good_05") == [{"quantity": 3, "unknown": true}, {"quantity": 1, "unit_cost": s.ledger.get_lots(BP, "test_good_05")[1]["unit_cost"]}], "UNKNOWN lots survive and stay first")
-	_check(ledger.get_lots(TradeCostLedger.warehouse("A"), "test_good_01").size() == 1 and ledger.matches(loaded["inventory"].get_items(), loaded["warehouses"]), "Warehouse lots survive and match")
-	_check(typeof(ledger.get_lots(BP, "test_good_01")[0]["quantity"]) == TYPE_INT and typeof(ledger.get_lots(BP, "test_good_01")[0]["unit_cost"]) == TYPE_INT, "JSON numbers come back as exact integers")
+	_check(_lots(ledger, BP, "test_good_05") == [{"quantity": 3, "unknown": true}, {"quantity": 1, "unit_cost": _lots(s.ledger, BP, "test_good_05")[1]["unit_cost"]}], "UNKNOWN lots survive and stay first")
+	_check(_lots(ledger, TradeCostLedger.warehouse("A"), "test_good_01").size() == 1 and ledger.matches(loaded["inventory"].get_items(), loaded["warehouses"]), "Warehouse lots survive and match")
+	_check(typeof(_lots(ledger, BP, "test_good_01")[0]["quantity"]) == TYPE_INT and typeof(_lots(ledger, BP, "test_good_01")[0]["unit_cost"]) == TYPE_INT, "JSON numbers come back as exact integers")
 	# Repeated save / load is stable.
 	SaveStore.save(TEST_SAVE, loaded["wallet"], loaded["inventory"], loaded["market"], loaded["location"], loaded["warehouses"], loaded["market_recovery"], ledger)
 	_check(SaveStore.load_session(TEST_SAVE)["cost_ledger"].get_snapshot() == snapshot, "A second save / reload changes nothing")
@@ -461,9 +568,9 @@ func _verify_save_and_migration() -> void:
 			continue
 		var lg: TradeCostLedger = l["cost_ledger"]
 		_check(l["wallet"].get_balance() == 4321 and l["inventory"].get_items() == {"test_good_01": 10, "test_good_03": 2}, "%s: money and quantities preserved" % label)
-		_check(lg.get_lots(BP, "test_good_01") == [{"quantity": 10, "unknown": true}] and lg.get_lots(BP, "test_good_03") == [{"quantity": 2, "unknown": true}], "%s: carried goods get UNKNOWN cost (no 0, no current price, no baseline)" % label)
+		_check(_lots(lg, BP, "test_good_01") == [{"quantity": 10, "unknown": true}] and _lots(lg, BP, "test_good_03") == [{"quantity": 2, "unknown": true}], "%s: carried goods get UNKNOWN cost (no 0, no current price, no baseline)" % label)
 		var has_warehouse: bool = label in ["v5", "v6"]
-		_check(lg.get_lots(TradeCostLedger.warehouse("A"), "test_good_02") == ([{"quantity": 5, "unknown": true}] if has_warehouse else []) and lg.matches(l["inventory"].get_items(), l["warehouses"]), "%s: warehouse goods get UNKNOWN cost; invariant holds" % label)
+		_check(_lots(lg, TradeCostLedger.warehouse("A"), "test_good_02") == ([{"quantity": 5, "unknown": true}] if has_warehouse else []) and lg.matches(l["inventory"].get_items(), l["warehouses"]), "%s: warehouse goods get UNKNOWN cost; invariant holds" % label)
 		_check(not JSON.stringify(lg.get_snapshot()).contains("unit_cost"), "%s: no historical cost invented" % label)
 		_check(label in ["v1"] or l["market"].get_quote("A", "test_good_01")["stock"] == 70, "%s: market preserved" % label)
 		_check(label not in ["v4", "v5", "v6"] or l["location"].get_city_id() == "A", "%s: location preserved" % label)
@@ -475,41 +582,58 @@ func _verify_save_and_migration() -> void:
 func _verify_save_validation() -> void:
 	var s := _session()
 	TradeService.buy("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
+	TradeService.buy("A", "test_good_01", 1, s.wallet, s.inventory, s.market, s.ledger)
 	WarehouseService.deposit(s.location, s.inventory, s.warehouses, "A", "test_good_01", 2, "", Callable(), s.ledger)
 	var good := SaveStore.serialize(s.wallet, s.inventory, s.market, s.location, s.warehouses, MarketRecovery.new(), s.ledger)
 	_check(not SaveStore.validate(good).is_empty(), "The reference v7 payload is valid")
-	var lots: Array = good["cost_ledger"]["backpack"]["test_good_01"]
-	var cost: int = lots[0]["unit_cost"]
+	var c1: int = s.ledger.get_lots(BP, "test_good_01")[0]["unit_cost"]
+	var c2: int = s.ledger.get_lots(BP, "test_good_01")[1]["unit_cost"]
+	var b1 := {"seq": 1, "quantity": 8, "unit_cost": c1}
+	var b2 := {"seq": 2, "quantity": 1, "unit_cost": c2}
+	var w1 := {"seq": 1, "quantity": 2, "unit_cost": c1}
+	_check(good["cost_ledger"] == {"next_seq": 3, "backpack": {"test_good_01": [b1, b2]}, "warehouses": {"A": {"test_good_01": [w1]}, "B": {}}}, "The saved shape: next_seq plus seq-ordered lots per container (%s)" % str(good["cost_ledger"]))
 	var bad := {
 		"ledger null": null,
 		"ledger array": [],
-		"missing backpack": {"warehouses": good["cost_ledger"]["warehouses"]},
-		"missing warehouses": {"backpack": good["cost_ledger"]["backpack"]},
+		"missing backpack": _without(good["cost_ledger"], "backpack"),
+		"missing warehouses": _without(good["cost_ledger"], "warehouses"),
+		"missing next_seq": _without(good["cost_ledger"], "next_seq"),
 		"extra key": _merge(good["cost_ledger"], {"profit": 1}),
 		"backpack array": _merge(good["cost_ledger"], {"backpack": []}),
-		"lots not array": _bp(good, {"test_good_01": {"quantity": 8, "unit_cost": cost}}),
+		"lots not array": _bp(good, {"test_good_01": b1}),
 		"empty lot list": _bp(good, {"test_good_01": []}),
-		"unknown good": _bp(good, {"test_good_01": lots, "test_good_07": [{"quantity": 1, "unit_cost": 5}]}),
-		"quantity 0": _bp(good, {"test_good_01": [{"quantity": 0, "unit_cost": cost}, {"quantity": 8, "unit_cost": cost + 1}]}),
-		"negative quantity": _bp(good, {"test_good_01": [{"quantity": -8, "unit_cost": cost}]}),
-		"fraction quantity": _bp(good, {"test_good_01": [{"quantity": 7.5, "unit_cost": cost}, {"quantity": 0.5, "unit_cost": cost + 1}]}),
-		"string quantity": _bp(good, {"test_good_01": [{"quantity": "8", "unit_cost": cost}]}),
-		"negative cost": _bp(good, {"test_good_01": [{"quantity": 8, "unit_cost": -84}]}),
-		"zero cost": _bp(good, {"test_good_01": [{"quantity": 8, "unit_cost": 0}]}),
-		"fraction cost": _bp(good, {"test_good_01": [{"quantity": 8, "unit_cost": 84.5}]}),
-		"null cost": _bp(good, {"test_good_01": [{"quantity": 8, "unit_cost": null}]}),
-		"unknown false": _bp(good, {"test_good_01": [{"quantity": 8, "unknown": false}]}),
-		"unknown and cost": _bp(good, {"test_good_01": [{"quantity": 8, "unknown": true, "unit_cost": 84}]}),
-		"extra lot key": _bp(good, {"test_good_01": [{"quantity": 8, "unit_cost": cost, "city": "A"}]}),
-		"split equal lots": _bp(good, {"test_good_01": [{"quantity": 4, "unit_cost": cost}, {"quantity": 4, "unit_cost": cost}]}),
-		"huge cost": _bp(good, {"test_good_01": [{"quantity": 8, "unit_cost": 1e300}]}),
-		"inventory mismatch (more lots)": _bp(good, {"test_good_01": [{"quantity": 9, "unit_cost": cost}]}),
-		"inventory mismatch (fewer lots)": _bp(good, {"test_good_01": [{"quantity": 7, "unit_cost": cost}]}),
+		"unknown good": _bp(good, {"test_good_01": [b1, b2], "test_good_07": [{"seq": 3, "quantity": 1, "unit_cost": 5}]}),
+		"quantity 0": _bp(good, {"test_good_01": [_with(b1, {"quantity": 0}), _with(b2, {"quantity": 9})]}),
+		"negative quantity": _bp(good, {"test_good_01": [_with(b1, {"quantity": -8}), _with(b2, {"quantity": 17})]}),
+		"fraction quantity": _bp(good, {"test_good_01": [_with(b1, {"quantity": 7.5}), _with(b2, {"quantity": 1.5})]}),
+		"string quantity": _bp(good, {"test_good_01": [_with(b1, {"quantity": "8"}), b2]}),
+		"negative cost": _bp(good, {"test_good_01": [_with(b1, {"unit_cost": -c1}), b2]}),
+		"zero cost": _bp(good, {"test_good_01": [b1, _with(b2, {"unit_cost": 0})]}),
+		"fraction cost": _bp(good, {"test_good_01": [b1, _with(b2, {"unit_cost": 84.5})]}),
+		"null cost": _bp(good, {"test_good_01": [b1, _with(b2, {"unit_cost": null})]}),
+		"huge cost": _bp(good, {"test_good_01": [b1, _with(b2, {"unit_cost": 1e300})]}),
+		"unknown false": _bp(good, {"test_good_01": [b1, {"seq": 2, "quantity": 1, "unknown": false}]}),
+		"unknown and cost": _bp(good, {"test_good_01": [b1, {"seq": 2, "quantity": 1, "unknown": true, "unit_cost": c2}]}),
+		"extra lot key": _bp(good, {"test_good_01": [b1, _with(b2, {"city": "A"})]}),
+		"missing seq": _bp(good, {"test_good_01": [b1, _without(b2, "seq")]}),
+		"seq 0": _bp(good, {"test_good_01": [_with(b1, {"seq": 0}), b2]}),
+		"negative seq": _bp(good, {"test_good_01": [b1, _with(b2, {"seq": -2})]}),
+		"fraction seq": _bp(good, {"test_good_01": [b1, _with(b2, {"seq": 1.5})]}),
+		"string seq": _bp(good, {"test_good_01": [b1, _with(b2, {"seq": "2"})]}),
+		"duplicate seq in one container": _bp(good, {"test_good_01": [b1, _with(b2, {"seq": 1, "unit_cost": c1})]}),
+		"seqs out of order": _bp(good, {"test_good_01": [b2, b1]}),
+		"one seq with two costs": _wh(good, "A", {"test_good_01": [_with(w1, {"unit_cost": c1 + 1})]}),
+		"one seq known and unknown": _wh(good, "A", {"test_good_01": [{"seq": 1, "quantity": 2, "unknown": true}]}),
+		"one seq for two goods": _merge(_bp(good, {"test_good_01": [b1, b2], "test_good_02": [{"seq": 2, "quantity": 1, "unit_cost": c2}]}), {}),
+		"next_seq not above every seq": _merge(good["cost_ledger"], {"next_seq": 2}),
+		"next_seq 0": _merge(good["cost_ledger"], {"next_seq": 0}),
+		"next_seq fraction": _merge(good["cost_ledger"], {"next_seq": 3.5}),
+		"inventory mismatch (more lots)": _bp(good, {"test_good_01": [_with(b1, {"quantity": 9}), b2]}),
+		"inventory mismatch (fewer lots)": _bp(good, {"test_good_01": [_with(b1, {"quantity": 7}), b2]}),
 		"inventory mismatch (missing good)": _bp(good, {}),
-		"inventory mismatch (extra good)": _bp(good, {"test_good_01": lots, "test_good_02": [{"quantity": 1, "unknown": true}]}),
-		"warehouse mismatch": _wh(good, "A", {"test_good_01": [{"quantity": 3, "unit_cost": cost}]}),
+		"warehouse mismatch": _wh(good, "A", {"test_good_01": [_with(w1, {"quantity": 3})]}),
 		"warehouse missing lots": _wh(good, "A", {}),
-		"warehouse lots for empty city": _wh(good, "B", {"test_good_01": [{"quantity": 1, "unit_cost": cost}]}),
+		"warehouse lots for empty city": _wh(good, "B", {"test_good_01": [{"seq": 2, "quantity": 1, "unit_cost": c2}]}),
 		"missing city B": _merge(good["cost_ledger"], {"warehouses": {"A": good["cost_ledger"]["warehouses"]["A"]}}),
 		"extra city C": _merge(good["cost_ledger"], {"warehouses": _merge(good["cost_ledger"]["warehouses"], {"C": {}})}),
 	}
@@ -517,6 +641,16 @@ func _verify_save_validation() -> void:
 		var payload := good.duplicate(true)
 		payload["cost_ledger"] = bad[label]
 		_check(SaveStore.validate(payload).is_empty(), "Malformed v7 ledger (%s) rejects the whole save" % label)
+	# The inventory-mismatch case with an extra good: add a real unit to the goods
+	# but no lot for it.
+	var extra := good.duplicate(true)
+	extra["character"]["inventory"]["items"]["test_good_02"] = {"quantity": 1}
+	_check(SaveStore.validate(extra).is_empty(), "Goods without lots reject the save")
+	# Valid variations are accepted: a split lot in two containers, larger next_seq.
+	var roomy := good.duplicate(true)
+	roomy["cost_ledger"]["next_seq"] = 50
+	var roomy_loaded := SaveStore.validate(roomy)
+	_check(not roomy_loaded.is_empty() and roomy_loaded["cost_ledger"].get_next_seq() == 50, "A larger next_seq is valid and kept")
 	var missing := good.duplicate(true)
 	missing.erase("cost_ledger")
 	_check(SaveStore.validate(missing).is_empty(), "A v7 save without cost_ledger is rejected")
@@ -526,7 +660,6 @@ func _verify_save_validation() -> void:
 	var v8 := good.duplicate(true)
 	v8["version"] = 8
 	_check(SaveStore.validate(v8).is_empty(), "An unknown future version is rejected")
-	# Real JSON round trip of a rejected save keeps the player's file untouched.
 	var broken := good.duplicate(true)
 	broken["cost_ledger"]["backpack"]["test_good_01"][0]["unit_cost"] = -1
 	_write_json(broken)
@@ -570,7 +703,7 @@ func _verify_multi_city_model() -> void:
 	_check(ok, "Every sale on an 8-city route matches the independent FIFO model")
 	# 400x1 -> 520 | 400x9 -> 480x9 | 900 -> 1100 | 900x9 -> 850x9 | 410 + 395x9 -> 430x10 | 395 -> 300
 	_check(realized == [120, 720, 200, -450, 335, -95], "Per-sale realized P/L: %s" % str(realized))
-	_check(ledger.get_snapshot() == {}, "Everything sold: nothing left, nothing reset in between")
+	_check(ledger.get_all_lots() == {}, "Everything sold: nothing left, nothing reset in between")
 	# Same lots sold in different cities: identical cost.
 	var a := _session()
 	a.wallet.add(100000)
@@ -599,7 +732,7 @@ func _verify_game_flow() -> void:
 	var p2: int = main.market.get_quote("A", "test_good_02")["buy_price"]
 	hub.get_market_button("test_good_02", "buy10").pressed.emit()
 	_check(hub.get_feedback_text() == "已買入 10 件測試商品二，支付 %d" % (p2 * 10), "Buy feedback unchanged (payment shown once)")
-	_check(hub.get_market_row_texts("test_good_02")["held"] == "持有 20" and main.cost_ledger.get_lots(BP, "test_good_02").size() == 2, "UI shows one combined 20; accounting keeps two lots")
+	_check(hub.get_market_row_texts("test_good_02")["held"] == "持有 20" and _lots(main.cost_ledger, BP, "test_good_02").size() == 2, "UI shows one combined 20; accounting keeps two lots")
 	var saved := _read_json()
 	_check(saved["cost_ledger"]["backpack"]["test_good_02"].size() == 2, "Each trade saves the lots")
 	# Travel A -> B, sell 10 (first lot), then 10 (second lot).
@@ -618,7 +751,7 @@ func _verify_game_flow() -> void:
 	_check(fare_money == main.wallet.get_balance() - bb * 10 - bb2 * 10 and bb2 * 10 - p2 * 10 == int(hub.get_feedback_text().get_slice("盈利 +", 1)), "The 300 fare is charged separately; merchandise P/L is revenue - FIFO cost only")
 	# B -> A -> keep trading, nothing resets.
 	hub.get_market_button("test_good_01", "buy10").pressed.emit()
-	var b_cost: int = main.cost_ledger.get_lots(BP, "test_good_01")[0]["unit_cost"]
+	var b_cost: int = _lots(main.cost_ledger, BP, "test_good_01")[0]["unit_cost"]
 	_check(main.request_transport("A", "t05-back")["success"], "Ride back to A")
 	main.time_source.advance_ms(90000)
 	await process_frame
@@ -646,12 +779,12 @@ func _verify_game_save_failure() -> void:
 	var money: int = main.wallet.get_balance()
 	var bought: Dictionary = main.buy_in_current_city("test_good_01", 10)
 	_check(bought["success"] and main.wallet.get_balance() == money - price * 10 and main.inventory.get_quantity("test_good_01") == 10 and main.market.get_quote("A", "test_good_01")["stock"] == 90, "Buy + save failure: the completed trade stands")
-	_check(main.cost_ledger.get_lots(BP, "test_good_01") == [{"quantity": 10, "unit_cost": price}] and main.cost_ledger.matches(main.inventory.get_items(), main.warehouses), "Buy + save failure: the lot exists and matches")
+	_check(_lots(main.cost_ledger, BP, "test_good_01") == [{"quantity": 10, "unit_cost": price}] and main.cost_ledger.matches(main.inventory.get_items(), main.warehouses), "Buy + save failure: the lot exists and matches")
 	_check(not FileAccess.file_exists(UNWRITABLE_SAVE), "Nothing was written")
 	var bb: int = main.market.get_quote("A", "test_good_01")["buyback_price"]
 	var sold: Dictionary = main.sell_in_current_city("test_good_01", 10)
 	_check(sold["success"] and sold["acquisition_cost"] == price * 10 and main.inventory.get_quantity("test_good_01") == 0 and main.market.get_quote("A", "test_good_01")["stock"] == 100 and main.wallet.get_balance() == money - price * 10 + bb * 10, "Sell + save failure: the completed sale stands")
-	_check(main.cost_ledger.get_snapshot() == {} and main.cost_ledger.matches(main.inventory.get_items(), main.warehouses), "Sell + save failure: lots consumed and consistent")
+	_check(main.cost_ledger.get_all_lots() == {} and main.cost_ledger.matches(main.inventory.get_items(), main.warehouses), "Sell + save failure: lots consumed and consistent")
 	await _destroy(main)
 	_sections_done.append("game_save_failure")
 
@@ -679,7 +812,7 @@ func _verify_recovery_interplay() -> void:
 	main.time_source.set_now_ms(T0 + 20 * 12000)
 	var q: Dictionary = main.market.get_quote("A", "test_good_02")
 	main.buy_in_current_city("test_good_02", 1)
-	_check(main.cost_ledger.get_lots(BP, "test_good_02") == [{"quantity": 1, "unit_cost": q["buy_price"]}], "A purchase lot records the locked price at execution")
+	_check(_lots(main.cost_ledger, BP, "test_good_02") == [{"quantity": 1, "unit_cost": q["buy_price"]}], "A purchase lot records the locked price at execution")
 	await _destroy(main)
 	_sections_done.append("recovery_interplay")
 
@@ -781,7 +914,9 @@ func _verify_stress() -> void:
 	s.inventory.add("test_good_02", 4)
 	s.ledger.add_unknown(BP, "test_good_02", 4)
 	var recovery := MarketRecovery.from_dict({"anchor_ms": T0})
-	var model := {BP: {"test_good_02": [U, U, U, U]}, "A": {}, "B": {}}
+	# Independent acquisition-order model: each unit is [seq, cost or "U"].
+	var model := {BP: {"test_good_02": [[1, U], [1, U], [1, U], [1, U]]}, "A": {}, "B": {}}
+	var model_next := 2
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 505
 	var counts := {"buy1": 0, "buy10": 0, "sell1": 0, "sell10": 0, "deposit": 0, "withdraw": 0, "reload": 0, "move": 0, "rejected": 0}
@@ -797,7 +932,8 @@ func _verify_stress() -> void:
 			var price: int = s.market.get_quote(city, good_id)["buy_price"]
 			var r := TradeService.buy(city, good_id, quantity, s.wallet, s.inventory, s.market, s.ledger)
 			if r["success"]:
-				_model_add(model[BP], good_id, quantity, price)
+				_model_add(model[BP], good_id, quantity, model_next, price)
+				model_next += 1
 				counts["buy%d" % quantity] += 1
 			else:
 				counts["rejected"] += 1
@@ -805,11 +941,13 @@ func _verify_stress() -> void:
 			var r := TradeService.sell(city, good_id, quantity, s.wallet, s.inventory, s.market, s.ledger)
 			if r["success"]:
 				var taken := _model_take(model[BP], good_id, quantity)
-				var expected_known := not taken.has(U)
+				var expected_known := true
 				var expected_cost := 0
-				for c in taken:
-					if c is int:
-						expected_cost += c
+				for unit in taken:
+					if unit[1] is String:
+						expected_known = false
+					else:
+						expected_cost += unit[1]
 				if r["cost_known"] != expected_known or (expected_known and r["acquisition_cost"] != expected_cost) or (expected_known and r["realized_profit"] != r["revenue"] - expected_cost) or (not expected_known and (r["acquisition_cost"] != null or r["realized_profit"] != null)):
 					cost_breaks += 1
 				counts["sell%d" % quantity] += 1
@@ -822,11 +960,11 @@ func _verify_stress() -> void:
 				else WarehouseService.withdraw(s.location, s.inventory, s.warehouses, city, good_id, q, "", Callable(), s.ledger)
 			if r["success"]:
 				if deposit:
-					for c in _model_take(model[BP], good_id, q):
-						_model_add(model[city], good_id, 1, c)
+					for unit in _model_take(model[BP], good_id, q):
+						_model_add(model[city], good_id, 1, unit[0], unit[1])
 				else:
-					for c in _model_take(model[city], good_id, q):
-						_model_add(model[BP], good_id, 1, c)
+					for unit in _model_take(model[city], good_id, q):
+						_model_add(model[BP], good_id, 1, unit[0], unit[1])
 				counts["deposit" if deposit else "withdraw"] += 1
 			else:
 				counts["rejected"] += 1
@@ -854,7 +992,9 @@ func _verify_stress() -> void:
 			for id in goods:
 				if _model_lots(model[container], id) != s.ledger.get_lots(ledger_id, id):
 					drift += 1
-	_check(drift == 0, "Stress: ledger == inventory / warehouse quantities and == the FIFO model after every step (%d drifts)" % drift)
+		if s.ledger.get_next_seq() != model_next:
+			drift += 1
+	_check(drift == 0, "Stress: ledger == inventory / warehouse quantities and == the acquisition-order FIFO model (seq, quantity, cost) after every step (%d drifts)" % drift)
 	_check(cost_breaks == 0, "Stress: every sale's cost_known / cost / P/L matches the model (%d breaks)" % cost_breaks)
 	_check(counts["buy1"] >= 20 and counts["buy10"] >= 20 and counts["sell1"] >= 20 and counts["sell10"] >= 10 and counts["deposit"] >= 20 and counts["withdraw"] >= 20 and counts["reload"] >= 30 and counts["move"] >= 30, "Stress mixes every operation %s" % str(counts))
 	print("T05 stress counts: ", counts)
@@ -887,33 +1027,61 @@ func _session(ledger: TradeCostLedger = null, market: MarketState = null) -> Ses
 	return s
 
 
+## Adds carried goods with one purchase lot at an exact test cost.
+func _stock_lot(s: Session, good_id: String, quantity: int, cost: int) -> void:
+	_check(s.inventory.add(good_id, quantity) and s.ledger.add_purchase(BP, good_id, quantity, cost), "Fixture: %d x %s @ %d" % [quantity, good_id, cost])
+
+
+func _deposit(s: Session, city: String, good_id: String, quantity: int) -> bool:
+	return WarehouseService.deposit(s.location, s.inventory, s.warehouses, city, good_id, quantity, "", Callable(), s.ledger)["success"]
+
+
+func _withdraw(s: Session, city: String, good_id: String, quantity: int) -> bool:
+	return WarehouseService.withdraw(s.location, s.inventory, s.warehouses, city, good_id, quantity, "", Callable(), s.ledger)["success"]
+
+
+func _move_to(s: Session, city: String) -> void:
+	s.location.leave_city()
+	s.location.enter_city(city)
+
+
 ## Everything a trade or transfer may change.
 func _state(s: Session) -> Dictionary:
 	return {"money": s.wallet.get_balance(), "items": s.inventory.get_items(), "market": s.market.get_snapshot(), "lots": s.ledger.get_snapshot(), "warehouses": s.warehouses.get_snapshot()}
 
 
-func _model_add(container: Dictionary, good_id: String, quantity: int, cost: Variant) -> void:
+func _model_add(container: Dictionary, good_id: String, quantity: int, seq: int, cost: Variant) -> void:
 	if not container.has(good_id):
 		container[good_id] = []
 	for i in range(quantity):
-		container[good_id].append(cost)
+		container[good_id].append([seq, cost])
 
 
+## Takes the `quantity` units with the lowest acquisition seq (stable order).
 func _model_take(container: Dictionary, good_id: String, quantity: int) -> Array:
-	var taken := []
-	for i in range(quantity):
-		taken.append(container[good_id].pop_front())
+	var units: Array = container[good_id]
+	units.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	var taken := units.slice(0, quantity)
+	container[good_id] = units.slice(quantity)
 	return taken
 
 
-## The model's per-unit queue as ledger lots (adjacent equal costs merged).
+## The model's units as ledger lots: one lot per seq, ascending.
 func _model_lots(container: Dictionary, good_id: String) -> Array:
+	var by_seq := {}
+	for unit in container.get(good_id, []):
+		if not by_seq.has(unit[0]):
+			by_seq[unit[0]] = {"seq": unit[0], "quantity": 0}
+			if unit[1] is String:
+				by_seq[unit[0]]["unknown"] = true
+			else:
+				by_seq[unit[0]]["unit_cost"] = unit[1]
+		by_seq[unit[0]]["quantity"] += 1
+	var seqs := by_seq.keys()
+	seqs.sort()
 	var lots := []
-	for c in container.get(good_id, []):
-		if not lots.is_empty() and ((c is String and lots.back().has("unknown")) or (c is int and lots.back().get("unit_cost") == c)):
-			lots.back()["quantity"] += 1
-		else:
-			lots.append({"quantity": 1, "unknown": true} if c is String else {"quantity": 1, "unit_cost": c})
+	for seq in seqs:
+		lots.append(by_seq[seq])
 	return lots
 
 
@@ -927,6 +1095,28 @@ func _wh(good: Dictionary, city: String, lots: Dictionary) -> Dictionary:
 	var ledger: Dictionary = good["cost_ledger"].duplicate(true)
 	ledger["warehouses"][city] = lots
 	return ledger
+
+
+func _with(base: Dictionary, changes: Dictionary) -> Dictionary:
+	var result := base.duplicate(true)
+	result.merge(changes, true)
+	return result
+
+
+func _without(base: Dictionary, key: String) -> Dictionary:
+	var result := base.duplicate(true)
+	result.erase(key)
+	return result
+
+
+## Lots without their seq, for cost / quantity comparisons.
+func _lots(ledger: TradeCostLedger, container: String, good_id: String) -> Array:
+	var plain := []
+	for lot in ledger.get_lots(container, good_id):
+		var copy: Dictionary = lot.duplicate()
+		copy.erase("seq")
+		plain.append(copy)
+	return plain
 
 
 func _merge(base: Dictionary, extra: Dictionary) -> Dictionary:
