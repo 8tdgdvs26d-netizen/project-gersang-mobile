@@ -6,6 +6,7 @@ extends SceneTree
 
 const DynamicPriceModel := preload("res://tests/dynamic_price_model.gd")
 const FixedCapacityStats := preload("res://tests/fixed_capacity_stats.gd")
+const RecoveryModel := preload("res://tests/market_recovery_model.gd")
 const TEST_SAVE := "user://t03_dynamic_market_test_save.json"
 const T0 := 1800000000000
 const IDS := ["test_good_01", "test_good_02", "test_good_03", "test_good_04", "test_good_05", "test_good_06"]
@@ -397,7 +398,11 @@ func _verify_game_integration() -> void:
 	_check(main.request_transport("B", "t03-ride")["success"], "Passenger transport works")
 	main.time_source.advance_ms(90000)
 	await process_frame
-	_check(main.current_city_id == "B" and _quotes(main.market) == quotes_before, "Passenger transport must not change prices")
+	# T04: market time keeps running during the 90 s ride, so stock recovers by
+	# exactly the 7 whole steps due (independent model); transport adds nothing.
+	var expected := MarketState.from_snapshot(RecoveryModel.recovered_snapshot(market_before, RecoveryModel.steps_for_ms(90000)))
+	_check(RecoveryModel.steps_for_ms(90000) == 7 and main.market.get_snapshot() != market_before, "The ride lasts 7 whole market recovery steps")
+	_check(main.current_city_id == "B" and main.market.get_snapshot() == expected.get_snapshot() and _quotes(main.market) == _quotes(expected), "Passenger transport must not change prices (beyond T04 time-based recovery)")
 	await _destroy(main)
 	_sections_done.append("game_integration")
 
@@ -417,7 +422,7 @@ func _verify_save_reload() -> void:
 	var snapshot: Dictionary = main.market.get_snapshot()
 	var saved := FileAccess.get_file_as_string(TEST_SAVE)
 	_check(not saved.contains("dynamic") and not saved.contains("buy_price") and not saved.contains("buyback"), "The save stores stock, not derived prices")
-	_check(SaveStore.VERSION == 5, "No save schema change (still version 5)")
+	_check(SaveStore.VERSION == 6, "T03 made no save schema change; version 6 is T04's market recovery anchor")
 	await _destroy(main)
 	main = await _new_main(TEST_SAVE)
 	_check(main.market.get_snapshot() == snapshot, "Reload restores every stock exactly")
