@@ -79,7 +79,7 @@ func _verify_static() -> void:
 	for path in ["res://scripts/transport_service.gd", "res://scripts/main.gd", "res://scripts/city_hub.gd"]:
 		var code := _code_only(path)
 		_check(not code.contains("90000") and not code.contains("300"), "%s must not hard-code fares or durations" % path)
-	_check(SaveStore.VERSION == 4, "Save version must be bumped to 4")
+	_check(SaveStore.VERSION == 5, "Save version must be 4+ with location (T01 bumped it to 5 for warehouses)")
 	_sections_done.append("_verify_static")
 
 
@@ -350,7 +350,7 @@ func _verify_save_versions() -> void:
 		var location := PlayerLocation.from_dict(data)
 		_check(SaveStore.save(TEST_SAVE, _wallet_with(5000), CharacterInventory.new(), MarketState.create_default(), location), "v4 save must write (%s)" % data["mode"])
 		var raw := _read_json()
-		_check(int(raw.get("version", 0)) == 4 and raw.has("location") and raw.keys().size() == 5, "v4 save must hold version, money, character, market and location")
+		_check(int(raw.get("version", 0)) == SaveStore.VERSION and raw.has("location") and raw.has("warehouses") and raw.keys().size() == 6, "The current save must hold version, money, character, market, location (and T01 warehouses)")
 		var loaded := SaveStore.load_session(TEST_SAVE)
 		_check(not loaded.is_empty() and loaded["location"].to_dict() == data and loaded["wallet"].get_balance() == 5000, "v4 %s location must round-trip exactly" % data["mode"])
 
@@ -365,7 +365,7 @@ func _verify_save_versions() -> void:
 		"v4 bad journey": _with(v4, {"location": {"mode": "TRAVELING", "city_id": "", "journey": _with(journey, {"fare": -1}), "last_journey_id": "j9"}}),
 		"v4 reserved city": _with(v4, {"location": {"mode": "IN_CITY", "city_id": "D", "journey": null, "last_journey_id": ""}}),
 		"v3 with location": _with(legacy["v3"], {"location": v4["location"]}),
-		"v5": _with(v4, {"version": 5}),
+		"v6": _with(v4, {"version": 6}),
 	}
 	for label in broken:
 		_write_json(broken[label])
@@ -382,7 +382,7 @@ func _verify_game_flow() -> void:
 	_delete(TEST_SAVE)
 	var main := await _new_main(TEST_SAVE, T0)
 	await _walk_in(main, "A")
-	_check(int(_read_json()["version"]) == 4 and _read_json()["location"]["mode"] == "IN_CITY" and _read_json()["location"]["city_id"] == "A", "Entering City A must save the location")
+	_check(int(_read_json()["version"]) == SaveStore.VERSION and _read_json()["location"]["mode"] == "IN_CITY" and _read_json()["location"]["city_id"] == "A", "Entering City A must save the location")
 	var hub := main.get_node("CityHub") as CityHub
 	for press in range(3):
 		hub.get_market_button("test_good_03", "buy").pressed.emit()

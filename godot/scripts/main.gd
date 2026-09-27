@@ -8,6 +8,8 @@ extends Node2D
 const BOOTSTRAP_VERSION := "M2-09"
 ## Each market button press trades exactly one unit.
 const MARKET_TRADE_QUANTITY := 1
+## Each warehouse button press moves exactly one unit.
+const WAREHOUSE_TRANSFER_QUANTITY := 1
 ## After a failed arrival save the journey stays unfinished; retry this often.
 const ARRIVAL_RETRY_MS := 1000
 
@@ -40,6 +42,8 @@ var wallet := Wallet.new()
 ## City market state (reference price, stock and target stock per city x good).
 ## It belongs to the world, not the player; the session controller only holds it.
 var market := MarketState.create_default()
+## One item warehouse per active city (T01). Only WarehouseService changes it.
+var warehouses := WarehouseState.create_default()
 ## Local save file for money, cargo and market. An empty path turns persistence off
 ## (used by tests so they never touch the player's real save).
 var save_path := SaveStore.DEFAULT_PATH
@@ -62,6 +66,8 @@ func _ready() -> void:
 	_city_hub.buy_requested.connect(_on_market_buy_requested)
 	_city_hub.sell_requested.connect(_on_market_sell_requested)
 	_city_hub.transport_requested.connect(_on_transport_requested)
+	_city_hub.deposit_requested.connect(_on_deposit_requested)
+	_city_hub.withdraw_requested.connect(_on_withdraw_requested)
 	_city_hub.facility_changed.connect(_on_hub_facility_changed)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	_restore_location()
@@ -156,6 +162,17 @@ func update_journey() -> bool:
 	return true
 
 
+## Moves items from the inventory into the current city's warehouse. Free;
+## never touches the wallet, market or journey.
+func deposit_to_warehouse(item_id: Variant, quantity: Variant, request_id: String = "") -> Dictionary:
+	return WarehouseService.deposit(location, inventory, warehouses, current_city_id, item_id, quantity, request_id, _persist)
+
+
+## Moves items from the current city's warehouse into the inventory.
+func withdraw_from_warehouse(item_id: Variant, quantity: Variant, request_id: String = "") -> Dictionary:
+	return WarehouseService.withdraw(location, inventory, warehouses, current_city_id, item_id, quantity, request_id, _persist)
+
+
 func get_transport_quotes() -> Array:
 	var quotes := []
 	for destination in TransportRoutes.get_destinations(current_city_id):
@@ -197,6 +214,7 @@ func _load_saved_session() -> void:
 		character_stats = loaded["character_stats"]
 		market = loaded["market"]
 		location = loaded["location"]
+		warehouses = loaded["warehouses"]
 
 
 ## Puts the scene into the loaded location: the world (at the last city's
@@ -220,7 +238,7 @@ func _save_session() -> void:
 
 ## Writes the whole session; true when saved or when persistence is off.
 func _persist() -> bool:
-	return save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location)
+	return save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses)
 
 
 func _show_city(city_id: String) -> void:
@@ -270,6 +288,7 @@ func _refresh_hub_summary() -> void:
 		quotes[good_id] = market.get_quote(current_city_id, good_id)
 	_city_hub.show_market(quotes, inventory.get_items())
 	_city_hub.show_transport_routes(get_transport_quotes(), _next_request_id())
+	_city_hub.show_warehouse(inventory.get_items(), warehouses.get_contents(current_city_id), inventory.get_used_capacity(), inventory.get_max_capacity(), warehouses.get_used_capacity(current_city_id), warehouses.get_max_capacity(current_city_id), _next_request_id())
 
 
 func _on_market_buy_requested(good_id: String) -> void:
@@ -280,6 +299,18 @@ func _on_market_buy_requested(good_id: String) -> void:
 func _on_market_sell_requested(good_id: String) -> void:
 	var result := sell_in_current_city(good_id, MARKET_TRADE_QUANTITY)
 	_city_hub.show_trade_feedback("sell", good_id, MARKET_TRADE_QUANTITY, result)
+
+
+func _on_deposit_requested(item_id: String, request_id: String) -> void:
+	var result := deposit_to_warehouse(item_id, WAREHOUSE_TRANSFER_QUANTITY, request_id)
+	_refresh_hub_summary()
+	_city_hub.show_warehouse_feedback("deposit", item_id, result)
+
+
+func _on_withdraw_requested(item_id: String, request_id: String) -> void:
+	var result := withdraw_from_warehouse(item_id, WAREHOUSE_TRANSFER_QUANTITY, request_id)
+	_refresh_hub_summary()
+	_city_hub.show_warehouse_feedback("withdraw", item_id, result)
 
 
 func _on_transport_requested(destination_city_id: String, request_id: String) -> void:
