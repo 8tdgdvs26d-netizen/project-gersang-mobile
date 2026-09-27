@@ -47,7 +47,27 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-M2-09 Intercity Paid Passenger Transport lets the main character ride between the
+T01 City Warehouse Foundation adds one independent item warehouse per active city:
+
+- flow: Market ↔ CharacterInventory ↔ Warehouse. The market never reads or writes a
+  warehouse; purchases enter and sales leave the character's inventory only
+- `CityWarehouse` stores item quantities only (no money). Capacity is quantity × the
+  authoritative GoodsCatalog capacity cost; callers can never supply a cost
+- `WarehouseState` holds A and B, gives read access by city (contents, used, max,
+  remaining capacity) and owns the save shape. Capacity is 100 per city, a PROTOTYPE
+  PARAMETER that is never saved, so it can be re-tuned without migrating saves
+- `WarehouseService` (UI-independent) deposits/withdraws only while IN_CITY and only in the
+  current city; remote cities, the world and journeys are rejected. Transfers are free,
+  atomic (both sides or neither), keep the existing inventory capacity and over-capacity
+  rules, apply a repeated request id once, and roll back if the save fails
+  (無法儲存，操作已取消). It never touches the wallet, market or journey
+- City Hub 倉庫 tab: 攜帶容量 / 倉庫容量, per good 攜帶 N / 倉庫 N, 存入 1 / 取出 1
+- save version 5 adds `warehouses` (city → items); v1–v4 saves load with empty warehouses,
+  and malformed warehouse data rejects the whole save
+- NOT INCLUDED (T02 or later): remote warehouse viewing UX, sorting/filtering, upgrades,
+  paid expansion, money storage, market ↔ warehouse shortcuts
+
+Previous: M2-09 Intercity Paid Passenger Transport lets the main character ride between the
 two active cities for a fare. Transport carries people, never goods:
 
 - `TransportService` (UI-independent) validates the request, charges the fare through
