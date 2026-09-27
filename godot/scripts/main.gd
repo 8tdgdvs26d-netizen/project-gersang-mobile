@@ -45,6 +45,9 @@ var warehouses := WarehouseState.create_default()
 ## The market's own recovery timeline (T04). Only update_market_recovery()
 ## advances it; trades never touch it.
 var market_recovery := MarketRecovery.new()
+## Acquisition-cost lots of every carried and stored trade good (T05). Only
+## TradeService (buy / sell) and WarehouseService (deposit / withdraw) change it.
+var cost_ledger := TradeCostLedger.new()
 ## Local save file for money, cargo and market. An empty path turns persistence off
 ## (used by tests so they never touch the player's real save).
 var save_path := SaveStore.DEFAULT_PATH
@@ -173,13 +176,13 @@ func update_journey() -> bool:
 ## rejects any city that is not the character's current city.
 func deposit_to_warehouse(item_id: Variant, quantity: Variant, request_id: String = "", city_id: Variant = null) -> Dictionary:
 	var target: Variant = current_city_id if city_id == null else city_id
-	return WarehouseService.deposit(location, inventory, warehouses, target, item_id, quantity, request_id, _persist)
+	return WarehouseService.deposit(location, inventory, warehouses, target, item_id, quantity, request_id, _persist, cost_ledger)
 
 
 ## Moves items from a warehouse (default: the current city's) into the inventory.
 func withdraw_from_warehouse(item_id: Variant, quantity: Variant, request_id: String = "", city_id: Variant = null) -> Dictionary:
 	var target: Variant = current_city_id if city_id == null else city_id
-	return WarehouseService.withdraw(location, inventory, warehouses, target, item_id, quantity, request_id, _persist)
+	return WarehouseService.withdraw(location, inventory, warehouses, target, item_id, quantity, request_id, _persist, cost_ledger)
 
 
 ## Read-only view of any active city's warehouse (copies only); `local` is
@@ -225,7 +228,7 @@ func buy_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "total_value": 0, "reason": "not_in_city"}
 	update_market_recovery()
-	var result := TradeService.buy(current_city_id, good_id, quantity, wallet, inventory, market)
+	var result := TradeService.buy(current_city_id, good_id, quantity, wallet, inventory, market, cost_ledger)
 	if result["success"]:
 		_save_session()
 	_refresh_hub_summary()
@@ -236,7 +239,7 @@ func sell_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "total_value": 0, "reason": "not_in_city"}
 	update_market_recovery()
-	var result := TradeService.sell(current_city_id, good_id, quantity, wallet, inventory, market)
+	var result := TradeService.sell(current_city_id, good_id, quantity, wallet, inventory, market, cost_ledger)
 	if result["success"]:
 		_save_session()
 	_refresh_hub_summary()
@@ -255,6 +258,7 @@ func _load_saved_session() -> void:
 		location = loaded["location"]
 		warehouses = loaded["warehouses"]
 		market_recovery = loaded["market_recovery"]
+		cost_ledger = loaded["cost_ledger"]
 
 
 ## Puts the scene into the loaded location: the world (at the last city's
@@ -278,7 +282,7 @@ func _save_session() -> void:
 
 ## Writes the whole session; true when saved or when persistence is off.
 func _persist() -> bool:
-	return save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery)
+	return save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger)
 
 
 func _show_city(city_id: String) -> void:
@@ -333,9 +337,24 @@ func _refresh_hub_summary() -> void:
 
 func _refresh_market_view() -> void:
 	var quotes := {}
+	var previews := {}
 	for good_id in GoodsCatalog.get_ids():
 		quotes[good_id] = market.get_quote(current_city_id, good_id)
-	_city_hub.show_market(quotes, inventory.get_items())
+		previews[good_id] = get_sale_previews(good_id)
+	_city_hub.show_market(quotes, inventory.get_items(), previews)
+
+
+## Expected merchandise result of selling 1 and 10 of a good here now, from
+## the same TradeService rules the sale uses. Only sizes the player can sell.
+func get_sale_previews(good_id: Variant) -> Dictionary:
+	var previews := {}
+	if not is_in_city():
+		return previews
+	for quantity in TradeService.ALLOWED_ORDER_QUANTITIES:
+		var terms := TradeService.preview_sell(current_city_id, good_id, quantity, inventory, market, cost_ledger)
+		if terms["success"]:
+			previews[quantity] = terms
+	return previews
 
 
 ## Market buttons send orders of 1 or 10; TradeService validates the size and

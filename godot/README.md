@@ -47,7 +47,47 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-T04 Market Recovery / Restock: stock drifts back toward its target over time.
+T05 Profit / Loss + Trading Integration: purchase lot → FIFO cost → realized P/L per sale.
+
+- `TradeCostLedger` (new) holds the acquisition-cost identity of trade goods, separate from the
+  quantity containers: per container (backpack, each city warehouse) and good, lots
+  `{seq, quantity, unit_cost}` or `{seq, quantity, unknown: true}` ordered by `seq`, a stable
+  acquisition sequence number (1, 2, 3 … in purchase order; one global counter). No average
+  cost: different purchases never merge. CharacterInventory stays a quantity / capacity
+  container
+- ACQUISITION-ORDER FIFO: a sale consumes the carried units with the lowest `seq` first. A
+  lot keeps its `seq` wherever it goes, so goods just taken out of a warehouse are still as
+  old as when they were bought
+- buy (1 or 10, one locked price, T03 unchanged) appends one lot at that price; sell consumes
+  the oldest lots FIFO. Sell results add revenue, cost_known, acquisition_cost and
+  realized_profit; when any sold unit has an unknown cost, acquisition_cost and
+  realized_profit are null (never 0) and the sale still pays in full
+- `TradeService.preview_sell()` runs the same rules as `sell()` without changing anything;
+  the market row shows 「預計：賣1 +4 / 賣10 +40」 for the sizes the player can sell
+  (資料不足 when a size's cost is not fully known). The executed sale uses the quote at
+  execution time (T04 recovery may move it)
+- sale feedback: 「已賣出 10 件…，收入 1260，成本 840，盈利 +420」 (虧損 -N / 盈虧 0), or
+  「…，成本：資料不足」. Merchandise P/L only: transport fares are separate, and there is no
+  trading run, trip or cumulative profit
+- warehouse deposit / withdraw move the source's lowest-`seq` units with their `seq`, quantity
+  and cost; a partial transfer splits a lot across containers under the same `seq` and the
+  parts rejoin when they meet again. No purchase, sale or profit happens there
+- atomic: wallet, inventory, market and ledger change together; any failure inside a trade
+  restores all four. A save write that fails AFTER a completed trade keeps the trade
+  (M2-06 contract, unchanged); warehouse transfers keep their own save-failure rollback,
+  now including the lots. Trades and transfers refuse a ledger that does not match the goods
+- save version 7 adds `cost_ledger` ({next_seq, backpack, warehouses: {city: …}}), validated
+  strictly (exact keys; positive integer seqs, quantities and costs; seqs strictly ascending
+  per container x good; one seq always the same good and cost; next_seq above every seq;
+  lot totals equal to every carried and stored quantity) or the whole save is rejected
+- v1–v6 saves get one UNKNOWN lot per good and container: quantities kept, no price
+  invented. Deterministic migration order: backpack, then each warehouse in active-city
+  order; goods in catalog order within a container. P/L and previews are never saved
+- prototype UI adjustment (approved): the market view hides the 「城市（原型）」 title and
+  uses a 4px row gap to fit the 16px preview line; buttons stay 104 × 88
+- tests: `tests/verify_t05_profit_loss.gd`
+
+Previous: T04 Market Recovery / Restock: stock drifts back toward its target over time.
 
 - PROTOTYPE rule: every 12 s of market time each city × good stock moves 1 unit toward its
   target stock (100) and stops exactly there (95 → … → 100, 105 → … → 100, never past).

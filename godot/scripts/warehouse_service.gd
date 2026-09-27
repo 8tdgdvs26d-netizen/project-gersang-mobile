@@ -7,7 +7,8 @@ extends RefCounted
 ##   Market <-> CharacterInventory <-> Warehouse
 ##
 ## The market never touches a warehouse, and this service never touches the
-## wallet, market or journey. Deposit and withdraw are free. Remote cities'
+## wallet, market or journey. With a trade cost ledger (T05) the moved units'
+## oldest cost lots move with them, unchanged (no purchase, no sale, no profit). Deposit and withdraw are free. Remote cities'
 ## warehouses cannot be changed. Every check runs before any state changes;
 ## a transfer either fully succeeds (and is saved) or changes nothing.
 
@@ -27,7 +28,7 @@ const ERR_SAVE_FAILED := "ERR_SAVE_FAILED"
 
 ## Moves `quantity` of an item from the inventory into the current city's
 ## warehouse. `persist` saves the new state; if it fails, both sides roll back.
-static func deposit(location: PlayerLocation, inventory: CharacterInventory, warehouses: WarehouseState, city_id: Variant, item_id: Variant, quantity: Variant, request_id: String = "", persist: Callable = Callable()) -> Dictionary:
+static func deposit(location: PlayerLocation, inventory: CharacterInventory, warehouses: WarehouseState, city_id: Variant, item_id: Variant, quantity: Variant, request_id: String = "", persist: Callable = Callable(), ledger: TradeCostLedger = null) -> Dictionary:
 	var reason := _common_error(location, inventory, warehouses, city_id, item_id, quantity, request_id)
 	if reason != "":
 		return _result(false, reason)
@@ -36,18 +37,22 @@ static func deposit(location: PlayerLocation, inventory: CharacterInventory, war
 		return _result(false, ERR_INSUFFICIENT_CARRIED)
 	if not warehouse.can_add(item_id, quantity):
 		return _result(false, ERR_WAREHOUSE_CAPACITY)
+	if not _ledger_in_step(ledger, inventory, warehouse, item_id):
+		return _result(false, ERR_INVALID_STATE)
 	var inventory_before := inventory.get_stacks()
 	var warehouse_before := warehouse.get_items()
-	if not inventory.remove(item_id, quantity) or not warehouse.add(item_id, quantity):
-		_rollback(inventory, inventory_before, warehouse, warehouse_before)
+	var ledger_before := ledger.get_snapshot() if ledger != null else {}
+	if not inventory.remove(item_id, quantity) or not warehouse.add(item_id, quantity) \
+		or (ledger != null and not ledger.move_fifo(TradeCostLedger.BACKPACK, TradeCostLedger.warehouse(city_id), item_id, quantity)):
+		_rollback(inventory, inventory_before, warehouse, warehouse_before, ledger, ledger_before)
 		return _result(false, ERR_TRANSFER_FAILED)
-	return _finish(inventory, inventory_before, warehouses, warehouse, warehouse_before, request_id, quantity, persist)
+	return _finish(inventory, inventory_before, warehouses, warehouse, warehouse_before, request_id, quantity, persist, ledger, ledger_before)
 
 
 ## Moves `quantity` of an item from the current city's warehouse into the
 ## inventory, subject to the inventory's own capacity rules (an over-capacity
 ## inventory accepts nothing).
-static func withdraw(location: PlayerLocation, inventory: CharacterInventory, warehouses: WarehouseState, city_id: Variant, item_id: Variant, quantity: Variant, request_id: String = "", persist: Callable = Callable()) -> Dictionary:
+static func withdraw(location: PlayerLocation, inventory: CharacterInventory, warehouses: WarehouseState, city_id: Variant, item_id: Variant, quantity: Variant, request_id: String = "", persist: Callable = Callable(), ledger: TradeCostLedger = null) -> Dictionary:
 	var reason := _common_error(location, inventory, warehouses, city_id, item_id, quantity, request_id)
 	if reason != "":
 		return _result(false, reason)
@@ -56,12 +61,16 @@ static func withdraw(location: PlayerLocation, inventory: CharacterInventory, wa
 		return _result(false, ERR_INSUFFICIENT_STORED)
 	if not inventory.can_add(item_id, quantity):
 		return _result(false, ERR_CARRY_CAPACITY)
+	if not _ledger_in_step(ledger, inventory, warehouse, item_id):
+		return _result(false, ERR_INVALID_STATE)
 	var inventory_before := inventory.get_stacks()
 	var warehouse_before := warehouse.get_items()
-	if not warehouse.remove(item_id, quantity) or not inventory.add(item_id, quantity):
-		_rollback(inventory, inventory_before, warehouse, warehouse_before)
+	var ledger_before := ledger.get_snapshot() if ledger != null else {}
+	if not warehouse.remove(item_id, quantity) or not inventory.add(item_id, quantity) \
+		or (ledger != null and not ledger.move_fifo(TradeCostLedger.warehouse(city_id), TradeCostLedger.BACKPACK, item_id, quantity)):
+		_rollback(inventory, inventory_before, warehouse, warehouse_before, ledger, ledger_before)
 		return _result(false, ERR_TRANSFER_FAILED)
-	return _finish(inventory, inventory_before, warehouses, warehouse, warehouse_before, request_id, quantity, persist)
+	return _finish(inventory, inventory_before, warehouses, warehouse, warehouse_before, request_id, quantity, persist, ledger, ledger_before)
 
 
 static func _common_error(location: PlayerLocation, inventory: CharacterInventory, warehouses: WarehouseState, city_id: Variant, item_id: Variant, quantity: Variant, request_id: String) -> String:
@@ -80,18 +89,26 @@ static func _common_error(location: PlayerLocation, inventory: CharacterInventor
 	return ""
 
 
-static func _finish(inventory: CharacterInventory, inventory_before: Dictionary, warehouses: WarehouseState, warehouse: CityWarehouse, warehouse_before: Dictionary, request_id: String, quantity: int, persist: Callable) -> Dictionary:
+static func _finish(inventory: CharacterInventory, inventory_before: Dictionary, warehouses: WarehouseState, warehouse: CityWarehouse, warehouse_before: Dictionary, request_id: String, quantity: int, persist: Callable, ledger: TradeCostLedger, ledger_before: Dictionary) -> Dictionary:
 	if persist.is_valid() and not persist.call():
-		_rollback(inventory, inventory_before, warehouse, warehouse_before)
+		_rollback(inventory, inventory_before, warehouse, warehouse_before, ledger, ledger_before)
 		return _result(false, ERR_SAVE_FAILED)
 	if request_id != "":
 		warehouses.last_request_id = request_id
 	return _result(true, "", {"quantity": quantity})
 
 
-static func _rollback(inventory: CharacterInventory, inventory_before: Dictionary, warehouse: CityWarehouse, warehouse_before: Dictionary) -> void:
+static func _rollback(inventory: CharacterInventory, inventory_before: Dictionary, warehouse: CityWarehouse, warehouse_before: Dictionary, ledger: TradeCostLedger, ledger_before: Dictionary) -> void:
 	inventory.restore_stacks(inventory_before)
 	warehouse.restore_items(warehouse_before)
+	if ledger != null:
+		ledger.restore_snapshot(ledger_before)
+
+
+## Both sides' lots must account for exactly their item quantities.
+static func _ledger_in_step(ledger: TradeCostLedger, inventory: CharacterInventory, warehouse: CityWarehouse, item_id: Variant) -> bool:
+	return ledger == null or (ledger.get_quantity(TradeCostLedger.BACKPACK, item_id) == inventory.get_quantity(item_id) \
+		and ledger.get_quantity(TradeCostLedger.warehouse(warehouse.city_id), item_id) == warehouse.get_quantity(item_id))
 
 
 static func _result(success: bool, reason: String, extra: Dictionary = {}) -> Dictionary:

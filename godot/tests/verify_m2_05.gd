@@ -128,10 +128,12 @@ func _verify_layout() -> void:
 
 func _verify_buy_and_sell_ui() -> void:
 	await _reset_session_in("A")
+	var paid := {}
 	for good_id in GoodsCatalog.get_ids():
 		var before_money: int = _main.wallet.get_balance()
 		var before_items: Dictionary = _main.cargo.get_items()
 		var price: int = _price("A", good_id, true)
+		paid[good_id] = price
 		await _click(_hub.get_market_button(good_id, "buy"), false)
 		_check(_main.wallet.get_balance() == before_money - price, "One Buy 1 press on %s must cost exactly one A buy price" % good_id)
 		var expected_items := before_items.duplicate()
@@ -148,7 +150,7 @@ func _verify_buy_and_sell_ui() -> void:
 		_check(_main.wallet.get_balance() == before_money + price, "One Sell 1 touch on %s must earn exactly one A buyback price" % good_id)
 		_check(_main.cargo.get_quantity(good_id) == before_held - 1, "Sell 1 on %s must remove exactly one" % good_id)
 		_check(_ui_matches_model(), "Money, cargo and held must refresh after selling %s" % good_id)
-		_check(_hub.get_feedback_text() == "已賣出 1 件%s，收入 %d" % [GoodsCatalog.get_good(good_id)["display_name"], price], "Sell feedback for %s" % good_id)
+		_check(_hub.get_feedback_text() == _sell_text(GoodsCatalog.get_good(good_id)["display_name"], price, paid[good_id]), "Sell feedback for %s (T05: with its FIFO cost and result)" % good_id)
 	# M2-07: a same-city round trip always loses money. T03: each good is bought at
 	# stock 100 and sold back at stock 99 (dynamic price), so the loss is computed.
 	var round_trip_loss := 0
@@ -263,6 +265,9 @@ func _verify_stress() -> void:
 	var double_exec := 0
 	var feedback_breaks := 0
 	var counts := {"buy_ok": 0, "buy_rejected": 0, "sell_ok": 0, "sell_rejected": 0, "A": 0, "B": 0}
+	# T05: independent FIFO model of each good's unit costs (oldest first).
+	var model_lots := {}
+	var sold_cost := 0
 	for press in range(STRESS_PRESSES):
 		if press > 0 and press % STRESS_CITY_SWITCH_EVERY == 0:
 			city_id = "B" if city_id == "A" else "A"
@@ -286,6 +291,9 @@ func _verify_stress() -> void:
 				model_money -= price
 				model_cargo[good_id] = model_cargo.get(good_id, 0) + 1
 				model_stock[city_id][good_id] -= 1
+				if not model_lots.has(good_id):
+					model_lots[good_id] = []
+				model_lots[good_id].append(price)
 		else:
 			if model_cargo.get(good_id, 0) < 1:
 				expected_reason = "持有貨物不足"
@@ -293,6 +301,7 @@ func _verify_stress() -> void:
 				model_money += price
 				model_stock[city_id][good_id] += 1
 				model_cargo[good_id] -= 1
+				sold_cost = model_lots[good_id].pop_front()
 				if model_cargo[good_id] == 0:
 					model_cargo.erase(good_id)
 		_hub.get_market_button(good_id, "buy" if is_buy else "sell").pressed.emit()
@@ -309,7 +318,7 @@ func _verify_stress() -> void:
 		if not _ui_matches_model():
 			ui_breaks += 1
 		var name: String = GoodsCatalog.get_good(good_id)["display_name"]
-		var expected_feedback := expected_reason if not ok else ("已買入 1 件%s，支付 %d" if is_buy else "已賣出 1 件%s，收入 %d") % [name, price]
+		var expected_feedback := expected_reason if not ok else ("已買入 1 件%s，支付 %d" % [name, price] if is_buy else _sell_text(name, price, sold_cost))
 		if _hub.get_feedback_text() != expected_feedback:
 			feedback_breaks += 1
 	_check(model_breaks == 0, "Stress: session state must match the reference model on all %d presses (%d breaks)" % [STRESS_PRESSES, model_breaks])
@@ -438,8 +447,17 @@ func _reset_session_in(city_id: String) -> void:
 	# Rules run on a fixed capacity-20 fixture (their original size); the T02
 	# prototype balance (100) is checked in the baseline.
 	_main.cargo = Cargo.new("player", FixedCapacityStats.new(20))
+	# T05: a fresh (empty) backpack has no cost lots either.
+	_main.cost_ledger = TradeCostLedger.new()
 	_main.market = MarketState.create_default()
 	await _enter(city_id)
+
+
+## T05 sale feedback: revenue, then the FIFO cost and the realized result.
+func _sell_text(name: String, revenue: int, cost: int) -> String:
+	var profit := revenue - cost
+	var result := "盈利 +%d" % profit if profit > 0 else ("虧損 %d" % profit if profit < 0 else "盈虧 0")
+	return "已賣出 1 件%s，收入 %d，成本 %d，%s" % [name, revenue, cost, result]
 
 
 func _settle() -> void:

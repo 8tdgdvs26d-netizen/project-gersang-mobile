@@ -60,7 +60,7 @@ func _verify_static() -> void:
 	var hub := _code_only("res://scripts/city_hub.gd")
 	_check(not hub.contains("WarehouseService") and not hub.contains("WarehouseState") and not hub.contains("restore_items"), "The UI must not change warehouse state directly")
 	_check(FileAccess.get_file_as_string("res://scripts/warehouse_state.gd").contains("PROTOTYPE PARAMETER"), "Warehouse capacity must be marked as a prototype parameter")
-	_check(SaveStore.VERSION == 6, "Save version must be 6 (5 for warehouses, T04 added market recovery)")
+	_check(SaveStore.VERSION == 7, "Save version must be 7 (5 for warehouses, T04 added market recovery, T05 the cost ledger)")
 	_sections_done.append("static")
 
 
@@ -266,7 +266,7 @@ func _verify_save_versions() -> void:
 	warehouses._warehouse("B").restore_items({"test_good_03": 7})
 	_check(SaveStore.save(TEST_SAVE, Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.from_dict(location), warehouses), "v5 save must write")
 	var raw := _read_json()
-	_check(int(raw["version"]) == 6 and raw.keys().size() == 7 and raw.has("market_recovery") and raw["warehouses"].keys().size() == 2, "The current (v6) save must hold the warehouses")
+	_check(int(raw["version"]) == 7 and raw.keys().size() == 8 and raw.has("market_recovery") and raw.has("cost_ledger") and raw["warehouses"].keys().size() == 2, "The current (v7) save must hold the warehouses")
 	_check(not JSON.stringify(raw["warehouses"]).contains("capacity"), "Warehouse capacity (balance data) must not be saved")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["warehouses"].get_snapshot() == warehouses.get_snapshot(), "Reload must restore each city's warehouse exactly")
@@ -275,6 +275,9 @@ func _verify_save_versions() -> void:
 	# A valid over-capacity warehouse (capacity lowered later) loads without losing items.
 	var v5 := raw.duplicate(true)
 	v5["warehouses"]["A"]["items"] = {"test_good_06": 60}
+	# T05: a v7 save's cost lots must account for the stored units exactly.
+	# (seq 2 is the migrated unknown lot of A's test_good_06: backpack, then A in catalog order.)
+	v5["cost_ledger"]["warehouses"]["A"] = {"test_good_06": [{"seq": 2, "quantity": 60, "unknown": true}]}
 	_write_json(v5)
 	var over := SaveStore.load_session(TEST_SAVE)
 	_check(not over.is_empty() and over["warehouses"].get_quantity("A", "test_good_06") == 60 and over["warehouses"].get_used_capacity("A") > over["warehouses"].get_max_capacity("A"), "An over-capacity warehouse save keeps its items")
@@ -297,7 +300,7 @@ func _verify_save_versions() -> void:
 		"string quantity": _with(v5, {"warehouses": {"A": {"items": {"test_good_01": "3"}}, "B": {"items": {}}}}),
 		"huge quantity": _with(v5, {"warehouses": {"A": {"items": {"test_good_01": 1e15}}, "B": {"items": {}}}}),
 		"v4 with warehouses": _with(legacy["v4"], {"warehouses": {"A": {"items": {}}, "B": {"items": {}}}}),
-		"v7": _with(v5, {"version": 7}),
+		"v8": _with(v5, {"version": 8}),
 	}
 	for label in broken:
 		_write_json(broken[label])
@@ -389,6 +392,8 @@ func _verify_ui_save_failure() -> void:
 	var main := await _new_main("")
 	await _walk_in(main, "A")
 	main.inventory.add("test_good_01", 2)
+	# T05: goods placed by the test also need their (unknown-cost) lots.
+	main.cost_ledger.add_unknown(TradeCostLedger.BACKPACK, "test_good_01", 2)
 	main.save_path = UNWRITABLE_SAVE
 	var hub := main.get_node("CityHub") as CityHub
 	hub.show_facility("warehouse")

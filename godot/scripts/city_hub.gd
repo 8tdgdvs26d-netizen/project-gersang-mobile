@@ -66,6 +66,9 @@ const MARKET_BUTTON_SIZE := Vector2(104, 88)
 const MARKET_INFO_WIDTH := 260.0
 const MARKET_DETAIL_FONT_SIZE := 18
 const MARKET_ROW_SEPARATION := 6
+## Small fourth line of a market row: expected sale result (T05).
+const MARKET_PREVIEW_FONT_SIZE := 16
+const COST_UNKNOWN_TEXT := "資料不足"
 ## Button node name -> [label, is_buy, order quantity].
 const MARKET_ORDER_BUTTONS := {
 	"BuyButton": ["買入 1", true, 1],
@@ -332,13 +335,49 @@ func show_money(balance: int) -> void:
 
 ## Refreshes every market row from the quotes computed by the market; the hub
 ## never calculates prices or stock itself. Holdings are a copy of the cargo.
-func show_market(quotes: Dictionary, holdings: Dictionary) -> void:
+## `previews` (good_id -> order size -> sale terms) comes from the trade
+## domain's own sale preview; the hub only formats it.
+func show_market(quotes: Dictionary, holdings: Dictionary, previews: Dictionary = {}) -> void:
 	for good_id in _rows:
 		var quote: Dictionary = quotes.get(good_id, {})
 		_row_label(good_id, "BuyPriceLabel").text = "買入價 %s" % _number(quote, "buy_price")
 		_row_label(good_id, "BuybackPriceLabel").text = "賣出價 %s" % _number(quote, "buyback_price")
 		_row_label(good_id, "HeldLabel").text = "持有 %d" % holdings.get(good_id, 0)
 		_row_label(good_id, "StockLabel").text = "庫存 %s" % _number(quote, "stock")
+		_row_label(good_id, "PreviewLabel").text = _preview_text(previews.get(good_id, {}))
+
+
+## 「預計：賣1 +4 / 賣10 +40」 for the order sizes that can be sold now. A size
+## whose FIFO cost is not fully known shows 資料不足, never a number; when no
+## size has a known cost the line is just 「預計：資料不足」.
+func _preview_text(by_size: Dictionary) -> String:
+	var parts := []
+	var any_known := false
+	for size in [1, 10]:
+		if by_size.has(size):
+			var terms: Dictionary = by_size[size]
+			var known: bool = terms.get("cost_known", false)
+			any_known = any_known or known
+			parts.append("賣%d %s" % [size, _signed(terms["realized_profit"]) if known else COST_UNKNOWN_TEXT])
+	if parts.is_empty():
+		return ""
+	return "預計：" + (" / ".join(parts) if any_known else COST_UNKNOWN_TEXT)
+
+
+## Merchandise result appended to the sale feedback line (T05): cost and
+## realized profit / loss, or 成本：資料不足. "" for a result without cost data.
+func _profit_text(result: Dictionary) -> String:
+	if not result.has("cost_known"):
+		return ""
+	if not result["cost_known"]:
+		return "，成本：" + COST_UNKNOWN_TEXT
+	var profit: int = result["realized_profit"]
+	var word := "盈利" if profit > 0 else ("虧損" if profit < 0 else "盈虧")
+	return "，成本 %d，%s %s" % [result["acquisition_cost"], word, _signed(profit)]
+
+
+static func _signed(value: int) -> String:
+	return "+%d" % value if value > 0 else "%d" % value
 
 
 func show_trade_feedback(action: String, good_id: String, quantity: int, result: Dictionary) -> void:
@@ -347,7 +386,7 @@ func show_trade_feedback(action: String, good_id: String, quantity: int, result:
 		if action == "buy":
 			_feedback_label.text = "已買入 %d 件%s，支付 %d" % [quantity, good_name, result["total_value"]]
 		else:
-			_feedback_label.text = "已賣出 %d 件%s，收入 %d" % [quantity, good_name, result["total_value"]]
+			_feedback_label.text = "已賣出 %d 件%s，收入 %d" % [quantity, good_name, result["total_value"]] + _profit_text(result)
 	else:
 		_feedback_label.text = FAILURE_MESSAGES.get(result.get("reason", ""), GENERIC_FAILURE)
 
@@ -362,7 +401,7 @@ func close() -> void:
 	_money_label.text = ""
 	_feedback_label.text = ""
 	for good_id in _rows:
-		for node_name in ["BuyPriceLabel", "BuybackPriceLabel", "HeldLabel", "StockLabel"]:
+		for node_name in ["BuyPriceLabel", "BuybackPriceLabel", "HeldLabel", "StockLabel", "PreviewLabel"]:
 			_row_label(good_id, node_name).text = ""
 	_warehouse_summary_label.text = ""
 	_warehouse_status_label.text = ""
@@ -396,6 +435,11 @@ func get_feedback_text() -> String:
 
 func get_market_good_ids() -> Array:
 	return _rows.keys()
+
+
+## A market row's expected sale result line ("" when nothing can be sold).
+func get_market_preview_text(good_id: String) -> String:
+	return _row_label(good_id, "PreviewLabel").text if _rows.has(good_id) else ""
 
 
 ## Returns the displayed name, buy price, sell price, held and stock text of
@@ -433,6 +477,12 @@ func _build_market_rows() -> void:
 		info.add_child(_make_label("NameLabel", GoodsCatalog.get_good(good_id)["display_name"], NAME_FONT_SIZE))
 		info.add_child(_make_line("PriceLine", ["BuyPriceLabel", "BuybackPriceLabel"], MARKET_INFO_WIDTH, MARKET_DETAIL_FONT_SIZE))
 		info.add_child(_make_line("StockLine", ["HeldLabel", "StockLabel"], MARKET_INFO_WIDTH, MARKET_DETAIL_FONT_SIZE))
+		var preview := _make_label("PreviewLabel", "", MARKET_PREVIEW_FONT_SIZE)
+		# Never widens the row: an extreme value is trimmed, the buttons stay put.
+		preview.custom_minimum_size = Vector2(MARKET_INFO_WIDTH, 0)
+		preview.clip_text = true
+		preview.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		info.add_child(preview)
 		row.add_child(info)
 		for button_name in MARKET_ORDER_BUTTONS:
 			var order: Array = MARKET_ORDER_BUTTONS[button_name]
@@ -545,7 +595,9 @@ func _apply_view(facility: String) -> void:
 	var market := in_city and not transport and not warehouse
 	# The warehouse view trades the title, money and note lines for its own
 	# status line and city selector so the portrait layout keeps its height.
-	_title_label.visible = in_city and not warehouse
+	# The market view drops the prototype title for its T05 expected-result
+	# lines (prototype UI adjustment).
+	_title_label.visible = in_city and not warehouse and not market
 	_money_label.visible = not warehouse
 	_facility_tabs.visible = in_city
 	_note_label.visible = in_city and not warehouse
