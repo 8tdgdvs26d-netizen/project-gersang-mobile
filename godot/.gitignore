@@ -1,3 +1,6 @@
 .godot/
+*.gd.uid
 export.cfg
+# Signing selections and credentials are machine-local. Never commit them.
 export_credentials.cfg
+.godot/export_credentials.cfg

@@ -3,6 +3,38 @@
 This directory contains the Godot 4.x + GDScript migration project for
 《萬行誌：白手》.
 
+## Reproducible iOS development export
+
+The repository contains the non-sensitive inputs required to recreate an iOS
+development build from a clean clone:
+
+- `export_presets.cfg`: the Godot iOS preset, Bundle ID
+  `com.charlie.myrial.unwritten`, Development Team `26YN4G22B2`, deployment
+  target and other non-secret export options
+- `ios_assets/`: the iPhone/iPad/App Store icon source files referenced by the
+  preset
+- `project.godot`: Godot 4.7 project settings, portrait orientation,
+  Compatibility renderer and ETC2/ASTC texture import support
+
+Signing material remains machine-local. Never commit Apple ID credentials,
+passwords, certificates/private keys, provisioning profiles or
+`.godot/export_credentials.cfg`. On a new Mac:
+
+1. Install Godot 4.7.2 and its matching export templates, plus Xcode.
+2. Clone the repository and open `godot/project.godot` once so Godot imports
+   resources.
+3. Sign in to the Apple account in Xcode and ensure the local Keychain has a
+   usable Apple Development certificate for team `26YN4G22B2`.
+4. Connect, pair and unlock the development iPhone. Keep Xcode automatic
+   signing enabled; it creates or downloads the matching development profile.
+5. In Godot, export the `iOS` preset, or run:
+   `/path/to/Godot --headless --path godot --export-debug iOS /tmp/Myrial-Unwritten.ipa`
+6. Confirm Xcode reports `ARCHIVE SUCCEEDED` and `EXPORT SUCCEEDED` before
+   installing the IPA/app on a device.
+
+The exported Xcode project/archive/IPA and every signing credential are build
+or machine artifacts, not source files.
+
 ## UI font (Traditional Chinese)
 
 All UI text uses the bundled `fonts/NotoSansTC-Regular.otf` (Noto Sans TC, SIL Open

@@ -136,10 +136,10 @@ func _verify_save_reload() -> void:
 	stats.set_strength(10)
 	var wallet := Wallet.new()
 	var market := MarketState.create_default()
-	_check(SaveStore.save(TEST_SAVE, wallet, inventory, market), "version 3 character inventory save must write")
+	_check(SaveStore.save(TEST_SAVE, wallet, inventory, market), "current character inventory save must write")
 	var raw := _read_json()
 	var saved_stack: Dictionary = raw.get("character", {}).get("inventory", {}).get("items", {}).get("test_good_01", {})
-	_check(saved_stack == {"quantity": 25}, "version 3 save must persist quantity without freezing capacity balance data")
+	_check(saved_stack.size() == 1 and int(saved_stack.get("quantity", 0)) == 25 and not saved_stack.has("capacity_cost"), "current save must persist quantity without freezing capacity balance data")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["inventory"] is CharacterInventory, "version 3 save must rebuild a CharacterInventory")
 	var restored: CharacterInventory = loaded["inventory"]
