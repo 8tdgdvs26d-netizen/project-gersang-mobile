@@ -10,6 +10,10 @@ const BOOTSTRAP_VERSION := "M2-09"
 const WAREHOUSE_TRANSFER_QUANTITY := 1
 ## After a failed arrival save the journey stays unfinished; retry this often.
 const ARRIVAL_RETRY_MS := 1000
+## T06: while walking in the world the exact position is saved at most this
+## often, and only when it changed. It is also saved when the app goes to the
+## background or closes.
+const WORLD_AUTOSAVE_INTERVAL_MS := 5000
 
 ## Emitted once per journey, after its arrival has been saved.
 signal journey_arrived(journey_id: String, city_id: String)
@@ -54,6 +58,9 @@ var save_path := SaveStore.DEFAULT_PATH
 var _city_markers := {}
 var _request_counter := 0
 var _next_arrival_attempt_ms := 0
+## The world position in the last successful save (null: none while in world).
+var _saved_world_position: Variant = null
+var _last_world_autosave_ms := 0
 
 @onready var _player := $Actors/Player as Player
 @onready var _joystick := $TouchControls/Joystick as TouchJoystick
@@ -79,6 +86,8 @@ func _ready() -> void:
 	# save: the saved anchor + stock rebuild the same result on every reload.
 	update_market_recovery(false)
 	_restore_location()
+	_saved_world_position = location.get_world_position()
+	_last_world_autosave_ms = time_source.now_ms()
 	_update_enter_city_button()
 	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " passenger transport ready")
 
@@ -87,7 +96,41 @@ func _process(_delta: float) -> void:
 	update_market_recovery()
 	if location.is_traveling():
 		update_journey()
+	elif location.is_in_world():
+		_autosave_world_position()
 	_update_enter_city_button()
+
+
+func _notification(what: int) -> void:
+	if what in [NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT, NOTIFICATION_WM_CLOSE_REQUEST]:
+		if is_node_ready() and location.is_in_world() and _player.global_position != _saved_world_position:
+			save_world_position()
+
+
+## Saves the player's exact world position now (WORLD mode only). A failed or
+## refused save leaves the previous save file untouched.
+func save_world_position() -> bool:
+	if not location.is_in_world():
+		return false
+	var saved := _persist()
+	if not saved:
+		push_warning("Myrial: could not write save file %s" % save_path)
+	return saved
+
+
+## The player's current exact world position (null outside WORLD mode).
+func get_world_position() -> Variant:
+	return _player.global_position if location.is_in_world() else null
+
+
+func _autosave_world_position() -> void:
+	if _player.global_position == _saved_world_position:
+		return
+	var now := time_source.now_ms()
+	if now - _last_world_autosave_ms < WORLD_AUTOSAVE_INTERVAL_MS:
+		return
+	_last_world_autosave_ms = now
+	save_world_position()
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -281,8 +324,15 @@ func _save_session() -> void:
 
 
 ## Writes the whole session; true when saved or when persistence is off.
+## In WORLD mode the player's exact position is recorded first; an invalid
+## position refuses the save instead of overwriting a valid one.
 func _persist() -> bool:
-	return save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger)
+	if location.is_in_world() and is_node_ready() and not location.set_world_position(_player.global_position):
+		return false
+	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger)
+	if saved:
+		_saved_world_position = location.get_world_position()
+	return saved
 
 
 func _show_city(city_id: String) -> void:
@@ -292,10 +342,10 @@ func _show_city(city_id: String) -> void:
 	_update_enter_city_button()
 
 
+## Places the player at the location's exact world position (the return
+## point right after leaving a city, or the restored saved position).
 func _show_world() -> void:
-	var city_id := location.get_city_id()
-	if WorldLayout.CITY_RETURN_POINTS.has(city_id):
-		_player.global_position = WorldLayout.CITY_RETURN_POINTS[city_id]
+	_player.global_position = location.get_world_position()
 	_set_world_active(true)
 	_update_enter_city_button()
 

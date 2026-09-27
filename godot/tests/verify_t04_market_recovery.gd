@@ -14,7 +14,7 @@ const STEP := 12000
 const HOUR := 3600000
 const IDS := ["test_good_01", "test_good_02", "test_good_03", "test_good_04", "test_good_05", "test_good_06"]
 const CITIES := ["A", "B"]
-const IN_CITY_A := {"mode": "IN_CITY", "city_id": "A", "journey": null, "last_journey_id": ""}
+const IN_CITY_A := {"mode": "IN_CITY", "city_id": "A", "journey": null, "last_journey_id": "", "world_position": null}
 
 var _checks := 0
 var _failures := 0
@@ -47,7 +47,7 @@ func _verify_static() -> void:
 	_check(MarketRecovery.STEP_MS == 12000 and MarketRecovery.STOCK_PER_STEP == 1, "Approved rule: 1 stock unit every 12 seconds")
 	_check(MarketRecovery.MAX_ELAPSED_MS == 30 * 60 * 1000, "Approved offline cap: 30 minutes")
 	_check(MarketPrices.TARGET_STOCK == 100 and MarketPrices.INITIAL_STOCK == 100, "Target stock stays 100")
-	_check(SaveStore.VERSION == 7 and SaveStore.V6_KEYS.has("market_recovery") and SaveStore.V7_KEYS.has("market_recovery"), "Save version 6 (and T05's 7) carries the market recovery anchor")
+	_check(SaveStore.VERSION == 8 and SaveStore.V6_KEYS.has("market_recovery") and SaveStore.V7_KEYS.has("market_recovery") and SaveStore.V8_KEYS.has("market_recovery"), "Save version 6 (and T05's 7, T06's 8) carries the market recovery anchor")
 	var recovery := _code_only("res://scripts/market_recovery.gd")
 	for clock in ["Time.", "OS.get_", "get_ticks"]:
 		_check(not recovery.contains(clock), "Recovery must take time from its caller, never read %s" % clock)
@@ -437,7 +437,7 @@ func _verify_save_reload() -> void:
 	var no_key := v6.duplicate(true)
 	no_key.erase("market_recovery")
 	var future_version := v6.duplicate(true)
-	future_version["version"] = 8
+	future_version["version"] = 9
 	var v5_with_key := v6.duplicate(true)
 	v5_with_key["version"] = 5
 	_check(SaveStore.validate(no_key).is_empty(), "A v6 save missing market_recovery is rejected as a whole")
@@ -472,6 +472,7 @@ func _verify_migration() -> void:
 	var v5 := full.duplicate(true)
 	v5.erase("market_recovery")
 	v5.erase("cost_ledger")  # T05 (v7) data is not part of a real v5 save
+	v5["location"].erase("world_position")  # nor is T06's (v8) exact world position
 	v5["version"] = 5
 	v5["warehouses"] = {"A": {"items": {"test_good_02": 5}}, "B": {"items": {"test_good_06": 1}}}
 	var v4 := v5.duplicate(true)

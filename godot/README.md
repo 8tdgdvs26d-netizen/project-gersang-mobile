@@ -47,7 +47,28 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-T05 Profit / Loss + Trading Integration: purchase lot → FIFO cost → realized P/L per sale.
+T06 World Exploration v0.1: world position persistence & state integrity.
+
+- `PlayerLocation` holds the exact world position (`world_position`), only in WORLD mode;
+  IN_CITY and TRAVELING have none (null), so no fake coordinate is ever stored
+- valid = finite and inside the playable rect, the same limits the player's movement is
+  clamped to: x 16–39984, y 48–40000. Saved coordinates outside it, NaN / infinity or
+  malformed values reject the whole save (never clamped)
+- leaving city A / B places the player at its approved return point; after moving away and
+  saving, a reload restores the moved position. City entry, passenger transport and
+  arrival rules are unchanged
+- when the world position is saved (approved): at most every 5 s while the player has moved
+  (`WORLD_AUTOSAVE_INTERVAL_MS`), and at once when the app pauses, loses focus or is closed;
+  standing still never rewrites the save. Entering / leaving a city and trades save as before
+- save version 8: only `location` changes (adds `world_position`); saves are written with
+  full float precision. `SaveStore.save()` refuses an invalid location before creating any
+  file, so an existing valid save is never overwritten
+- migration of v1–v7 (no exact position; nothing invented): WORLD with a last-city context →
+  that city's return point; WORLD without one → the default world spawn (420, 500);
+  IN_CITY / TRAVELING keep their meaning
+- tests: `tests/verify_t06_world_position.gd`
+
+Previous: T05 Profit / Loss + Trading Integration: purchase lot → FIFO cost → realized P/L per sale.
 
 - `TradeCostLedger` (new) holds the acquisition-cost identity of trade goods, separate from the
   quantity containers: per container (backpack, each city warehouse) and good, lots
