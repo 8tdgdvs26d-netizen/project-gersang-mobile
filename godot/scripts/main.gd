@@ -42,6 +42,9 @@ var wallet := Wallet.new()
 var market := MarketState.create_default()
 ## One item warehouse per active city (T01). Only WarehouseService changes it.
 var warehouses := WarehouseState.create_default()
+## The market's own recovery timeline (T04). Only update_market_recovery()
+## advances it; trades never touch it.
+var market_recovery := MarketRecovery.new()
 ## Local save file for money, cargo and market. An empty path turns persistence off
 ## (used by tests so they never touch the player's real save).
 var save_path := SaveStore.DEFAULT_PATH
@@ -69,12 +72,16 @@ func _ready() -> void:
 	_city_hub.warehouse_city_selected.connect(_on_warehouse_city_selected)
 	_city_hub.facility_changed.connect(_on_hub_facility_changed)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
+	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
+	# save: the saved anchor + stock rebuild the same result on every reload.
+	update_market_recovery(false)
 	_restore_location()
 	_update_enter_city_button()
 	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " passenger transport ready")
 
 
 func _process(_delta: float) -> void:
+	update_market_recovery()
 	if location.is_traveling():
 		update_journey()
 	_update_enter_city_button()
@@ -189,6 +196,20 @@ func get_warehouse_view(city_id: Variant) -> Dictionary:
 	}
 
 
+## Applies every market recovery step due by now (elapsed time, not frame
+## count, so dropped or delayed frames lose nothing). When stock changed it is
+## saved (if `save`) and an open market shows the new stock and prices.
+## Returns the number of recovery steps applied.
+func update_market_recovery(save: bool = true) -> int:
+	var result := market_recovery.advance(market, time_source.now_ms())
+	if result["changed"]:
+		if save:
+			_save_session()
+		if is_in_city():
+			_refresh_market_view()
+	return result["steps"]
+
+
 func get_transport_quotes() -> Array:
 	var quotes := []
 	for destination in TransportRoutes.get_destinations(current_city_id):
@@ -203,6 +224,7 @@ func get_transport_quotes() -> Array:
 func buy_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "total_value": 0, "reason": "not_in_city"}
+	update_market_recovery()
 	var result := TradeService.buy(current_city_id, good_id, quantity, wallet, inventory, market)
 	if result["success"]:
 		_save_session()
@@ -213,6 +235,7 @@ func buy_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 func sell_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "total_value": 0, "reason": "not_in_city"}
+	update_market_recovery()
 	var result := TradeService.sell(current_city_id, good_id, quantity, wallet, inventory, market)
 	if result["success"]:
 		_save_session()
@@ -231,6 +254,7 @@ func _load_saved_session() -> void:
 		market = loaded["market"]
 		location = loaded["location"]
 		warehouses = loaded["warehouses"]
+		market_recovery = loaded["market_recovery"]
 
 
 ## Puts the scene into the loaded location: the world (at the last city's
@@ -254,7 +278,7 @@ func _save_session() -> void:
 
 ## Writes the whole session; true when saved or when persistence is off.
 func _persist() -> bool:
-	return save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses)
+	return save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery)
 
 
 func _show_city(city_id: String) -> void:
@@ -299,15 +323,19 @@ func _update_enter_city_button() -> void:
 func _refresh_hub_summary() -> void:
 	_city_hub.show_money(wallet.get_balance())
 	_city_hub.show_cargo_summary(inventory.get_used_capacity(), inventory.get_max_capacity())
-	var quotes := {}
-	for good_id in GoodsCatalog.get_ids():
-		quotes[good_id] = market.get_quote(current_city_id, good_id)
-	_city_hub.show_market(quotes, inventory.get_items())
+	_refresh_market_view()
 	_city_hub.show_transport_routes(get_transport_quotes(), _next_request_id())
 	var view_city := _city_hub.get_warehouse_view_city()
 	if not warehouses.has_city(view_city):
 		view_city = current_city_id
 	_city_hub.show_warehouse(get_warehouse_view(view_city), inventory.get_items(), inventory.get_used_capacity(), inventory.get_max_capacity(), _next_request_id())
+
+
+func _refresh_market_view() -> void:
+	var quotes := {}
+	for good_id in GoodsCatalog.get_ids():
+		quotes[good_id] = market.get_quote(current_city_id, good_id)
+	_city_hub.show_market(quotes, inventory.get_items())
 
 
 ## Market buttons send orders of 1 or 10; TradeService validates the size and

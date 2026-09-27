@@ -47,7 +47,35 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-T03 Dynamic Market Pricing: trade → stock → price.
+T04 Market Recovery / Restock: stock drifts back toward its target over time.
+
+- PROTOTYPE rule: every 12 s of market time each city × good stock moves 1 unit toward its
+  target stock (100) and stops exactly there (95 → … → 100, 105 → … → 100, never past).
+  Cities and goods recover independently. Only stock changes; the price follows through the
+  unchanged T03 formula, and baseline / target never change
+- one implementation: `MarketRecovery` holds the market's own timeline anchor and applies
+  whole steps by elapsed time (`MarketState.recover_toward_target()` moves the stock). The
+  anchor advances by whole steps only, so a partial step's remainder is kept (29 s → 2 steps,
+  5 s carried). Dropped or late frames lose nothing (36 s in one frame → 3 steps)
+- `main.update_market_recovery()` runs every frame and before each trade, reads time only
+  from TimeSource, saves when stock changed and refreshes an open market. Trades never
+  touch the anchor, so they do not reset the recovery timer
+- offline: the saved anchor + stock rebuild the recovery on load; at most 30 minutes
+  (150 steps) count. Loading never rewrites the save, so repeated reloads never
+  double-apply. A future, negative or malformed timestamp applies zero recovery and
+  re-anchors at now
+- save version 6 adds `market_recovery` ({anchor_ms}); v1–v5 saves load with their stock
+  unchanged and the anchor starts at that first load (no invented history). A v6 save
+  missing the key is rejected like any other missing section
+- ORDER-LOCKED PRICING (1 or 10 units per order, one price per order) is unchanged
+- no restock UI (no countdown, progress or history); the open market just shows the newest
+  stock and prices
+- tests: `tests/verify_t04_market_recovery.gd` with the independent test model
+  `tests/market_recovery_model.gd`
+- NOT INCLUDED: per-good / per-city speeds, NPC merchants, production, events, price
+  history, profit / loss (T05 and later)
+
+Previous: T03 Dynamic Market Pricing: trade → stock → price.
 
 - the city × good baseline reference price (MarketPrices) never moves; the price players see
   is a dynamic reference derived from baseline + current stock + target stock by the single

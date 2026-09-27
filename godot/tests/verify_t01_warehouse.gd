@@ -60,7 +60,7 @@ func _verify_static() -> void:
 	var hub := _code_only("res://scripts/city_hub.gd")
 	_check(not hub.contains("WarehouseService") and not hub.contains("WarehouseState") and not hub.contains("restore_items"), "The UI must not change warehouse state directly")
 	_check(FileAccess.get_file_as_string("res://scripts/warehouse_state.gd").contains("PROTOTYPE PARAMETER"), "Warehouse capacity must be marked as a prototype parameter")
-	_check(SaveStore.VERSION == 5, "Save version must be 5")
+	_check(SaveStore.VERSION == 6, "Save version must be 6 (5 for warehouses, T04 added market recovery)")
 	_sections_done.append("static")
 
 
@@ -260,13 +260,13 @@ func _verify_save_versions() -> void:
 		_check(state != null and state.get_snapshot() == {"A": {"items": {}}, "B": {"items": {}}} and state.get_max_capacity("A") == CAPACITY, "%s save must get valid empty warehouses" % label)
 		_check(_read(TEST_SAVE) == text, "Loading a %s save must not rewrite it" % label)
 
-	# v5 round trip.
+	# Current-version (v6) round trip.
 	var warehouses := WarehouseState.create_default()
 	warehouses._warehouse("A").restore_items({"test_good_01": 4, "test_good_06": 2})
 	warehouses._warehouse("B").restore_items({"test_good_03": 7})
 	_check(SaveStore.save(TEST_SAVE, Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.from_dict(location), warehouses), "v5 save must write")
 	var raw := _read_json()
-	_check(int(raw["version"]) == 5 and raw.keys().size() == 6 and raw["warehouses"].keys().size() == 2, "v5 save must hold the warehouses")
+	_check(int(raw["version"]) == 6 and raw.keys().size() == 7 and raw.has("market_recovery") and raw["warehouses"].keys().size() == 2, "The current (v6) save must hold the warehouses")
 	_check(not JSON.stringify(raw["warehouses"]).contains("capacity"), "Warehouse capacity (balance data) must not be saved")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["warehouses"].get_snapshot() == warehouses.get_snapshot(), "Reload must restore each city's warehouse exactly")
@@ -297,7 +297,7 @@ func _verify_save_versions() -> void:
 		"string quantity": _with(v5, {"warehouses": {"A": {"items": {"test_good_01": "3"}}, "B": {"items": {}}}}),
 		"huge quantity": _with(v5, {"warehouses": {"A": {"items": {"test_good_01": 1e15}}, "B": {"items": {}}}}),
 		"v4 with warehouses": _with(legacy["v4"], {"warehouses": {"A": {"items": {}}, "B": {"items": {}}}}),
-		"v6": _with(v5, {"version": 6}),
+		"v7": _with(v5, {"version": 7}),
 	}
 	for label in broken:
 		_write_json(broken[label])

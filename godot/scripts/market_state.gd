@@ -113,6 +113,30 @@ func add_stock(city_id: Variant, good_id: Variant, quantity: Variant) -> bool:
 	return true
 
 
+## Market recovery (T04, driven only by MarketRecovery): moves every city x
+## good stock up to `amount` units toward its own target stock, never past it.
+## Baseline reference and target stock never change. Returns true when any
+## stock changed.
+func recover_toward_target(amount: Variant) -> bool:
+	if not _is_positive_int(amount):
+		return false
+	var changed := false
+	for city_id in _markets:
+		for good_id in _markets[city_id]:
+			var entry: Dictionary = _markets[city_id][good_id]
+			var stock: int = entry["current_stock"]
+			var target: int = entry["target_stock"]
+			var recovered := stock
+			if stock < target:
+				recovered = stock + mini(amount, target - stock)
+			elif stock > target:
+				recovered = stock - mini(amount, stock - target)
+			if recovered != stock:
+				entry["current_stock"] = recovered
+				changed = true
+	return changed
+
+
 func _entry(city_id: Variant, good_id: Variant) -> Dictionary:
 	if typeof(city_id) != TYPE_STRING or typeof(good_id) != TYPE_STRING:
 		return {}

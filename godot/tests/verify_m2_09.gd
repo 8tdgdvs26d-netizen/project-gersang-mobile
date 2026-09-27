@@ -11,6 +11,7 @@ const FARE := 300
 const DURATION := 90000
 const SPAWN := Vector2(420.0, 500.0)
 const STRESS_STEPS := 200
+const RecoveryModel := preload("res://tests/market_recovery_model.gd")
 
 var _checks := 0
 var _failures := 0
@@ -79,7 +80,7 @@ func _verify_static() -> void:
 	for path in ["res://scripts/transport_service.gd", "res://scripts/main.gd", "res://scripts/city_hub.gd"]:
 		var code := _code_only(path)
 		_check(not code.contains("90000") and not code.contains("300"), "%s must not hard-code fares or durations" % path)
-	_check(SaveStore.VERSION == 5, "Save version must be 4+ with location (T01 bumped it to 5 for warehouses)")
+	_check(SaveStore.VERSION == 6, "Save version must be 4+ with location (T01 bumped it to 5 for warehouses, T04 to 6 for market recovery)")
 	_sections_done.append("_verify_static")
 
 
@@ -350,7 +351,7 @@ func _verify_save_versions() -> void:
 		var location := PlayerLocation.from_dict(data)
 		_check(SaveStore.save(TEST_SAVE, _wallet_with(5000), CharacterInventory.new(), MarketState.create_default(), location), "v4 save must write (%s)" % data["mode"])
 		var raw := _read_json()
-		_check(int(raw.get("version", 0)) == SaveStore.VERSION and raw.has("location") and raw.has("warehouses") and raw.keys().size() == 6, "The current save must hold version, money, character, market, location (and T01 warehouses)")
+		_check(int(raw.get("version", 0)) == SaveStore.VERSION and raw.has("location") and raw.has("warehouses") and raw.has("market_recovery") and raw.keys().size() == 7, "The current save must hold version, money, character, market, location (and T01 warehouses, T04 market recovery)")
 		var loaded := SaveStore.load_session(TEST_SAVE)
 		_check(not loaded.is_empty() and loaded["location"].to_dict() == data and loaded["wallet"].get_balance() == 5000, "v4 %s location must round-trip exactly" % data["mode"])
 
@@ -440,7 +441,7 @@ func _verify_game_flow() -> void:
 	_check(main.is_traveling() and hub.get_facility() == "traveling" and hub.get_travel_texts()["remaining"] == "預計抵達：45 秒", "Reopening before the ETA must restore the journey and countdown")
 	_check(main.wallet.get_balance() == money_before - FARE and _read(TEST_SAVE) == file_before, "Reopening mid-journey must not charge or rewrite the save")
 	_check(_movement_locked(main), "Movement must stay locked after reopening mid-journey")
-	_check(_goods_unchanged(main, stacks_before, used_before, max_before) and main.market.get_snapshot() == market_before, "Reloaded journey must keep goods and market")
+	_check(_goods_unchanged(main, stacks_before, used_before, max_before) and main.market.get_snapshot() == RecoveryModel.recovered_snapshot(market_before, RecoveryModel.steps_for_ms(45000)), "Reloaded journey must keep goods, and the market changes only by T04 recovery for the 45 s elapsed")
 
 	# Arrival while running.
 	main.time_source.set_now_ms(T0 + DURATION - 1)
@@ -451,7 +452,7 @@ func _verify_game_flow() -> void:
 	_check(main.current_city_id == "B" and not main.is_traveling() and hub.is_open() and hub.get_facility() == "market" and hub.get_city_label_text() == "【B 城】", "Arrival must open the City B hub directly")
 	_check(_movement_locked(main), "Movement and joystick must stay disabled inside the destination hub")
 	_check(main.wallet.get_balance() == money_before - FARE, "Arrival must not change money")
-	_check(_goods_unchanged(main, stacks_before, used_before, max_before) and main.market.get_snapshot() == market_before, "Arrival must not change goods, capacity or market")
+	_check(_goods_unchanged(main, stacks_before, used_before, max_before) and main.market.get_snapshot() == RecoveryModel.recovered_snapshot(market_before, RecoveryModel.steps_for_ms(DURATION)), "Arrival must not change goods, capacity or market (beyond T04 recovery for the 90 s ride)")
 	saved = _read_json()
 	_check(saved["location"] == {"mode": "IN_CITY", "city_id": "B", "journey": null, "last_journey_id": saved["location"]["last_journey_id"]} and saved["location"]["last_journey_id"] != "", "Arrival must be saved as inside City B with no journey")
 	_check(main.update_journey() == false and main.current_city_id == "B", "A settled journey must not settle again")
