@@ -21,6 +21,9 @@ const VERSION := 5
 const INVENTORY_VERSIONS := [3, 4, 5]
 const LEGACY_CARGO_VERSIONS := [1, 2]
 const MAX_SAVED_MONEY := 9007199254740992
+## The fixed capacity legacy v1/v2 Cargo had when those saves were written.
+## Historical data, independent of today's prototype backpack balance.
+const LEGACY_CARGO_CAPACITY := 20
 const V3_KEYS := ["version", "money", "character", "market"]
 const V4_KEYS := ["version", "money", "character", "market", "location"]
 const V5_KEYS := ["version", "money", "character", "market", "location", "warehouses"]
@@ -156,7 +159,7 @@ static func _validate_legacy(data: Dictionary, version: int) -> Dictionary:
 		items[item_id] = quantity
 	# Preserve the original corrupt-save safety: legacy Cargo never legally held
 	# more than its fixed capacity, so an over-capacity legacy payload is invalid.
-	if used > Cargo.CARGO_CAPACITY:
+	if used > LEGACY_CARGO_CAPACITY:
 		return {}
 	return {"money": money, "character_id": "player", "strength": CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "items": items, "market": market, "location": PlayerLocation.new(), "warehouses": WarehouseState.create_default()}
 

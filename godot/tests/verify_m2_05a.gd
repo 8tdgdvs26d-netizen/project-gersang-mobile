@@ -47,7 +47,7 @@ func _verify_regression_baseline() -> void:
 	_check(WorldLayout.CITY_A == Vector2(200.0, 200.0) and WorldLayout.CITY_B == Vector2(39800.0, 200.0), "City anchors must be unchanged")
 	_check(WorldLayout.WORLD_SIZE == Vector2(40000.0, 40000.0), "World must stay 40K")
 	_check(Wallet.STARTING_MONEY == 10000 and _main.wallet.get_balance() == 10000, "Wallet must be unchanged")
-	_check(Cargo.CARGO_CAPACITY == 20 and _main.cargo.is_empty(), "Cargo must be unchanged")
+	_check(Cargo.CARGO_CAPACITY == 100 and _main.cargo.get_max_capacity() == 100 and _main.cargo.is_empty(), "Backpack must be empty with the T02 prototype capacity 100")
 	_check(MarketPrices.get_price("A", "test_good_01") == 80 and MarketPrices.get_price("B", "test_good_05") == 1700 and MarketPrices.PRICES["A"].size() == 6, "Market prices must be unchanged")
 	_check(GoodsCatalog.get_ids().size() == 6 and GoodsCatalog.get_unit_size("test_good_06") == 4, "Six goods must be unchanged")
 	_check(_player._touch_joystick == _joystick, "Joystick must stay wired to the player")
@@ -119,7 +119,7 @@ func _verify_touch_enter_a_with_market() -> void:
 	# M2-05 Buy still works after touch entry.
 	await _touch(_control_center(_hub.get_market_button("test_good_01", "buy")))
 	_check(_main.wallet.get_balance() == 9916 and _main.cargo.get_quantity("test_good_01") == 1, "Touch Buy 1 must still work after touch entry")
-	_check(_hub.get_money_label_text() == "金錢：9916" and _hub.get_cargo_label_text() == "貨物容量：1 / 20", "Market must refresh after touch buy")
+	_check(_hub.get_money_label_text() == "金錢：9916" and _hub.get_cargo_label_text() == "背包容量：1 / 100", "Market must refresh after touch buy")
 
 	await _touch(_control_center(_hub.get_node("Center/Content/LeaveButton") as Control))
 	_check(not _main.is_in_city() and not _hub.is_open(), "Leave City must return to the world")

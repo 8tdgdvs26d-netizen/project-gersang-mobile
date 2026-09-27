@@ -1,5 +1,7 @@
 extends SceneTree
 
+const FixedCapacityStats := preload("res://tests/fixed_capacity_stats.gd")
+
 const APPROVED_GOODS := [
 	["test_good_01", "測試商品一", 1, 100],
 	["test_good_02", "測試商品二", 1, 250],
@@ -66,8 +68,9 @@ func _verify_catalog() -> void:
 # --- Cargo -----------------------------------------------------------------
 
 func _verify_cargo_basics() -> void:
-	var cargo := Cargo.new()
-	_check(Cargo.CARGO_CAPACITY == 20, "Cargo capacity must be 20")
+	var cargo := _cargo20()
+	_check(Cargo.CARGO_CAPACITY == 100 and CharacterInventory.new().get_max_capacity() == 100, "T02 prototype backpack capacity at default Strength must be 100")
+	_check(cargo.get_max_capacity() == 20, "Rule fixture: this cargo has capacity 20")
 	_check(cargo.is_empty() and cargo.get_items().is_empty(), "New cargo must be empty")
 	_check(cargo.get_used_capacity() == 0, "New cargo used capacity must be 0")
 	_check(cargo.get_remaining_capacity() == 20, "New cargo remaining capacity must be 20")
@@ -75,7 +78,7 @@ func _verify_cargo_basics() -> void:
 
 
 func _verify_cargo_add_rules() -> void:
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	_check(cargo.can_add("test_good_03", 5) and cargo.add("test_good_03", 5), "Adding 5 x good 3 must succeed")
 	_check(cargo.get_quantity("test_good_03") == 5, "Good 3 quantity must be 5")
 	_check(cargo.get_used_capacity() == 10, "5 x good 3 (size 2) must use 10 units")
@@ -93,14 +96,14 @@ func _verify_cargo_add_rules() -> void:
 	_check(not cargo.can_add("test_good_01", 1) and not cargo.add("test_good_01", 1), "Exceeding capacity by 1 unit must fail")
 	_check(cargo.get_items() == full and cargo.get_used_capacity() == 20, "Failed add must leave cargo unchanged")
 
-	var partial := Cargo.new()
+	var partial := _cargo20()
 	partial.add("test_good_06", 4)
 	var before := partial.get_items()
 	_check(not partial.add("test_good_06", 2), "Adding 8 units into 4 remaining must fail")
 	_check(partial.add("test_good_06", 1) and partial.get_used_capacity() == 20, "Adding exactly the remaining 4 units must succeed")
 	_check(before == {"test_good_06": 4}, "Snapshot must not be affected by later adds")
 
-	var guarded := Cargo.new()
+	var guarded := _cargo20()
 	guarded.add("test_good_02", 3)
 	var snapshot := guarded.get_items()
 	for invalid_id in INVALID_IDS:
@@ -116,7 +119,7 @@ func _verify_cargo_add_rules() -> void:
 
 
 func _verify_cargo_remove_rules() -> void:
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	cargo.add("test_good_04", 5)
 	cargo.add("test_good_02", 2)
 	_check(cargo.can_remove("test_good_04", 2) and cargo.remove("test_good_04", 2), "Removing a valid quantity must succeed")
@@ -142,7 +145,7 @@ func _verify_cargo_remove_rules() -> void:
 
 
 func _verify_multi_goods() -> void:
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	for good_id in GoodsCatalog.get_ids():
 		_check(cargo.add(good_id, 1), "Adding one %s must succeed" % good_id)
 	_check(cargo.get_items().size() == 6, "Cargo must hold all 6 goods at once")
@@ -150,7 +153,7 @@ func _verify_multi_goods() -> void:
 	_check(cargo.add("test_good_01", 7) and cargo.get_used_capacity() == 20, "Topping up with 7 x good 1 must fill to 20")
 	_check(not cargo.add("test_good_06", 1), "A size-4 good must not fit in a full cargo")
 
-	var sizes := Cargo.new()
+	var sizes := _cargo20()
 	_check(sizes.add("test_good_06", 3) and sizes.get_used_capacity() == 12, "3 x size 4 must use 12 units")
 	_check(not sizes.add("test_good_05", 3), "3 x size 3 (9 units) must not fit into 8 remaining")
 	_check(sizes.add("test_good_05", 2) and sizes.get_remaining_capacity() == 2, "2 x size 3 must leave 2 units")
@@ -160,7 +163,7 @@ func _verify_multi_goods() -> void:
 
 ## Deterministic property test against an independent reference model.
 func _verify_stress() -> void:
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	var model := {}
 	var ids := GoodsCatalog.get_ids() + ["bad_good", ""]
 	var quantities := [-2, -1, 0, 1, 1, 1, 2, 2, 3, 21]
@@ -199,7 +202,7 @@ func _verify_stress() -> void:
 			mismatches += 1
 		if not _invariants_hold(cargo) or cargo.get_used_capacity() != _model_used(model):
 			invariant_breaks += 1
-		if cargo.get_used_capacity() == Cargo.CARGO_CAPACITY:
+		if cargo.get_used_capacity() == cargo.get_max_capacity():
 			counts["full"] += 1
 	_check(mismatches == 0, "Stress: cargo must match the reference model on all %d steps (%d mismatches)" % [STRESS_STEPS, mismatches])
 	_check(invariant_breaks == 0, "Stress: invariants must hold on every step (%d breaks)" % invariant_breaks)
@@ -242,8 +245,8 @@ func _invariants_hold(cargo: Cargo) -> bool:
 			return false
 		recomputed += quantity * GoodsCatalog.get_unit_size(good_id)
 	var used := cargo.get_used_capacity()
-	return used == recomputed and used >= 0 and used <= Cargo.CARGO_CAPACITY \
-		and cargo.get_remaining_capacity() == Cargo.CARGO_CAPACITY - used
+	return used == recomputed and used >= 0 and used <= cargo.get_max_capacity() \
+		and cargo.get_remaining_capacity() == cargo.get_max_capacity() - used
 
 
 # --- Transitions -----------------------------------------------------------
@@ -269,7 +272,7 @@ func _verify_transitions() -> void:
 	await _settle()
 	_check(main.try_enter_city() and main.current_city_id == "A", "Must enter City A")
 	_check(main.cargo == cargo and cargo.get_items() == expected, "Cargo must remain after entering City A")
-	_check(hub.get_cargo_label_text() == "貨物容量：8 / 20", "City A hub must show the cargo debug summary")
+	_check(hub.get_cargo_label_text() == "背包容量：8 / 100", "City A hub must show the backpack summary")
 	_check(main.leave_city(), "Must leave City A")
 	_check(main.cargo == cargo and cargo.get_items() == expected, "Cargo must remain after leaving City A")
 	await _settle()
@@ -278,7 +281,7 @@ func _verify_transitions() -> void:
 	await _settle()
 	_check(main.try_enter_city() and main.current_city_id == "B", "Must enter City B")
 	_check(main.cargo == cargo and cargo.get_items() == expected, "Cargo must remain after entering City B")
-	_check(hub.get_city_label_text() == "【B 城】" and hub.get_cargo_label_text() == "貨物容量：8 / 20", "City B hub must show B and the same cargo")
+	_check(hub.get_city_label_text() == "【B 城】" and hub.get_cargo_label_text() == "背包容量：8 / 100", "City B hub must show B and the same cargo")
 	_check(main.leave_city(), "Must leave City B")
 	_check(main.cargo == cargo and cargo.get_items() == expected and cargo.get_used_capacity() == 8, "Cargo must remain after leaving City B")
 	_check(player.global_position == WorldLayout.CITY_RETURN_POINTS["B"], "City Hub return point must be unchanged")
@@ -291,6 +294,12 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## M2-03 cargo rules are verified on a fixed capacity-20 fixture (their
+## original size); the T02 prototype balance (100) is checked separately.
+func _cargo20() -> Cargo:
+	return Cargo.new("player", FixedCapacityStats.new(20))
 
 
 func _check(condition: bool, message: String) -> void:

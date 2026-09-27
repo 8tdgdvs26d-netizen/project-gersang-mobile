@@ -1,5 +1,7 @@
 extends SceneTree
 
+const FixedCapacityStats := preload("res://tests/fixed_capacity_stats.gd")
+
 ## T01 City Warehouse Foundation.
 ## Uses its own save files so the player's real save is never touched, and a
 ## fixed TimeSource so journeys are deterministic.
@@ -324,14 +326,14 @@ func _verify_game_flow() -> void:
 	hub.show_facility("warehouse")
 	await process_frame
 	_check(hub.get_facility() == "warehouse" and hub.get_warehouse_button("test_good_01", "deposit").is_visible_in_tree() and not hub.get_market_button("test_good_01", "buy").is_visible_in_tree(), "The warehouse is its own facility view")
-	_check(hub.get_warehouse_summary_text() == "攜帶容量：7 / 20　倉庫容量：0 / 200", "Warehouse view must show both capacities (%s)" % hub.get_warehouse_summary_text())
-	_check(hub.get_warehouse_row_texts("test_good_01") == {"name": "測試商品一", "carried": "攜帶 5", "stored": "倉庫 0"}, "Rows must show carried and stored counts")
+	_check(hub.get_warehouse_summary_text() == "背包容量：7 / 100　倉庫容量：0 / 200", "Warehouse view must show both capacities (%s)" % hub.get_warehouse_summary_text())
+	_check(hub.get_warehouse_row_texts("test_good_01") == {"name": "測試商品一", "carried": "背包：5", "stored": "倉庫：0"}, "Rows must show carried and stored counts")
 	_check(hub.get_warehouse_button("test_good_01", "deposit").text == "存入 1" and hub.get_warehouse_button("test_good_01", "withdraw").text == "取出 1", "Buttons must read 存入 1 / 取出 1")
 	for press in range(3):
 		hub.get_warehouse_button("test_good_01", "deposit").pressed.emit()
 	_check(main.inventory.get_quantity("test_good_01") == 2 and main.warehouses.get_quantity("A", "test_good_01") == 3, "Three presses must deposit three")
-	_check(hub.get_warehouse_row_texts("test_good_01") == {"name": "測試商品一", "carried": "攜帶 2", "stored": "倉庫 3"} and hub.get_feedback_text() == "已存入 1 件測試商品一", "UI must refresh after deposits")
-	_check(hub.get_warehouse_summary_text() == "攜帶容量：4 / 20　倉庫容量：3 / 200", "Capacities must refresh")
+	_check(hub.get_warehouse_row_texts("test_good_01") == {"name": "測試商品一", "carried": "背包：2", "stored": "倉庫：3"} and hub.get_feedback_text() == "已存入 1 件測試商品一", "UI must refresh after deposits")
+	_check(hub.get_warehouse_summary_text() == "背包容量：4 / 100　倉庫容量：3 / 200", "Capacities must refresh")
 	_check(_read_json()["warehouses"]["A"]["items"].has("test_good_01") and int(_read_json()["warehouses"]["A"]["items"]["test_good_01"]) == 3, "A successful deposit must be saved")
 	_check(main.wallet.get_balance() == money and main.market.get_snapshot() == market and main.location.to_dict() == location, "Warehouse use must not change wallet, market or location")
 	var id: String = hub.get_warehouse_request_id()
@@ -353,14 +355,14 @@ func _verify_game_flow() -> void:
 
 	# Leave and reopen the warehouse facility.
 	hub.show_facility("warehouse")
-	_check(hub.get_warehouse_row_texts("test_good_01")["stored"] == "倉庫 4", "Reopening the warehouse shows the same state")
+	_check(hub.get_warehouse_row_texts("test_good_01")["stored"] == "倉庫：4", "Reopening the warehouse shows the same state")
 
 	# Scenario B: City B does not have City A's goods.
 	main.leave_city()
 	_check(main.deposit_to_warehouse("test_good_02", 1)["reason"] == "ERR_NOT_IN_CITY", "Outside a city nothing may move")
 	await _walk_in(main, "B")
 	hub.show_facility("warehouse")
-	_check(hub.get_warehouse_row_texts("test_good_01")["stored"] == "倉庫 0" and hub.get_warehouse_summary_text().ends_with("倉庫容量：0 / 200"), "City B's warehouse must not show City A's goods")
+	_check(hub.get_warehouse_row_texts("test_good_01")["stored"] == "倉庫：0" and hub.get_warehouse_summary_text().ends_with("倉庫容量：0 / 200"), "City B's warehouse must not show City A's goods")
 	hub.get_warehouse_button("test_good_01", "withdraw").pressed.emit()
 	_check(hub.get_feedback_text() == "數量不足" and main.warehouses.get_quantity("A", "test_good_01") == 4, "City A goods cannot be withdrawn in City B")
 
@@ -392,7 +394,7 @@ func _verify_ui_save_failure() -> void:
 	hub.show_facility("warehouse")
 	hub.get_warehouse_button("test_good_01", "deposit").pressed.emit()
 	_check(main.inventory.get_quantity("test_good_01") == 2 and main.warehouses.get_quantity("A", "test_good_01") == 0, "A failed save must cancel the deposit")
-	_check(hub.get_feedback_text() == "無法儲存，操作已取消" and hub.get_warehouse_row_texts("test_good_01")["carried"] == "攜帶 2", "The cancel must be explained in Chinese and the UI must stay accurate")
+	_check(hub.get_feedback_text() == "無法儲存，操作已取消" and hub.get_warehouse_row_texts("test_good_01")["carried"] == "背包：2", "The cancel must be explained in Chinese and the UI must stay accurate")
 	_check(not FileAccess.file_exists(UNWRITABLE_SAVE), "The unwritable save must not exist")
 	await _destroy(main)
 	_sections_done.append("ui_save_failure")
@@ -445,7 +447,8 @@ func _verify_stress() -> void:
 		else:
 			_check(SaveStore.save(TEST_SAVE, s.wallet, s.inventory, s.market, s.location, s.warehouses), "Stress save")
 			var loaded := SaveStore.load_session(TEST_SAVE)
-			s.inventory = loaded["inventory"]
+			# Reload rebuilds real stats; keep the capacity-20 rule fixture.
+			s.inventory = _fixture_inventory(loaded["inventory"].get_items())
 			s.warehouses = loaded["warehouses"]
 			s.location = loaded["location"]
 			counts["reload"] += 1
@@ -493,10 +496,18 @@ func _used(items: Dictionary) -> int:
 ## A plain object bundling one session's state for model-level tests.
 class Session:
 	var location := PlayerLocation.new()
-	var inventory := CharacterInventory.new()
+	## Model-level warehouse rules use a fixed capacity-20 backpack fixture (their
+	## original size); the T02 prototype balance (100) is covered in-game.
+	var inventory := CharacterInventory.new("player", FixedCapacityStats.new(20))
 	var warehouses := WarehouseState.create_default()
 	var wallet := Wallet.new()
 	var market := MarketState.create_default()
+
+
+func _fixture_inventory(items: Dictionary) -> CharacterInventory:
+	var inventory := CharacterInventory.new("player", FixedCapacityStats.new(20))
+	inventory.restore_items(items)
+	return inventory
 
 
 func _session(city: String, items: Dictionary) -> Session:

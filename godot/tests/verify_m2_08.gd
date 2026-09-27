@@ -48,8 +48,8 @@ func _initialize() -> void:
 func _verify_stats_and_items() -> void:
 	var weak := CharacterStats.new(5)
 	var strong := CharacterStats.new(15)
-	_check(weak.get_max_capacity() == 15 and strong.get_max_capacity() == 25, "max capacity must come from the Strength interface")
-	_check(CharacterStats.PROTOTYPE_BASE_CAPACITY == 10 and CharacterStats.PROTOTYPE_CAPACITY_PER_STRENGTH == 1, "prototype capacity formula must be explicit parameters")
+	_check(weak.get_max_capacity() == 55 and strong.get_max_capacity() == 145, "max capacity must come from the Strength interface (10 + 9 x Strength)")
+	_check(CharacterStats.PROTOTYPE_BASE_CAPACITY == 10 and CharacterStats.PROTOTYPE_CAPACITY_PER_STRENGTH == 9, "prototype capacity formula must be explicit parameters (T02 baseline)")
 	var inventory := CharacterInventory.new("hero", strong, Callable(self, "_general_test_cost"))
 	_check(inventory.add("test_good_03", 3), "three cost-2 goods must fit")
 	_check(inventory.get_quantity("test_good_03") == 3 and inventory.get_used_capacity() == 6, "stack display quantity must still cost quantity x capacity_cost")
@@ -111,40 +111,40 @@ func _verify_market_and_rollback() -> void:
 	_check(rollback_wallet.get_balance() == Wallet.STARTING_MONEY and rollback_inventory.is_empty(), "late buy failure must roll back money and inventory")
 	var sell_stats := CharacterStats.new(20)
 	var sell_inventory := CharacterInventory.new("hero", sell_stats)
-	sell_inventory.add("test_good_01", 25)
+	sell_inventory.add("test_good_01", 120)
 	sell_stats.set_strength(10)
 	var sell_wallet := Wallet.new()
 	var failed_sell := TradeService.sell("A", "test_good_01", 1, sell_wallet, sell_inventory, FailingSellMarket.new())
 	_check(not failed_sell["success"] and sell_wallet.get_balance() == Wallet.STARTING_MONEY, "late sell failure must roll back money")
-	_check(sell_inventory.get_quantity("test_good_01") == 25 and sell_inventory.is_over_capacity(), "late sell failure must restore an over-capacity inventory exactly")
+	_check(sell_inventory.get_quantity("test_good_01") == 120 and sell_inventory.is_over_capacity(), "late sell failure must restore an over-capacity inventory exactly")
 
 
 func _verify_over_capacity() -> void:
 	var stats := CharacterStats.new(20)
 	var inventory := CharacterInventory.new("hero", stats)
-	_check(inventory.add("test_good_01", 25), "items must fit before Strength falls")
+	_check(inventory.add("test_good_01", 120), "items must fit before Strength falls")
 	_check(stats.set_strength(10) and inventory.is_over_capacity(), "Strength change may create an over-capacity state")
-	_check(inventory.get_used_capacity() == 25 and inventory.get_max_capacity() == 20 and inventory.get_quantity("test_good_01") == 25, "over-capacity must not delete or clamp items")
+	_check(inventory.get_used_capacity() == 120 and inventory.get_max_capacity() == 100 and inventory.get_quantity("test_good_01") == 120, "over-capacity must not delete or clamp items")
 	_check(not inventory.can_add("test_good_01", 1) and not inventory.add("test_good_01", 1), "over-capacity inventory must reject additions")
-	_check(inventory.remove("test_good_01", 5) and not inventory.is_over_capacity(), "removal must remain allowed so the player can return to legal capacity")
+	_check(inventory.remove("test_good_01", 20) and not inventory.is_over_capacity(), "removal must remain allowed so the player can return to legal capacity")
 
 
 func _verify_save_reload() -> void:
 	var stats := CharacterStats.new(20)
 	var inventory := CharacterInventory.new("hero", stats)
-	inventory.add("test_good_01", 25)
+	inventory.add("test_good_01", 120)
 	stats.set_strength(10)
 	var wallet := Wallet.new()
 	var market := MarketState.create_default()
 	_check(SaveStore.save(TEST_SAVE, wallet, inventory, market), "current character inventory save must write")
 	var raw := _read_json()
 	var saved_stack: Dictionary = raw.get("character", {}).get("inventory", {}).get("items", {}).get("test_good_01", {})
-	_check(saved_stack.size() == 1 and int(saved_stack.get("quantity", 0)) == 25 and not saved_stack.has("capacity_cost"), "current save must persist quantity without freezing capacity balance data")
+	_check(saved_stack.size() == 1 and int(saved_stack.get("quantity", 0)) == 120 and not saved_stack.has("capacity_cost"), "current save must persist quantity without freezing capacity balance data")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["inventory"] is CharacterInventory, "version 3 save must rebuild a CharacterInventory")
 	var restored: CharacterInventory = loaded["inventory"]
 	_check(restored.character_id == "hero" and restored.get_stats().get_strength() == 10, "save/reload must preserve character owner and Strength")
-	_check(restored.get_quantity("test_good_01") == 25 and restored.is_over_capacity(), "save/reload must preserve valid over-capacity items without deletion")
+	_check(restored.get_quantity("test_good_01") == 120 and restored.is_over_capacity(), "save/reload must preserve valid over-capacity items without deletion")
 	_check(not restored.add("test_good_02", 1), "reloaded over-capacity inventory must still reject additions")
 
 
@@ -174,7 +174,7 @@ func _verify_legacy_migration() -> void:
 	_check(not loaded.is_empty() and loaded["wallet"].get_balance() == 4321, "legacy Cargo save must keep money")
 	var migrated: CharacterInventory = loaded["inventory"]
 	_check(migrated.character_id == "player" and migrated.get_quantity("test_good_03") == 4, "legacy Cargo must migrate into the player CharacterInventory")
-	_check(migrated.get_used_capacity() == 8 and migrated.get_max_capacity() == 20, "legacy migration must preserve quantities and apply current placeholder costs with prototype Strength capacity")
+	_check(migrated.get_used_capacity() == 8 and migrated.get_max_capacity() == 100, "legacy migration must preserve quantities and apply current placeholder costs with prototype Strength capacity")
 	_check(int(_read_json().get("version", 0)) == 2, "loading legacy data must not rewrite the source save")
 
 

@@ -47,7 +47,27 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-T01 City Warehouse Foundation adds one independent item warehouse per active city:
+T02 Warehouse UX + Remote View:
+
+- backpack wording: every player-facing capacity line says 背包容量 (market 背包容量：x / y,
+  failures 背包容量不足); 貨物容量 is no longer used for the character's capacity
+- backpack prototype baseline: CharacterStats keeps capacity = base + Strength × per-Strength;
+  per-Strength changed 1 → 9, so default Strength 10 gives 10 + 90 = 100 and capacity still
+  scales with Strength (5 → 55, 20 → 190). PROTOTYPE PARAMETERS, not the formal curve.
+  Legacy v1/v2 save validation keeps the historical Cargo cap of 20 it was written with
+- warehouse city selector (A 城倉庫 / B 城倉庫): any active city's warehouse can be viewed
+  from any city hub. The character's city shows 「X 城倉庫・本地倉庫」 with 背包：N / 倉庫：N
+  and 存入 1 / 取出 1; any other city shows 「X 城倉庫・遠端查看：只可在所在城市存取倉庫物品」,
+  its stored counts and 倉庫容量, and no transfer controls
+- locality stays in WarehouseService: transfer requests carry the viewed city and are
+  rejected unless it is the character's current city; switching views changes nothing and
+  saves nothing. main.get_warehouse_view(city) gives read-only copies
+- warehouse capacity stays 200 per city; no save schema change (still version 5)
+- older rule tests that need a small full backpack use `tests/fixed_capacity_stats.gd`
+  (a fixed capacity-20 fixture); the real 100 baseline is verified in
+  `tests/verify_t02_warehouse_ux.gd`
+
+Previous: T01 City Warehouse Foundation adds one independent item warehouse per active city:
 
 - flow: Market ↔ CharacterInventory ↔ Warehouse. The market never reads or writes a
   warehouse; purchases enter and sales leave the character's inventory only
@@ -61,7 +81,7 @@ T01 City Warehouse Foundation adds one independent item warehouse per active cit
   atomic (both sides or neither), keep the existing inventory capacity and over-capacity
   rules, apply a repeated request id once, and roll back if the save fails
   (無法儲存，操作已取消). It never touches the wallet, market or journey
-- City Hub 倉庫 tab: 攜帶容量 / 倉庫容量, per good 攜帶 N / 倉庫 N, 存入 1 / 取出 1
+- City Hub 倉庫 tab: 背包容量 / 倉庫容量, per good 背包：N / 倉庫：N, 存入 1 / 取出 1
 - save version 5 adds `warehouses` (city → items); v1–v4 saves load with empty warehouses,
   and malformed warehouse data rejects the whole save
 - NOT INCLUDED (T02 or later): remote warehouse viewing UX, sorting/filtering, upgrades,

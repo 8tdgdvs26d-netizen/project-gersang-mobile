@@ -19,6 +19,8 @@ const BUYBACK_PRICES := {
 	"B": {"test_good_01": 114, "test_good_02": 285, "test_good_03": 617, "test_good_04": 1187, "test_good_05": 1615, "test_good_06": 4085},
 }
 const APPROVED_SIZES := {"test_good_01": 1, "test_good_02": 1, "test_good_03": 2, "test_good_04": 2, "test_good_05": 3, "test_good_06": 4}
+## T02 prototype backpack capacity at default Strength (was 20 before T02).
+const CAPACITY := 100
 const STRESS_STEPS := 320
 
 var _checks := 0
@@ -53,7 +55,7 @@ func _verify_static() -> void:
 	for city_id in APPROVED_PRICES:
 		for good_id in APPROVED_PRICES[city_id]:
 			_check(MarketPrices.get_price(city_id, good_id) == APPROVED_PRICES[city_id][good_id], "Price %s %s must be unchanged" % [city_id, good_id])
-	_check(GoodsCatalog.get_ids().size() == 6 and Cargo.CARGO_CAPACITY == 20 and Wallet.STARTING_MONEY == 10000, "Goods, capacity and starting money must be unchanged")
+	_check(GoodsCatalog.get_ids().size() == 6 and Cargo.CARGO_CAPACITY == 100 and Wallet.STARTING_MONEY == 10000, "Goods, T02 backpack capacity 100 and starting money must be as approved")
 
 
 # --- Loading ------------------------------------------------------------------------
@@ -83,7 +85,7 @@ func _verify_valid_saves() -> void:
 		await _destroy(main)
 	_write(TEST_SAVE, '{"money": 10, "cargo": {"test_good_06": 5}}')
 	var full := await _new_main(TEST_SAVE)
-	_check(full.cargo.get_used_capacity() == 20 and full.cargo.get_remaining_capacity() == 0, "Loaded cargo must use unit sizes (5 x size 4 = 20)")
+	_check(full.cargo.get_used_capacity() == 20 and full.cargo.get_remaining_capacity() == full.cargo.get_max_capacity() - 20, "Loaded cargo must use unit sizes (5 x size 4 = 20)")
 	await _destroy(full)
 	_write(TEST_SAVE, '{"money": 10, "cargo": {"test_good_05": 6}}')
 	var sized := await _new_main(TEST_SAVE)
@@ -110,7 +112,7 @@ func _verify_trade_triggers() -> void:
 	_check(_saved() == {"money": 9622, "cargo": {"test_good_02": 2}}, "Successful buy must write money and cargo")
 
 	var before := _read(TEST_SAVE)
-	for attempt in [["test_good_06", 3], ["bad_good", 1], ["test_good_01", 0], ["test_good_01", -2], ["test_good_01", 1.5], ["test_good_01", 25]]:
+	for attempt in [["test_good_06", 3], ["bad_good", 1], ["test_good_01", 0], ["test_good_01", -2], ["test_good_01", 1.5], ["test_good_01", 101]]:
 		main.buy_in_current_city(attempt[0], attempt[1])
 		_check(_read(TEST_SAVE) == before, "Failed buy %s must not change the save" % str(attempt))
 	for attempt in [["test_good_02", 3], ["test_good_05", 1], ["bad_good", 1], ["test_good_02", 0], ["test_good_02", -1]]:
@@ -148,7 +150,7 @@ func _verify_full_journey() -> void:
 	await _enter(second, "B")
 	var hub_b := second.get_node("CityHub") as CityHub
 	_check(hub_b.get_money_label_text() == "金錢：9160", "Market must show restored money")
-	_check(hub_b.get_cargo_label_text() == "貨物容量：10 / 20", "Market must show restored cargo capacity")
+	_check(hub_b.get_cargo_label_text() == "背包容量：10 / 100", "Market must show restored backpack capacity")
 	_check(hub_b.get_market_row_texts("test_good_01")["held"] == "持有 10", "Market must show restored held quantity")
 	for press in range(10):
 		hub_b.get_market_button("test_good_01", "sell").pressed.emit()
@@ -231,7 +233,7 @@ func _verify_stress() -> void:
 	var saved_money := 10000
 	var saved_cargo := {}
 	var goods := GoodsCatalog.get_ids() + ["bad_good"]
-	var quantities := [1, 1, 1, 2, 3, 0, -1, 25]
+	var quantities := [1, 1, 1, 2, 3, 0, -1, 101]
 	var seed := 60606
 	var drift := 0
 	var file_breaks := 0
@@ -268,7 +270,7 @@ func _verify_stress() -> void:
 			var file_before := _read(TEST_SAVE)
 			var expected := false
 			if is_buy:
-				expected = price > 0 and quantity > 0 and _model_used(model_cargo) + quantity * APPROVED_SIZES.get(good_id, 99) <= 20 and price * quantity <= model_money
+				expected = price > 0 and quantity > 0 and _model_used(model_cargo) + quantity * APPROVED_SIZES.get(good_id, 99) <= CAPACITY and price * quantity <= model_money
 				if expected:
 					model_money -= price * quantity
 					model_cargo[good_id] = model_cargo.get(good_id, 0) + quantity
@@ -292,7 +294,7 @@ func _verify_stress() -> void:
 				file_breaks += 1
 		if main.wallet.get_balance() != model_money or main.cargo.get_items() != model_cargo:
 			drift += 1
-		if main.wallet.get_balance() < 0 or main.cargo.get_used_capacity() > 20 or main.cargo.get_used_capacity() != _model_used(main.cargo.get_items()):
+		if main.wallet.get_balance() < 0 or main.cargo.get_used_capacity() > CAPACITY or main.cargo.get_used_capacity() != _model_used(main.cargo.get_items()):
 			invariant_breaks += 1
 	_check(drift == 0, "Stress: runtime state must match the reference model (%d drifts)" % drift)
 	_check(file_breaks == 0, "Stress: the save must change only on successful trades and match the model (%d breaks)" % file_breaks)

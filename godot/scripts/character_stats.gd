@@ -4,9 +4,11 @@ extends RefCounted
 ## Minimal character-stat interface for M2-08. These values are PROTOTYPE
 ## PARAMETERS used to prove that inventory capacity comes from Strength; they
 ## are not the formal Strength or carrying-balance formula.
+## T02 prototype baseline: default Strength 10 gives backpack capacity
+## 10 + 10 x 9 = 100, and capacity still scales with Strength.
 const PROTOTYPE_DEFAULT_STRENGTH := 10
 const PROTOTYPE_BASE_CAPACITY := 10
-const PROTOTYPE_CAPACITY_PER_STRENGTH := 1
+const PROTOTYPE_CAPACITY_PER_STRENGTH := 9
 const MAX_STRENGTH := 1000000
 
 var _strength: int

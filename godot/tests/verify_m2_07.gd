@@ -18,6 +18,8 @@ const BUYBACK := {
 }
 const SIZES := {"test_good_01": 1, "test_good_02": 1, "test_good_03": 2, "test_good_04": 2, "test_good_05": 3, "test_good_06": 4}
 const IDS := ["test_good_01", "test_good_02", "test_good_03", "test_good_04", "test_good_05", "test_good_06"]
+## T02 prototype backpack capacity at default Strength (was 20 before T02).
+const BACKPACK_CAPACITY := 100
 const STRESS_STEPS := 320
 
 var _checks := 0
@@ -181,7 +183,7 @@ func _verify_ui() -> void:
 	_check(row == {"name": "測試商品一", "buy_price": "買入價 84", "buyback_price": "賣出價 76", "held": "持有 0", "stock": "庫存 100"}, "Good 1 row must show Chinese name, prices, held and stock (%s)" % str(row))
 	hub.get_market_button("test_good_01", "buy").pressed.emit()
 	_check(hub.get_market_row_texts("test_good_01")["stock"] == "庫存 99" and hub.get_market_row_texts("test_good_01")["held"] == "持有 1", "Buying must refresh stock and held immediately")
-	_check(hub.get_money_label_text() == "金錢：9916" and hub.get_cargo_label_text() == "貨物容量：1 / 20", "Money and cargo must refresh in Chinese")
+	_check(hub.get_money_label_text() == "金錢：9916" and hub.get_cargo_label_text() == "背包容量：1 / 100", "Money and backpack must refresh in Chinese")
 	_check(hub.get_feedback_text() == "已買入 1 件測試商品一，支付 84", "Buy feedback must be Chinese")
 	hub.get_market_button("test_good_01", "sell").pressed.emit()
 	_check(hub.get_feedback_text() == "已賣出 1 件測試商品一，收入 76" and hub.get_market_row_texts("test_good_01")["stock"] == "庫存 100", "Sell feedback and stock must refresh")
@@ -367,7 +369,7 @@ func _verify_stress() -> void:
 				var stock_ok: bool = valid and quantity <= stock[city][good_id]
 				if valid and not stock_ok:
 					counts["stock_rejected"] += 1
-				expected = stock_ok and _used(cargo) + quantity * SIZES[good_id] <= 20 and price * quantity <= money
+				expected = stock_ok and _used(cargo) + quantity * SIZES[good_id] <= BACKPACK_CAPACITY and price * quantity <= money
 				if expected:
 					money -= price * quantity
 					cargo[good_id] = cargo.get(good_id, 0) + quantity
@@ -394,7 +396,7 @@ func _verify_stress() -> void:
 					drift += 1
 				if quote["stock"] < 0 or quote["target_stock"] <= 0 or quote["reference_price"] <= 0 or quote["buy_price"] <= quote["buyback_price"]:
 					invariant_breaks += 1
-		if main.wallet.get_balance() < 0 or main.cargo.get_used_capacity() > 20:
+		if main.wallet.get_balance() < 0 or main.cargo.get_used_capacity() > BACKPACK_CAPACITY:
 			invariant_breaks += 1
 	_check(drift == 0, "Stress: money, cargo, stock, reference and target must match the model (%d drifts)" % drift)
 	_check(invariant_breaks == 0, "Stress: market and player invariants must hold (%d breaks)" % invariant_breaks)
@@ -420,7 +422,8 @@ func _ui_matches(main: Node) -> bool:
 
 ## True when every visible label and button in the hub has no Latin letters,
 ## apart from the placeholder city code in the city title and (M2-09) in the
-## transport destination label.
+## transport destination label, and (T02) in the exact warehouse city
+## selector and status texts.
 func _player_text_is_chinese(hub: CityHub) -> bool:
 	var latin := RegEx.new()
 	latin.compile("[A-Za-z]")
@@ -435,6 +438,9 @@ func _player_text_is_chinese(hub: CityHub) -> bool:
 		for destination in hub.get_transport_destinations():
 			if text == "目的地：%s 城" % destination:
 				checked = text.replace(destination, "")
+		for city in WorldLayout.ACTIVE_CITY_IDS:
+			if text in ["%s 城倉庫" % city, CityHub.WAREHOUSE_LOCAL_STATUS % city, CityHub.WAREHOUSE_REMOTE_STATUS % city]:
+				checked = text.replace(city, "")
 		if latin.search(checked) != null:
 			push_error("Latin text in hub: %s" % text)
 			return false
