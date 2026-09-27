@@ -1,5 +1,7 @@
 extends SceneTree
 
+const DynamicPriceModel := preload("res://tests/dynamic_price_model.gd")
+
 ## Uses its own save file so the player's real save is never touched.
 const TEST_SAVE := "user://m2_07_test_save.json"
 const CITIES := ["A", "B"]
@@ -157,7 +159,8 @@ func _verify_same_city_loss() -> void:
 			TradeService.buy(city, good_id, 1, wallet, cargo, market)
 			TradeService.sell(city, good_id, 1, wallet, cargo, market)
 			var net := wallet.get_balance() - 10000
-			_check(net < 0 and net == BUYBACK[city][good_id] - BUY[city][good_id], "%s %s same-city round trip must lose (net %d)" % [city, good_id, net])
+			# T03: the unit is sold back at stock 99, so the buyback is the dynamic one.
+			_check(net < 0 and net == DynamicPriceModel.buyback(REFERENCE[city][good_id], 99) - BUY[city][good_id], "%s %s same-city round trip must lose (net %d)" % [city, good_id, net])
 			_check(market.get_quote(city, good_id)["stock"] == 100, "%s %s round trip must restore stock" % [city, good_id])
 
 	# The approved same-city proof: A Good 1 x 10.
@@ -166,8 +169,10 @@ func _verify_same_city_loss() -> void:
 	var market := MarketState.create_default()
 	_check(TradeService.buy("A", "test_good_01", 10, wallet, cargo, market)["success"] and wallet.get_balance() == 9160, "Same-city: buy 10 @84 -> 9160")
 	_check(market.get_quote("A", "test_good_01")["stock"] == 90, "Same-city: stock 100 -> 90")
-	_check(TradeService.sell("A", "test_good_01", 10, wallet, cargo, market)["success"] and wallet.get_balance() == 9920, "Same-city: sell 10 @76 -> 9920")
-	_check(10000 - wallet.get_balance() == 80, "Same-city: loss must be 80")
+	# T03: the 10 units are sold back at stock 90 (dynamic buyback), still at a loss.
+	var sell_back := 10 * DynamicPriceModel.buyback(80, 90)
+	_check(TradeService.sell("A", "test_good_01", 10, wallet, cargo, market)["success"] and wallet.get_balance() == 9160 + sell_back, "Same-city: sell 10 at the stock-90 buyback")
+	_check(10000 - wallet.get_balance() == 840 - sell_back and 840 - sell_back > 0, "Same-city: the round trip must still lose money")
 	_check(market.get_quote("A", "test_good_01")["stock"] == 100 and market.get_quote("A", "test_good_01")["reference_price"] == 80, "Same-city: stock back to 100, reference 80 throughout")
 
 
@@ -224,14 +229,20 @@ func _verify_journey() -> void:
 	var hub := first.get_node("CityHub") as CityHub
 	for press in range(10):
 		hub.get_market_button("test_good_01", "buy").pressed.emit()
-	_check(first.wallet.get_balance() == 9160 and first.cargo.get_quantity("test_good_01") == 10, "Journey A buy: 9160 / 10")
+	# T03: each single buy / sell uses the dynamic price at the stock it happens at.
+	var after_buys := 10000
+	var income := 0
+	for unit in range(10):
+		after_buys -= DynamicPriceModel.buy(80, 100 - unit)
+		income += DynamicPriceModel.buyback(120, 100 + unit)
+	_check(first.wallet.get_balance() == after_buys and first.cargo.get_quantity("test_good_01") == 10, "Journey A buy: paid total / 10")
 	_check(_stock(first, "A", "test_good_01") == 90 and _stock(first, "B", "test_good_01") == 100, "Journey A buy: A stock 90, B stock 100")
 	var first_market: MarketState = first.market
 	await _destroy(first)
 
 	var second := await _new_main(TEST_SAVE)
 	_check(second.market != first_market, "Restart must build a new market object")
-	_check(second.wallet.get_balance() == 9160 and second.cargo.get_quantity("test_good_01") == 10, "Journey restart #1: 9160 / 10")
+	_check(second.wallet.get_balance() == after_buys and second.cargo.get_quantity("test_good_01") == 10, "Journey restart #1: paid total / 10")
 	_check(_stock(second, "A", "test_good_01") == 90 and _stock(second, "B", "test_good_01") == 100, "Journey restart #1: A stock 90, B stock 100")
 	await _enter(second, "B")
 	var quote_b: Dictionary = second.market.get_quote("B", "test_good_01")
@@ -240,12 +251,12 @@ func _verify_journey() -> void:
 	_check(hub_b.get_market_row_texts("test_good_01")["stock"] == "庫存 100", "B market must show its own stock after restart")
 	for press in range(10):
 		hub_b.get_market_button("test_good_01", "sell").pressed.emit()
-	_check(second.wallet.get_balance() == 10300 and second.cargo.is_empty(), "Journey B sell: 10300 / 0")
+	_check(second.wallet.get_balance() == after_buys + income and second.cargo.is_empty(), "Journey B sell: earned total / 0")
 	_check(_stock(second, "A", "test_good_01") == 90 and _stock(second, "B", "test_good_01") == 110, "Journey B sell: A stock 90, B stock 110")
 	await _destroy(second)
 
 	var third := await _new_main(TEST_SAVE)
-	_check(third.wallet.get_balance() == 10300 and third.cargo.is_empty(), "Journey restart #2: 10300 / 0")
+	_check(third.wallet.get_balance() == after_buys + income and third.cargo.is_empty(), "Journey restart #2: earned total / 0")
 	_check(_stock(third, "A", "test_good_01") == 90 and _stock(third, "B", "test_good_01") == 110, "Journey restart #2: A stock 90, B stock 110")
 	_check(third.market.get_quote("A", "test_good_01")["reference_price"] == 80 and third.market.get_quote("B", "test_good_01")["reference_price"] == 120, "Journey: reference prices never moved")
 	await _destroy(third)
@@ -365,7 +376,8 @@ func _verify_stress() -> void:
 			var valid := good_id in IDS and quantity > 0
 			var expected := false
 			if is_buy:
-				var price: int = BUY[city].get(good_id, 0)
+				# T03: price at the model's current stock (dynamic reference).
+				var price: int = DynamicPriceModel.buy(REFERENCE[city][good_id], stock[city][good_id]) if good_id in IDS else 0
 				var stock_ok: bool = valid and quantity <= stock[city][good_id]
 				if valid and not stock_ok:
 					counts["stock_rejected"] += 1
@@ -377,7 +389,7 @@ func _verify_stress() -> void:
 			else:
 				expected = valid and cargo.get(good_id, 0) >= quantity
 				if expected:
-					money += BUYBACK[city][good_id] * quantity
+					money += DynamicPriceModel.buyback(REFERENCE[city][good_id], stock[city][good_id]) * quantity
 					cargo[good_id] -= quantity
 					if cargo[good_id] == 0:
 						cargo.erase(good_id)

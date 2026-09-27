@@ -1,5 +1,7 @@
 extends SceneTree
 
+const DynamicPriceModel := preload("res://tests/dynamic_price_model.gd")
+
 const FixedCapacityStats := preload("res://tests/fixed_capacity_stats.gd")
 
 const APPROVED_PRICES := {
@@ -103,7 +105,8 @@ func _verify_buy() -> void:
 	_check(TradeService.buy("A", "test_good_03", 1, wallet, cargo, market)["success"] and cargo.get_quantity("test_good_03") == 4, "Buying the same good must stack")
 	_check(TradeService.buy("B", "test_good_02", 2, wallet, cargo, market)["success"], "Buying a second good must succeed")
 	_check(cargo.get_items() == {"test_good_03": 4, "test_good_02": 2} and cargo.get_used_capacity() == 10, "Multiple goods must be held together")
-	_check(wallet.get_balance() == 10000 - 441 * 4 - 315 * 2, "Money must reflect every buy exactly")
+	# T03: the 4th unit is bought at stock 97, so it costs the dynamic price.
+	_check(wallet.get_balance() == 10000 - 441 * 3 - DynamicPriceModel.buy(420, 97) - 315 * 2, "Money must reflect every buy exactly")
 
 	# Money is enough but cargo is full: nothing may change.
 	var full_cargo := _cargo20()
@@ -257,8 +260,11 @@ func _verify_stress() -> void:
 		var money_before := wallet.get_balance()
 		var items_before := cargo.get_items()
 		var market_before := market.get_snapshot()
-		var buy_price: int = BUY_PRICES.get(city_id, {}).get(good_id, 0)
-		var buyback_price: int = BUYBACK_PRICES.get(city_id, {}).get(good_id, 0)
+		# T03: prices follow the model's current stock (dynamic reference).
+		var baseline: int = APPROVED_PRICES.get(city_id, {}).get(good_id, 0)
+		var model_stock_now: int = model_stock.get(city_id, {}).get(good_id, 0)
+		var buy_price: int = DynamicPriceModel.buy(baseline, model_stock_now) if baseline > 0 else 0
+		var buyback_price: int = DynamicPriceModel.buyback(baseline, model_stock_now) if baseline > 0 else 0
 		var valid_quantity: bool = typeof(quantity) == TYPE_INT and quantity > 0
 		var expected := false
 		var result := {}

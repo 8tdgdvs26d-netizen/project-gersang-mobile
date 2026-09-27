@@ -47,7 +47,27 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-T02 Warehouse UX + Remote View:
+T03 Dynamic Market Pricing: trade → stock → price.
+
+- the city × good baseline reference price (MarketPrices) never moves; the price players see
+  is a dynamic reference derived from baseline + current stock + target stock by the single
+  formula `MarketRules.dynamic_reference()`, then the existing 105% / 95% spread
+- PROTOTYPE rule: every 10% stock deviation moves the price ~5% the other way
+  (stock 80 → +10%, 50 → +25%, 120 → −10%, 150 → −25%), clamped to 50%..200% of the
+  baseline. With stock ≥ 0 the highest reachable price is +50% (stock 0); the 200% ceiling
+  is a safety bound. The floor is reached at stock 2 × target
+- integer-only maths: stock / target ratio in basis points by long division, price change in
+  parts per million, round half up, overflow-safe for every value MarketState accepts
+- quotes now include baseline_reference_price, dynamic_reference_price, buy / buyback,
+  stock and target_stock (reference_price stays the baseline)
+- buying lowers stock so the next quote is dearer; selling raises stock so it is cheaper.
+  Cities and goods are independent. The market UI shows the new prices after every trade
+- no save schema change: only stock is saved, so a reload rebuilds identical prices
+- NOT INCLUDED (T04 / T05): recovery or restock over time, price history, profit / loss
+- older market tests now compute expected prices with `tests/dynamic_price_model.gd`, an
+  independent test-side model of the approved rule
+
+Previous: T02 Warehouse UX + Remote View:
 
 - backpack wording: every player-facing capacity line says 背包容量 (market 背包容量：x / y,
   failures 背包容量不足); 貨物容量 is no longer used for the character's capacity

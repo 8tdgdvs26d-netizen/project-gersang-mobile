@@ -2,10 +2,11 @@ class_name MarketState
 extends RefCounted
 
 ## Runtime market of every active city: for each city x good it holds the
-## reference price, current stock and target stock. It belongs to the world,
-## not to the player. Prices come from MarketRules; stock only changes through
-## validated calls. Reference prices do not move with trades (no dynamic
-## pricing yet), and target stock is stored for future restocking only.
+## baseline reference price, current stock and target stock. It belongs to the
+## world, not to the player. Stock only changes through validated calls. The
+## baseline reference never moves with trades; the price players see is the
+## dynamic reference derived from baseline + stock + target by MarketRules
+## (T03), so it is never stored and a reload rebuilds the same price.
 
 ## Largest stock that still round-trips exactly through the JSON save.
 const MAX_STOCK := 9007199254740992
@@ -65,17 +66,22 @@ func get_snapshot() -> Dictionary:
 	return _markets.duplicate(true)
 
 
-## Returns reference_price, buy_price, buyback_price, stock and target_stock,
-## or an empty Dictionary for an unknown or reserved city or unknown good.
+## Returns the baseline reference (also as reference_price), the dynamic
+## reference, buy_price, buyback_price, stock and target_stock, or an empty
+## Dictionary for an unknown or reserved city or unknown good. Player prices
+## use the dynamic reference.
 func get_quote(city_id: Variant, good_id: Variant) -> Dictionary:
 	var entry := _entry(city_id, good_id)
 	if entry.is_empty():
 		return {}
-	var reference: int = entry["reference_price"]
+	var baseline: int = entry["reference_price"]
+	var dynamic := MarketRules.dynamic_reference(baseline, entry["current_stock"], entry["target_stock"])
 	return {
-		"reference_price": reference,
-		"buy_price": MarketRules.buy_price(reference),
-		"buyback_price": MarketRules.buyback_price(reference),
+		"reference_price": baseline,
+		"baseline_reference_price": baseline,
+		"dynamic_reference_price": dynamic,
+		"buy_price": MarketRules.buy_price(dynamic),
+		"buyback_price": MarketRules.buyback_price(dynamic),
 		"stock": entry["current_stock"],
 		"target_stock": entry["target_stock"],
 	}
