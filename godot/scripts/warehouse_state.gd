@@ -10,7 +10,7 @@ extends RefCounted
 
 ## PROTOTYPE PARAMETER — warehouse capacity per city in carrying-capacity
 ## units (the prototype character carries 20). Not a formal balance value.
-const PROTOTYPE_CAPACITY := 100
+const PROTOTYPE_CAPACITY := 200
 const CITY_CAPACITIES := {"A": PROTOTYPE_CAPACITY, "B": PROTOTYPE_CAPACITY}
 const SAVED_CITY_KEYS := ["items"]
 

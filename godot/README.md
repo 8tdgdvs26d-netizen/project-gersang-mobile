@@ -54,7 +54,7 @@ T01 City Warehouse Foundation adds one independent item warehouse per active cit
 - `CityWarehouse` stores item quantities only (no money). Capacity is quantity × the
   authoritative GoodsCatalog capacity cost; callers can never supply a cost
 - `WarehouseState` holds A and B, gives read access by city (contents, used, max,
-  remaining capacity) and owns the save shape. Capacity is 100 per city, a PROTOTYPE
+  remaining capacity) and owns the save shape. Capacity is 200 per city, a PROTOTYPE
   PARAMETER that is never saved, so it can be re-tuned without migrating saves
 - `WarehouseService` (UI-independent) deposits/withdraws only while IN_CITY and only in the
   current city; remote cities, the world and journeys are rejected. Transfers are free,

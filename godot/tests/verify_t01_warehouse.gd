@@ -7,7 +7,7 @@ extends SceneTree
 const TEST_SAVE := "user://t01_warehouse_test_save.json"
 const UNWRITABLE_SAVE := "user://t01_missing_dir/nested/save.json"
 const T0 := 1800000000000
-const CAPACITY := 100
+const CAPACITY := 200
 const IDS := ["test_good_01", "test_good_02", "test_good_03", "test_good_04", "test_good_05", "test_good_06"]
 const COSTS := {"test_good_01": 1, "test_good_02": 1, "test_good_03": 2, "test_good_04": 2, "test_good_05": 3, "test_good_06": 4}
 const STRESS_STEPS := 400
@@ -140,12 +140,12 @@ func _verify_failures_change_nothing() -> void:
 
 
 func _verify_capacity() -> void:
-	# Warehouse capacity: 25 x cost-4 goods fill 100 exactly.
-	var s := _session("A", {"test_good_06": 30})
+	# Warehouse capacity: 50 x cost-4 goods fill 200 exactly.
+	var s := _session("A", {"test_good_06": 60})
 	_check(s.inventory.is_over_capacity(), "Setup: an over-capacity inventory")
-	var too_many := _deposit(s, "A", "test_good_06", 26)
-	_check(not too_many["success"] and too_many["reason"] == "ERR_WAREHOUSE_CAPACITY" and s.inventory.get_quantity("test_good_06") == 30, "Depositing past warehouse capacity must fail atomically")
-	_check(_deposit(s, "A", "test_good_06", 25)["success"] and s.warehouses.get_used_capacity("A") == CAPACITY and s.warehouses.get_remaining_capacity("A") == 0, "An over-capacity inventory may still deposit, up to the exact capacity")
+	var too_many := _deposit(s, "A", "test_good_06", 51)
+	_check(not too_many["success"] and too_many["reason"] == "ERR_WAREHOUSE_CAPACITY" and s.inventory.get_quantity("test_good_06") == 60, "Depositing past warehouse capacity must fail atomically")
+	_check(_deposit(s, "A", "test_good_06", 50)["success"] and s.warehouses.get_used_capacity("A") == CAPACITY and s.warehouses.get_remaining_capacity("A") == 0, "An over-capacity inventory may still deposit, up to the exact capacity")
 	var before := _snapshot(s)
 	var full := _deposit(s, "A", "test_good_06", 1)
 	_check(not full["success"] and full["reason"] == "ERR_WAREHOUSE_CAPACITY" and _snapshot(s) == before, "A full warehouse must reject deposits")
@@ -272,10 +272,10 @@ func _verify_save_versions() -> void:
 
 	# A valid over-capacity warehouse (capacity lowered later) loads without losing items.
 	var v5 := raw.duplicate(true)
-	v5["warehouses"]["A"]["items"] = {"test_good_06": 30}
+	v5["warehouses"]["A"]["items"] = {"test_good_06": 60}
 	_write_json(v5)
 	var over := SaveStore.load_session(TEST_SAVE)
-	_check(not over.is_empty() and over["warehouses"].get_quantity("A", "test_good_06") == 30, "An over-capacity warehouse save keeps its items")
+	_check(not over.is_empty() and over["warehouses"].get_quantity("A", "test_good_06") == 60 and over["warehouses"].get_used_capacity("A") > over["warehouses"].get_max_capacity("A"), "An over-capacity warehouse save keeps its items")
 
 	# Malformed warehouse data rejects the whole save (existing convention).
 	var broken := {
@@ -324,14 +324,14 @@ func _verify_game_flow() -> void:
 	hub.show_facility("warehouse")
 	await process_frame
 	_check(hub.get_facility() == "warehouse" and hub.get_warehouse_button("test_good_01", "deposit").is_visible_in_tree() and not hub.get_market_button("test_good_01", "buy").is_visible_in_tree(), "The warehouse is its own facility view")
-	_check(hub.get_warehouse_summary_text() == "攜帶容量：7 / 20　倉庫容量：0 / 100", "Warehouse view must show both capacities (%s)" % hub.get_warehouse_summary_text())
+	_check(hub.get_warehouse_summary_text() == "攜帶容量：7 / 20　倉庫容量：0 / 200", "Warehouse view must show both capacities (%s)" % hub.get_warehouse_summary_text())
 	_check(hub.get_warehouse_row_texts("test_good_01") == {"name": "測試商品一", "carried": "攜帶 5", "stored": "倉庫 0"}, "Rows must show carried and stored counts")
 	_check(hub.get_warehouse_button("test_good_01", "deposit").text == "存入 1" and hub.get_warehouse_button("test_good_01", "withdraw").text == "取出 1", "Buttons must read 存入 1 / 取出 1")
 	for press in range(3):
 		hub.get_warehouse_button("test_good_01", "deposit").pressed.emit()
 	_check(main.inventory.get_quantity("test_good_01") == 2 and main.warehouses.get_quantity("A", "test_good_01") == 3, "Three presses must deposit three")
 	_check(hub.get_warehouse_row_texts("test_good_01") == {"name": "測試商品一", "carried": "攜帶 2", "stored": "倉庫 3"} and hub.get_feedback_text() == "已存入 1 件測試商品一", "UI must refresh after deposits")
-	_check(hub.get_warehouse_summary_text() == "攜帶容量：4 / 20　倉庫容量：3 / 100", "Capacities must refresh")
+	_check(hub.get_warehouse_summary_text() == "攜帶容量：4 / 20　倉庫容量：3 / 200", "Capacities must refresh")
 	_check(_read_json()["warehouses"]["A"]["items"].has("test_good_01") and int(_read_json()["warehouses"]["A"]["items"]["test_good_01"]) == 3, "A successful deposit must be saved")
 	_check(main.wallet.get_balance() == money and main.market.get_snapshot() == market and main.location.to_dict() == location, "Warehouse use must not change wallet, market or location")
 	var id: String = hub.get_warehouse_request_id()
@@ -360,7 +360,7 @@ func _verify_game_flow() -> void:
 	_check(main.deposit_to_warehouse("test_good_02", 1)["reason"] == "ERR_NOT_IN_CITY", "Outside a city nothing may move")
 	await _walk_in(main, "B")
 	hub.show_facility("warehouse")
-	_check(hub.get_warehouse_row_texts("test_good_01")["stored"] == "倉庫 0" and hub.get_warehouse_summary_text().ends_with("倉庫容量：0 / 100"), "City B's warehouse must not show City A's goods")
+	_check(hub.get_warehouse_row_texts("test_good_01")["stored"] == "倉庫 0" and hub.get_warehouse_summary_text().ends_with("倉庫容量：0 / 200"), "City B's warehouse must not show City A's goods")
 	hub.get_warehouse_button("test_good_01", "withdraw").pressed.emit()
 	_check(hub.get_feedback_text() == "數量不足" and main.warehouses.get_quantity("A", "test_good_01") == 4, "City A goods cannot be withdrawn in City B")
 
