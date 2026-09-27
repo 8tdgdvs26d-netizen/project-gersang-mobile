@@ -75,6 +75,11 @@ static func serialize(wallet: Wallet, inventory: CharacterInventory, market: Mar
 static func save(path: String, wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null) -> bool:
 	if path == "" or wallet == null or inventory == null or market == null:
 		return false
+	# T05: never write a cost ledger that does not account for exactly every
+	# carried and stored unit. Checked before any file is created, so a refused
+	# save leaves the existing save file untouched.
+	if ledger != null and not ledger.matches(inventory.get_items(), warehouses if warehouses != null else WarehouseState.create_default()):
+		return false
 	var temp_path := path + ".tmp"
 	var file := FileAccess.open(temp_path, FileAccess.WRITE)
 	if file == null:

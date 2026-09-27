@@ -75,6 +75,7 @@ func _initialize() -> void:
 	_verify_atomic_rollback()
 	_verify_save_and_migration()
 	_verify_save_validation()
+	await _verify_save_write_invariant()
 	_verify_multi_city_model()
 	await _verify_game_flow()
 	await _verify_game_save_failure()
@@ -82,7 +83,7 @@ func _initialize() -> void:
 	await _verify_ui_and_layout()
 	_verify_stress()
 	_delete(TEST_SAVE)
-	_check(_sections_done.size() == 16, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 17, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("T05 profit / loss verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -579,6 +580,91 @@ func _verify_save_and_migration() -> void:
 	_sections_done.append("save_and_migration")
 
 
+## GPT review fix: SaveStore.save() refuses to write a ledger that does not
+## match every carried and stored quantity, before touching any file.
+func _verify_save_write_invariant() -> void:
+	var tmp := TEST_SAVE + ".tmp"
+	_delete(TEST_SAVE)
+	_delete(tmp)
+	var base := _session()
+	TradeService.buy("A", "test_good_01", 10, base.wallet, base.inventory, base.market, base.ledger)
+	TradeService.buy("A", "test_good_02", 1, base.wallet, base.inventory, base.market, base.ledger)
+	WarehouseService.deposit(base.location, base.inventory, base.warehouses, "A", "test_good_01", 2, "", Callable(), base.ledger)
+	var recovery := MarketRecovery.from_dict({"anchor_ms": T0})
+	# (e) A matching ledger saves and reloads normally.
+	_check(SaveStore.save(TEST_SAVE, base.wallet, base.inventory, base.market, base.location, base.warehouses, recovery, base.ledger), "A matching ledger saves")
+	var loaded := SaveStore.load_session(TEST_SAVE)
+	_check(not loaded.is_empty() and loaded["cost_ledger"].get_snapshot() == base.ledger.get_snapshot() and loaded["inventory"].get_items() == base.inventory.get_items() and loaded["warehouses"].get_snapshot() == base.warehouses.get_snapshot(), "The matching save reloads exactly")
+	var bytes := FileAccess.get_file_as_bytes(TEST_SAVE)
+	_check(bytes.size() > 0 and not FileAccess.file_exists(tmp), "Reference save on disk, no temp file left")
+
+	var cases := {}
+	# (a) Backpack quantity mismatch: one more carried unit than lots.
+	var a := _clone(base)
+	a.inventory.add("test_good_01", 1)
+	cases["backpack mismatch (traded good)"] = a
+	# (b) Warehouse quantity mismatch.
+	var b := _clone(base)
+	b.warehouses._warehouse("A").restore_items({"test_good_01": 3})
+	cases["warehouse mismatch"] = b
+	# (c) Mismatch in an unrelated good (never traded, no lots at all).
+	var c := _clone(base)
+	c.inventory.add("test_good_05", 1)
+	cases["unrelated good mismatch"] = c
+	var c2 := _clone(base)
+	c2.warehouses._warehouse("B").restore_items({"test_good_06": 1})
+	cases["unrelated good in warehouse B"] = c2
+	# Lots without goods, anywhere.
+	var d := _clone(base)
+	d.ledger.add_purchase(BP, "test_good_04", 1, 900)
+	cases["lots without carried goods"] = d
+	var e := _clone(base)
+	e.ledger.add_unknown(TradeCostLedger.warehouse("B"), "test_good_03", 2)
+	cases["lots without stored goods"] = e
+	var f := _clone(base)
+	f.inventory.remove("test_good_02", 1)
+	cases["carried good gone, lot left"] = f
+	for label in cases:
+		var bad: Session = cases[label]
+		_check(not bad.ledger.matches(bad.inventory.get_items(), bad.warehouses), "Setup: %s breaks the invariant" % label)
+		_check(not SaveStore.save(TEST_SAVE, bad.wallet, bad.inventory, bad.market, bad.location, bad.warehouses, recovery, bad.ledger), "%s: save refused (returns false)" % label)
+		_check(FileAccess.get_file_as_bytes(TEST_SAVE) == bytes, "%s: the existing valid save is byte-for-byte unchanged" % label)
+		_check(not FileAccess.file_exists(tmp), "%s: no temp file was created" % label)
+	# Without explicit warehouses the defaults (empty) are what must match.
+	_check(not SaveStore.save(TEST_SAVE, base.wallet, base.inventory, base.market, base.location, null, recovery, base.ledger) and FileAccess.get_file_as_bytes(TEST_SAVE) == bytes, "Stored lots with no warehouses supplied: refused, file unchanged")
+	# A refused save never creates a file where none existed.
+	var fresh := "user://t05_refused_fresh.json"
+	_delete(fresh)
+	_delete(fresh + ".tmp")
+	_check(not SaveStore.save(fresh, a.wallet, a.inventory, a.market, a.location, a.warehouses, recovery, a.ledger) and not FileAccess.file_exists(fresh) and not FileAccess.file_exists(fresh + ".tmp"), "A refused save creates no new file")
+	# Still valid after the refusals: the untouched file loads, and matching state saves again.
+	_check(SaveStore.load_session(TEST_SAVE)["cost_ledger"].get_snapshot() == base.ledger.get_snapshot(), "The untouched save still loads the last valid state")
+	var ok := _clone(base)
+	TradeService.buy("A", "test_good_03", 1, ok.wallet, ok.inventory, ok.market, ok.ledger)
+	_check(SaveStore.save(TEST_SAVE, ok.wallet, ok.inventory, ok.market, ok.location, ok.warehouses, recovery, ok.ledger) and FileAccess.get_file_as_bytes(TEST_SAVE) != bytes, "A matching ledger still overwrites the save normally")
+	_check(SaveStore.load_session(TEST_SAVE)["cost_ledger"].get_snapshot() == ok.ledger.get_snapshot(), "...and reloads exactly")
+
+	# In the game: a good out of step elsewhere refuses the save after a trade
+	# in another good (the M2-06 contract keeps that trade in memory).
+	_delete(TEST_SAVE)
+	var main := await _new_main(TEST_SAVE, T0)
+	await _walk_in(main, "A")
+	main.buy_in_current_city("test_good_01", 1)
+	var game_bytes := FileAccess.get_file_as_bytes(TEST_SAVE)
+	_check(game_bytes.size() > 0, "The game saved the valid state")
+	main.inventory.add("test_good_06", 1)
+	var traded: Dictionary = main.buy_in_current_city("test_good_02", 1)
+	_check(traded["success"] and main.inventory.get_quantity("test_good_02") == 1, "A trade in an unaffected good still completes (M2-06: kept in memory)")
+	_check(FileAccess.get_file_as_bytes(TEST_SAVE) == game_bytes and not FileAccess.file_exists(tmp), "The game's save is refused: the last valid save file is byte-for-byte unchanged")
+	_check(not main._persist(), "The game's persist reports the refusal")
+	await _destroy(main)
+	_delete(TEST_SAVE)
+	_delete(fresh)
+	_delete(fresh + ".tmp")
+	_delete(tmp)
+	_sections_done.append("save_write_invariant")
+
+
 func _verify_save_validation() -> void:
 	var s := _session()
 	TradeService.buy("A", "test_good_01", 10, s.wallet, s.inventory, s.market, s.ledger)
@@ -1043,6 +1129,25 @@ func _withdraw(s: Session, city: String, good_id: String, quantity: int) -> bool
 func _move_to(s: Session, city: String) -> void:
 	s.location.leave_city()
 	s.location.enter_city(city)
+
+
+## An independent deep copy of a session (via the save format's own objects).
+func _clone(s: Session) -> Session:
+	var c := Session.new()
+	c.wallet = Wallet.new()
+	var diff: int = s.wallet.get_balance() - c.wallet.get_balance()
+	if diff > 0:
+		c.wallet.add(diff)
+	elif diff < 0:
+		c.wallet.spend(-diff)
+	c.inventory = CharacterInventory.new()
+	c.inventory.restore_items(s.inventory.get_items())
+	c.market = MarketState.from_snapshot(s.market.get_snapshot())
+	c.ledger = TradeCostLedger.new()
+	c.ledger.restore_snapshot(s.ledger.get_snapshot())
+	c.warehouses = WarehouseState.from_snapshot(s.warehouses.get_snapshot())
+	c.location = PlayerLocation.from_dict(s.location.to_dict())
+	return c
 
 
 ## Everything a trade or transfer may change.
