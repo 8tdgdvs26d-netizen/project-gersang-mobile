@@ -1,5 +1,7 @@
 extends SceneTree
 
+const FixedCapacityStats := preload("res://tests/fixed_capacity_stats.gd")
+
 const APPROVED_PRICES := {
 	"A": {"test_good_01": 80, "test_good_02": 180, "test_good_03": 420, "test_good_04": 900, "test_good_05": 2100, "test_good_06": 3600},
 	"B": {"test_good_01": 120, "test_good_02": 300, "test_good_03": 650, "test_good_04": 1250, "test_good_05": 1700, "test_good_06": 4300},
@@ -53,7 +55,7 @@ func _initialize() -> void:
 # --- Baseline and architecture -----------------------------------------------
 
 func _verify_regression_baseline() -> void:
-	_check(Cargo.CARGO_CAPACITY == 20, "Cargo capacity must stay 20")
+	_check(Cargo.CARGO_CAPACITY == 100 and _main.inventory.get_max_capacity() == 100, "Backpack capacity must be the T02 prototype baseline 100")
 	_check(GoodsCatalog.get_ids().size() == 6 and GoodsCatalog.get_unit_size("test_good_06") == 4 and GoodsCatalog.get_good("test_good_03")["base_value"] == 500, "Six goods must be unchanged")
 	_check(Wallet.STARTING_MONEY == 10000 and _main.wallet.get_balance() == 10000, "Starting money must stay 10000")
 	_check(WorldLayout.WORLD_SIZE == Vector2(40000.0, 40000.0), "World must stay 40K")
@@ -156,7 +158,7 @@ func _verify_failures() -> void:
 	_check(_main.cargo.get_used_capacity() == 20 and _main.wallet.get_balance() == 5590, "Ten good 3 buys must fill the cargo")
 	snapshot = _snapshot()
 	await _click(_hub.get_market_button("test_good_01", "buy"), false)
-	_check(_hub.get_feedback_text() == "貨物容量不足", "Buying into a full cargo must say Not enough cargo space")
+	_check(_hub.get_feedback_text() == "背包容量不足", "Buying into a full backpack must say 背包容量不足")
 	_check(_snapshot() == snapshot and _ui_matches_model(), "Failed full-cargo buy must leave model and UI unchanged")
 
 	# Not enough money: sell down, then spend to below the good 5 price.
@@ -177,7 +179,7 @@ func _verify_failures() -> void:
 
 func _verify_a_to_b_loop() -> void:
 	await _reset_session_in("A")
-	_check(_hub.get_money_label_text() == "金錢：10000" and _hub.get_cargo_label_text() == "貨物容量：0 / 20", "A must start at 10000 money and 0 / 20 cargo")
+	_check(_hub.get_money_label_text() == "金錢：10000" and _hub.get_cargo_label_text() == "背包容量：0 / 20", "A must start at 10000 money and 0 / 20 backpack")
 	_check(_hub.get_market_row_texts("test_good_01")["buy_price"] == "買入價 84" and _hub.get_market_row_texts("test_good_01")["buyback_price"] == "賣出價 76", "A must show Good 1 at 84 / 76")
 	_check(_hub.get_market_row_texts("test_good_05")["buy_price"] == "買入價 2205" and _hub.get_market_row_texts("test_good_05")["buyback_price"] == "賣出價 1995", "A must show Good 5 at 2205 / 1995")
 	var single_steps := true
@@ -187,7 +189,7 @@ func _verify_a_to_b_loop() -> void:
 			single_steps = false
 	_check(single_steps, "Every Buy 1 click in A must move exactly 84 money and 1 good")
 	_check(_hub.get_money_label_text() == "金錢：9160" and _main.wallet.get_balance() == 9160, "Ten Buy 1 clicks in A must show 9160")
-	_check(_hub.get_cargo_label_text() == "貨物容量：10 / 20", "Ten buys must show Cargo 10 / 20")
+	_check(_hub.get_cargo_label_text() == "背包容量：10 / 20", "Ten buys must show 背包容量 10 / 20")
 	_check(_hub.get_market_row_texts("test_good_01")["held"] == "持有 10", "Ten buys must show Held 10")
 
 	_check(_main.leave_city(), "Must leave A")
@@ -197,7 +199,7 @@ func _verify_a_to_b_loop() -> void:
 
 	await _enter("B")
 	_check(_hub.get_money_label_text() == "金錢：9160", "B market must show carried money")
-	_check(_hub.get_cargo_label_text() == "貨物容量：10 / 20", "B market must show carried cargo")
+	_check(_hub.get_cargo_label_text() == "背包容量：10 / 20", "B market must show carried cargo")
 	_check(_hub.get_market_row_texts("test_good_01")["held"] == "持有 10", "B market must show carried holdings")
 	_check(_hub.get_market_row_texts("test_good_01")["buy_price"] == "買入價 126" and _hub.get_market_row_texts("test_good_01")["buyback_price"] == "賣出價 114", "B must show Good 1 at 126 / 114")
 	_check(_hub.get_market_row_texts("test_good_05")["buy_price"] == "買入價 1785" and _hub.get_market_row_texts("test_good_05")["buyback_price"] == "賣出價 1615", "B must show Good 5 at 1785 / 1615")
@@ -215,7 +217,7 @@ func _verify_a_to_b_loop() -> void:
 			single_steps = false
 	_check(single_steps, "Every Sell 1 touch in B must move exactly 114 money and 1 good, and refresh Held")
 	_check(_hub.get_money_label_text() == "金錢：10300" and _main.wallet.get_balance() == 10300, "Ten Sell 1 touches in B must show 10300")
-	_check(_hub.get_cargo_label_text() == "貨物容量：0 / 20" and _hub.get_market_row_texts("test_good_01")["held"] == "持有 0", "Selling all must show Cargo 0 / 20 and Held 0")
+	_check(_hub.get_cargo_label_text() == "背包容量：0 / 20" and _hub.get_market_row_texts("test_good_01")["held"] == "持有 0", "Selling all must show Cargo 0 / 20 and Held 0")
 	_check(_main.wallet.get_balance() - Wallet.STARTING_MONEY == 300, "A to B Good 1 loop must profit +300")
 
 
@@ -250,7 +252,7 @@ func _verify_stress() -> void:
 		var expected_reason := ""
 		if is_buy:
 			if _model_used(model_cargo) + APPROVED_SIZES[good_id] > 20:
-				expected_reason = "貨物容量不足"
+				expected_reason = "背包容量不足"
 			elif price > model_money:
 				expected_reason = "金錢不足"
 			else:
@@ -316,7 +318,7 @@ func _ui_matches_model() -> bool:
 	var city_id: String = _main.current_city_id
 	if _hub.get_money_label_text() != "金錢：%d" % _main.wallet.get_balance():
 		return false
-	if _hub.get_cargo_label_text() != "貨物容量：%d / 20" % _main.cargo.get_used_capacity():
+	if _hub.get_cargo_label_text() != "背包容量：%d / %d" % [_main.cargo.get_used_capacity(), _main.cargo.get_max_capacity()]:
 		return false
 	for good_id in GoodsCatalog.get_ids():
 		var texts := _hub.get_market_row_texts(good_id)
@@ -387,7 +389,9 @@ func _reset_session_in(city_id: String) -> void:
 		_main.leave_city()
 		await _settle()
 	_main.wallet = Wallet.new()
-	_main.cargo = Cargo.new()
+	# Rules run on a fixed capacity-20 fixture (their original size); the T02
+	# prototype balance (100) is checked in the baseline.
+	_main.cargo = Cargo.new("player", FixedCapacityStats.new(20))
 	_main.market = MarketState.create_default()
 	await _enter(city_id)
 

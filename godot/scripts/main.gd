@@ -68,6 +68,7 @@ func _ready() -> void:
 	_city_hub.transport_requested.connect(_on_transport_requested)
 	_city_hub.deposit_requested.connect(_on_deposit_requested)
 	_city_hub.withdraw_requested.connect(_on_withdraw_requested)
+	_city_hub.warehouse_city_selected.connect(_on_warehouse_city_selected)
 	_city_hub.facility_changed.connect(_on_hub_facility_changed)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	_restore_location()
@@ -162,15 +163,32 @@ func update_journey() -> bool:
 	return true
 
 
-## Moves items from the inventory into the current city's warehouse. Free;
-## never touches the wallet, market or journey.
-func deposit_to_warehouse(item_id: Variant, quantity: Variant, request_id: String = "") -> Dictionary:
-	return WarehouseService.deposit(location, inventory, warehouses, current_city_id, item_id, quantity, request_id, _persist)
+## Moves items from the inventory into a warehouse (default: the current
+## city's). Free; never touches the wallet, market or journey. WarehouseService
+## rejects any city that is not the character's current city.
+func deposit_to_warehouse(item_id: Variant, quantity: Variant, request_id: String = "", city_id: Variant = null) -> Dictionary:
+	var target: Variant = current_city_id if city_id == null else city_id
+	return WarehouseService.deposit(location, inventory, warehouses, target, item_id, quantity, request_id, _persist)
 
 
-## Moves items from the current city's warehouse into the inventory.
-func withdraw_from_warehouse(item_id: Variant, quantity: Variant, request_id: String = "") -> Dictionary:
-	return WarehouseService.withdraw(location, inventory, warehouses, current_city_id, item_id, quantity, request_id, _persist)
+## Moves items from a warehouse (default: the current city's) into the inventory.
+func withdraw_from_warehouse(item_id: Variant, quantity: Variant, request_id: String = "", city_id: Variant = null) -> Dictionary:
+	var target: Variant = current_city_id if city_id == null else city_id
+	return WarehouseService.withdraw(location, inventory, warehouses, target, item_id, quantity, request_id, _persist)
+
+
+## Read-only view of any active city's warehouse (copies only); `local` is
+## true only for the character's current city, the only one that can change.
+func get_warehouse_view(city_id: Variant) -> Dictionary:
+	if not warehouses.has_city(city_id):
+		return {}
+	return {
+		"city_id": city_id,
+		"local": location.is_in_city() and city_id == location.get_city_id(),
+		"contents": warehouses.get_contents(city_id),
+		"used": warehouses.get_used_capacity(city_id),
+		"max": warehouses.get_max_capacity(city_id),
+	}
 
 
 func get_transport_quotes() -> Array:
@@ -288,7 +306,10 @@ func _refresh_hub_summary() -> void:
 		quotes[good_id] = market.get_quote(current_city_id, good_id)
 	_city_hub.show_market(quotes, inventory.get_items())
 	_city_hub.show_transport_routes(get_transport_quotes(), _next_request_id())
-	_city_hub.show_warehouse(inventory.get_items(), warehouses.get_contents(current_city_id), inventory.get_used_capacity(), inventory.get_max_capacity(), warehouses.get_used_capacity(current_city_id), warehouses.get_max_capacity(current_city_id), _next_request_id())
+	var view_city := _city_hub.get_warehouse_view_city()
+	if not warehouses.has_city(view_city):
+		view_city = current_city_id
+	_city_hub.show_warehouse(get_warehouse_view(view_city), inventory.get_items(), inventory.get_used_capacity(), inventory.get_max_capacity(), _next_request_id())
 
 
 func _on_market_buy_requested(good_id: String) -> void:
@@ -301,16 +322,22 @@ func _on_market_sell_requested(good_id: String) -> void:
 	_city_hub.show_trade_feedback("sell", good_id, MARKET_TRADE_QUANTITY, result)
 
 
-func _on_deposit_requested(item_id: String, request_id: String) -> void:
-	var result := deposit_to_warehouse(item_id, WAREHOUSE_TRANSFER_QUANTITY, request_id)
+func _on_deposit_requested(city_id: String, item_id: String, request_id: String) -> void:
+	var result := deposit_to_warehouse(item_id, WAREHOUSE_TRANSFER_QUANTITY, request_id, city_id)
 	_refresh_hub_summary()
 	_city_hub.show_warehouse_feedback("deposit", item_id, result)
 
 
-func _on_withdraw_requested(item_id: String, request_id: String) -> void:
-	var result := withdraw_from_warehouse(item_id, WAREHOUSE_TRANSFER_QUANTITY, request_id)
+func _on_withdraw_requested(city_id: String, item_id: String, request_id: String) -> void:
+	var result := withdraw_from_warehouse(item_id, WAREHOUSE_TRANSFER_QUANTITY, request_id, city_id)
 	_refresh_hub_summary()
 	_city_hub.show_warehouse_feedback("withdraw", item_id, result)
+
+
+## Viewing another city's warehouse only changes what is shown.
+func _on_warehouse_city_selected(_city_id: String) -> void:
+	if location.is_in_city():
+		_refresh_hub_summary()
 
 
 func _on_transport_requested(destination_city_id: String, request_id: String) -> void:

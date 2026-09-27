@@ -1,5 +1,7 @@
 extends SceneTree
 
+const FixedCapacityStats := preload("res://tests/fixed_capacity_stats.gd")
+
 const APPROVED_PRICES := {
 	"A": {"test_good_01": 80, "test_good_02": 180, "test_good_03": 420, "test_good_04": 900, "test_good_05": 2100, "test_good_06": 3600},
 	"B": {"test_good_01": 120, "test_good_02": 300, "test_good_03": 650, "test_good_04": 1250, "test_good_05": 1700, "test_good_06": 4300},
@@ -91,7 +93,7 @@ func _verify_price_table() -> void:
 
 func _verify_buy() -> void:
 	var wallet := Wallet.new()
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	var market := MarketState.create_default()
 	var result := TradeService.buy("A", "test_good_03", 3, wallet, cargo, market)
 	_check(result["success"] and result["total_value"] == 1323 and result["reason"] == "", "Valid buy must succeed with its total")
@@ -104,7 +106,7 @@ func _verify_buy() -> void:
 	_check(wallet.get_balance() == 10000 - 441 * 4 - 315 * 2, "Money must reflect every buy exactly")
 
 	# Money is enough but cargo is full: nothing may change.
-	var full_cargo := Cargo.new()
+	var full_cargo := _cargo20()
 	full_cargo.add("test_good_06", 5)
 	var rich := Wallet.new()
 	_expect_buy_rejected("A", "test_good_01", 1, rich, full_cargo, "insufficient_cargo_space", "Full cargo")
@@ -112,23 +114,23 @@ func _verify_buy() -> void:
 	# Cargo has room but money is short: nothing may change.
 	var poor := Wallet.new()
 	poor.spend(9000)
-	_expect_buy_rejected("A", "test_good_06", 1, poor, Cargo.new(), "insufficient_money", "Insufficient money")
-	_expect_buy_rejected("B", "test_good_02", 4, poor, Cargo.new(), "insufficient_money", "Insufficient money by 260")
+	_expect_buy_rejected("A", "test_good_06", 1, poor, _cargo20(), "insufficient_money", "Insufficient money")
+	_expect_buy_rejected("B", "test_good_02", 4, poor, _cargo20(), "insufficient_money", "Insufficient money by 260")
 
 	for city_id in INVALID_CITIES:
-		_expect_buy_rejected(city_id, "test_good_01", 1, Wallet.new(), Cargo.new(), "invalid_city_or_good", "Invalid city %s" % str(city_id))
+		_expect_buy_rejected(city_id, "test_good_01", 1, Wallet.new(), _cargo20(), "invalid_city_or_good", "Invalid city %s" % str(city_id))
 	for good_id in INVALID_GOODS:
-		_expect_buy_rejected("A", good_id, 1, Wallet.new(), Cargo.new(), "invalid_city_or_good", "Invalid good %s" % str(good_id))
+		_expect_buy_rejected("A", good_id, 1, Wallet.new(), _cargo20(), "invalid_city_or_good", "Invalid good %s" % str(good_id))
 	for quantity in INVALID_QUANTITIES:
-		_expect_buy_rejected("A", "test_good_01", quantity, Wallet.new(), Cargo.new(), "invalid_quantity", "Quantity %s" % str(quantity))
+		_expect_buy_rejected("A", "test_good_01", quantity, Wallet.new(), _cargo20(), "invalid_quantity", "Quantity %s" % str(quantity))
 	# M2-07 checks market stock before cargo, so a huge quantity now fails on stock.
-	_expect_buy_rejected("A", "test_good_01", 1_000_000_000_000_000, Wallet.new(), Cargo.new(), "insufficient_market_stock", "Huge quantity")
-	_check(not TradeService.buy("A", "test_good_01", 1, null, Cargo.new(), MarketState.create_default())["success"], "Buy without a wallet must fail")
+	_expect_buy_rejected("A", "test_good_01", 1_000_000_000_000_000, Wallet.new(), _cargo20(), "insufficient_market_stock", "Huge quantity")
+	_check(not TradeService.buy("A", "test_good_01", 1, null, _cargo20(), MarketState.create_default())["success"], "Buy without a wallet must fail")
 	_check(not TradeService.buy("A", "test_good_01", 1, Wallet.new(), null, MarketState.create_default())["success"], "Buy without a cargo must fail")
-	_check(not TradeService.buy("A", "test_good_01", 1, Wallet.new(), Cargo.new(), null)["success"], "Buy without a market must fail")
+	_check(not TradeService.buy("A", "test_good_01", 1, Wallet.new(), _cargo20(), null)["success"], "Buy without a market must fail")
 
 	var exact := Wallet.new()
-	var exact_cargo := Cargo.new()
+	var exact_cargo := _cargo20()
 	exact.spend(10000 - 3780)
 	_check(TradeService.buy("A", "test_good_06", 1, exact, exact_cargo, MarketState.create_default())["success"] and exact.get_balance() == 0, "Buying with exactly enough money must succeed")
 
@@ -149,7 +151,7 @@ func _expect_buy_rejected(city_id: Variant, good_id: Variant, quantity: Variant,
 
 func _verify_sell() -> void:
 	var wallet := Wallet.new()
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	cargo.add("test_good_04", 5)
 	cargo.add("test_good_01", 2)
 	var market := MarketState.create_default()
@@ -187,7 +189,7 @@ func _expect_sell_rejected(city_id: Variant, good_id: Variant, quantity: Variant
 
 func _verify_reverse_and_loss() -> void:
 	var wallet := Wallet.new()
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	var market := MarketState.create_default()
 	_check(not TradeService.buy("B", "test_good_05", 7, wallet, cargo, market)["success"], "7 x good 5 (21 units) must not fit")
 	_check(TradeService.buy("B", "test_good_05", 2, wallet, cargo, market)["success"] and wallet.get_balance() == 6430, "Reverse: buy 2 x good 5 in B for 3570")
@@ -195,7 +197,7 @@ func _verify_reverse_and_loss() -> void:
 	_check(wallet.get_balance() - Wallet.STARTING_MONEY == 420 and cargo.is_empty(), "B to A good 5 must profit +420")
 
 	var loss_wallet := Wallet.new()
-	var loss_cargo := Cargo.new()
+	var loss_cargo := _cargo20()
 	var loss_market := MarketState.create_default()
 	_check(TradeService.buy("A", "test_good_05", 2, loss_wallet, loss_cargo, loss_market)["success"] and loss_wallet.get_balance() == 5590, "Loss: buy 2 x good 5 in A for 4410")
 	_check(TradeService.sell("B", "test_good_05", 2, loss_wallet, loss_cargo, loss_market)["success"] and loss_wallet.get_balance() == 8820, "Loss: sell 2 x good 5 in B for 3230")
@@ -204,7 +206,7 @@ func _verify_reverse_and_loss() -> void:
 
 func _verify_single_execution() -> void:
 	var wallet := Wallet.new()
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	var market := MarketState.create_default()
 	TradeService.buy("A", "test_good_02", 1, wallet, cargo, market)
 	_check(wallet.get_balance() == 10000 - 189 and cargo.get_quantity("test_good_02") == 1, "One buy call must apply exactly once")
@@ -220,7 +222,7 @@ func _verify_single_execution() -> void:
 ## Deterministic transaction stress test against an independent reference model.
 func _verify_stress() -> void:
 	var wallet := Wallet.new()
-	var cargo := Cargo.new()
+	var cargo := _cargo20()
 	var market := MarketState.create_default()
 	var model_money := Wallet.STARTING_MONEY
 	var model_cargo := {}
@@ -324,7 +326,7 @@ func _state_valid(wallet: Wallet, cargo: Cargo) -> bool:
 		if not GoodsCatalog.has_good(good_id) or typeof(quantity) != TYPE_INT or quantity <= 0:
 			return false
 		used += quantity * GoodsCatalog.get_unit_size(good_id)
-	return used == cargo.get_used_capacity() and used >= 0 and used <= Cargo.CARGO_CAPACITY
+	return used == cargo.get_used_capacity() and used >= 0 and used <= cargo.get_max_capacity()
 
 
 # --- In-game loop ----------------------------------------------------------
@@ -339,7 +341,7 @@ func _verify_trade_loop_in_game() -> void:
 	var wallet := main.wallet as Wallet
 	var cargo := main.cargo as CharacterInventory
 
-	_check(Cargo.CARGO_CAPACITY == 20, "Cargo capacity must stay 20")
+	_check(Cargo.CARGO_CAPACITY == 100 and main.inventory.get_max_capacity() == 100, "Backpack capacity must be the T02 prototype baseline 100")
 	_check(GoodsCatalog.get_ids().size() == 6 and GoodsCatalog.get_unit_size("test_good_06") == 4 and GoodsCatalog.get_good("test_good_06")["base_value"] == 4000, "Six goods must be unchanged")
 	_check(WorldLayout.WORLD_SIZE == Vector2(40000.0, 40000.0), "World size must be unchanged")
 	_check(WorldLayout.CITY_A == Vector2(200.0, 200.0) and WorldLayout.CITY_B == Vector2(39800.0, 200.0), "City anchors must be unchanged")
@@ -358,7 +360,7 @@ func _verify_trade_loop_in_game() -> void:
 	_check(bought["success"] and bought["total_value"] == 840, "A: buying 10 x good 1 must cost 840")
 	_check(wallet.get_balance() == 9160, "A: money must be 9160")
 	_check(cargo.get_quantity("test_good_01") == 10 and cargo.get_used_capacity() == 10, "A: cargo must hold 10 x good 1 (10 units)")
-	_check(hub.get_money_label_text() == "金錢：9160" and hub.get_cargo_label_text() == "貨物容量：10 / 20", "A: hub debug lines must update after the buy")
+	_check(hub.get_money_label_text() == "金錢：9160" and hub.get_cargo_label_text() == "背包容量：10 / 100", "A: hub debug lines must update after the buy")
 	_check(hub.leave_requested.get_connections().size() == 1, "Hub leave signal must stay connected once")
 
 	_check(main.leave_city(), "Must leave City A")
@@ -370,13 +372,13 @@ func _verify_trade_loop_in_game() -> void:
 	await _settle()
 	_check(main.try_enter_city() and main.current_city_id == "B", "City Hub transition to B must still work")
 	_check(wallet.get_balance() == 9160 and cargo.get_quantity("test_good_01") == 10, "Entering B must preserve money and cargo")
-	_check(hub.get_money_label_text() == "金錢：9160" and hub.get_cargo_label_text() == "貨物容量：10 / 20", "B: hub must show the carried state")
+	_check(hub.get_money_label_text() == "金錢：9160" and hub.get_cargo_label_text() == "背包容量：10 / 100", "B: hub must show the carried state")
 	var sold: Dictionary = main.sell_in_current_city("test_good_01", 10)
 	_check(sold["success"] and sold["total_value"] == 1140, "B: selling 10 x good 1 must earn 1140")
 	_check(wallet.get_balance() == 10300, "B: final money must be 10300")
 	_check(wallet.get_balance() - Wallet.STARTING_MONEY == 300, "A to B good 1 must profit +300")
 	_check(cargo.get_quantity("test_good_01") == 0 and cargo.is_empty(), "B: cargo must be empty after selling")
-	_check(hub.get_money_label_text() == "金錢：10300" and hub.get_cargo_label_text() == "貨物容量：0 / 20", "B: hub debug lines must update after the sell")
+	_check(hub.get_money_label_text() == "金錢：10300" and hub.get_cargo_label_text() == "背包容量：0 / 100", "B: hub debug lines must update after the sell")
 	var oversell: Dictionary = main.sell_in_current_city("test_good_01", 1)
 	_check(not oversell["success"] and wallet.get_balance() == 10300, "Selling again must fail without paying")
 	_check(main.leave_city() and wallet.get_balance() == 10300, "Leaving B must preserve money")
@@ -387,6 +389,12 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## Trade rules are verified on a fixed capacity-20 fixture (their original
+## size); the T02 prototype balance (100) is checked separately.
+func _cargo20() -> Cargo:
+	return Cargo.new("player", FixedCapacityStats.new(20))
 
 
 func _check(condition: bool, message: String) -> void:

@@ -13,19 +13,25 @@ signal buy_requested(good_id: String)
 signal sell_requested(good_id: String)
 signal transport_requested(destination_city_id: String, request_id: String)
 signal facility_changed(facility: String)
-signal deposit_requested(item_id: String, request_id: String)
-signal withdraw_requested(item_id: String, request_id: String)
+## Transfer requests carry the city whose warehouse is shown, so the domain
+## (WarehouseService) rejects anything that is not the character's city.
+signal deposit_requested(city_id: String, item_id: String, request_id: String)
+signal withdraw_requested(city_id: String, item_id: String, request_id: String)
+signal warehouse_city_selected(city_id: String)
 
 const FACILITY_MARKET := "market"
 const FACILITY_TRANSPORT := "transport"
 const FACILITY_WAREHOUSE := "warehouse"
 const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE]
 const WAREHOUSE_NOTE := "開發原型：每次存入或取出 1 件；倉庫只存物品"
+const WAREHOUSE_LOCAL_STATUS := "%s 城倉庫・本地倉庫（每次存入或取出 1 件）"
+const WAREHOUSE_REMOTE_STATUS := "%s 城倉庫・遠端查看：只可在所在城市存取倉庫物品"
+const CITY_TAB_SIZE := Vector2(200, 64)
 const WAREHOUSE_FAILURE_MESSAGES := {
 	"ERR_INSUFFICIENT_CARRIED": "數量不足",
 	"ERR_INSUFFICIENT_STORED": "數量不足",
 	"ERR_WAREHOUSE_CAPACITY": "倉庫容量不足",
-	"ERR_CARRY_CAPACITY": "攜帶容量不足",
+	"ERR_CARRY_CAPACITY": "背包容量不足",
 	"ERR_NOT_IN_CITY": "只可使用所在城市的倉庫",
 	"ERR_WRONG_CITY": "只可使用所在城市的倉庫",
 	"ERR_DUPLICATE_REQUEST": "已處理此要求",
@@ -55,7 +61,7 @@ const NAME_FONT_SIZE := 22
 const DETAIL_FONT_SIZE := 20
 const FAILURE_MESSAGES := {
 	"insufficient_money": "金錢不足",
-	"insufficient_cargo_space": "貨物容量不足",
+	"insufficient_cargo_space": "背包容量不足",
 	"insufficient_cargo": "持有貨物不足",
 	"insufficient_market_stock": "市場庫存不足",
 }
@@ -70,6 +76,11 @@ var _transport_request_id := ""
 ## good_id -> warehouse row, built once from GoodsCatalog.
 var _warehouse_rows := {}
 var _warehouse_request_id := ""
+## City whose warehouse is shown, and whether it is the character's city.
+var _warehouse_view_city := ""
+var _warehouse_local := false
+## city id -> selector button
+var _warehouse_city_buttons := {}
 var _facility := FACILITY_MARKET
 var _traveling := false
 
@@ -85,6 +96,8 @@ var _traveling := false
 @onready var _transport_tab := $Center/Content/FacilityTabs/TransportTabButton as Button
 @onready var _warehouse_tab := $Center/Content/FacilityTabs/WarehouseTabButton as Button
 @onready var _warehouse_summary_label := $Center/Content/WarehouseSummaryLabel as Label
+@onready var _warehouse_status_label := $Center/Content/WarehouseStatusLabel as Label
+@onready var _warehouse_city_tabs := $Center/Content/WarehouseCityTabs as HBoxContainer
 @onready var _warehouse_rows_box := $Center/Content/WarehouseRows as VBoxContainer
 @onready var _note_label := $Center/Content/NoteLabel as Label
 @onready var _transport_rows_box := $Center/Content/TransportRows as VBoxContainer
@@ -101,11 +114,13 @@ func _ready() -> void:
 	_warehouse_tab.pressed.connect(show_facility.bind(FACILITY_WAREHOUSE))
 	_build_market_rows()
 	_build_warehouse_rows()
+	_build_warehouse_city_tabs()
 
 
 ## Opens the hub of a city on its market facility.
 func open(opened_city_id: String) -> void:
 	city_id = opened_city_id
+	_warehouse_view_city = opened_city_id
 	_traveling = false
 	_city_label.text = "【%s 城】" % city_id
 	_feedback_label.text = ""
@@ -213,14 +228,51 @@ func is_leave_available() -> bool:
 	return visible and _leave_button.visible
 
 
-## Shows the current city's warehouse next to what the character carries.
-## Display only: every transfer runs in main.gd through WarehouseService.
-func show_warehouse(carried: Dictionary, stored: Dictionary, carry_used: int, carry_max: int, warehouse_used: int, warehouse_max: int, request_id: String) -> void:
+## Shows one city's warehouse (`view` from main: city_id, local, contents,
+## used, max) next to the backpack. A remote warehouse is read-only: its
+## transfer buttons are hidden and the status explains why. Display only:
+## every transfer runs in main.gd through WarehouseService.
+func show_warehouse(view: Dictionary, carried: Dictionary, carry_used: int, carry_max: int, request_id: String) -> void:
 	_warehouse_request_id = request_id
-	_warehouse_summary_label.text = "攜帶容量：%d / %d　倉庫容量：%d / %d" % [carry_used, carry_max, warehouse_used, warehouse_max]
+	_warehouse_view_city = view.get("city_id", "")
+	_warehouse_local = view.get("local", false)
+	var stored: Dictionary = view.get("contents", {})
+	_warehouse_status_label.text = (WAREHOUSE_LOCAL_STATUS if _warehouse_local else WAREHOUSE_REMOTE_STATUS) % _warehouse_view_city
+	_warehouse_summary_label.text = "背包容量：%d / %d　倉庫容量：%d / %d" % [carry_used, carry_max, view.get("used", 0), view.get("max", 0)]
 	for good_id in _warehouse_rows:
-		_warehouse_label(good_id, "CarriedLabel").text = "攜帶 %d" % carried.get(good_id, 0)
-		_warehouse_label(good_id, "StoredLabel").text = "倉庫 %d" % stored.get(good_id, 0)
+		var carried_label := _warehouse_label(good_id, "CarriedLabel")
+		carried_label.text = "背包：%d" % carried.get(good_id, 0)
+		carried_label.visible = _warehouse_local
+		_warehouse_label(good_id, "StoredLabel").text = "倉庫：%d" % stored.get(good_id, 0)
+		for button_name in ["DepositButton", "WithdrawButton"]:
+			(_warehouse_rows[good_id].get_node(button_name) as Button).visible = _warehouse_local
+	for city in _warehouse_city_buttons:
+		(_warehouse_city_buttons[city] as Button).disabled = city == _warehouse_view_city
+
+
+## Selects which city's warehouse to show; main refreshes the view.
+func show_warehouse_city(selected_city_id: String) -> void:
+	if _traveling or not _warehouse_city_buttons.has(selected_city_id):
+		return
+	_warehouse_view_city = selected_city_id
+	_feedback_label.text = ""
+	warehouse_city_selected.emit(selected_city_id)
+
+
+func get_warehouse_view_city() -> String:
+	return _warehouse_view_city
+
+
+func is_warehouse_view_local() -> bool:
+	return _warehouse_local
+
+
+func get_warehouse_status_text() -> String:
+	return _warehouse_status_label.text
+
+
+func get_warehouse_city_button(selected_city_id: String) -> Button:
+	return _warehouse_city_buttons.get(selected_city_id)
 
 
 func show_warehouse_feedback(action: String, good_id: String, result: Dictionary) -> void:
@@ -256,7 +308,7 @@ func get_warehouse_request_id() -> String:
 
 
 func show_cargo_summary(used: int, capacity: int) -> void:
-	_cargo_label.text = "貨物容量：%d / %d" % [used, capacity]
+	_cargo_label.text = "背包容量：%d / %d" % [used, capacity]
 
 
 func show_money(balance: int) -> void:
@@ -298,6 +350,9 @@ func close() -> void:
 		for node_name in ["BuyPriceLabel", "BuybackPriceLabel", "HeldLabel", "StockLabel"]:
 			_row_label(good_id, node_name).text = ""
 	_warehouse_summary_label.text = ""
+	_warehouse_status_label.text = ""
+	_warehouse_view_city = ""
+	_warehouse_local = false
 	for good_id in _warehouse_rows:
 		_warehouse_label(good_id, "CarriedLabel").text = ""
 		_warehouse_label(good_id, "StoredLabel").text = ""
@@ -413,11 +468,13 @@ func _on_ride_pressed(destination_city_id: String) -> void:
 
 
 func _on_deposit_pressed(good_id: String) -> void:
-	deposit_requested.emit(good_id, _warehouse_request_id)
+	if _warehouse_local:
+		deposit_requested.emit(_warehouse_view_city, good_id, _warehouse_request_id)
 
 
 func _on_withdraw_pressed(good_id: String) -> void:
-	withdraw_requested.emit(good_id, _warehouse_request_id)
+	if _warehouse_local:
+		withdraw_requested.emit(_warehouse_view_city, good_id, _warehouse_request_id)
 
 
 func _build_warehouse_rows() -> void:
@@ -438,6 +495,19 @@ func _build_warehouse_rows() -> void:
 		_warehouse_rows[good_id] = row
 
 
+func _build_warehouse_city_tabs() -> void:
+	for city in WorldLayout.ACTIVE_CITY_IDS:
+		var button := Button.new()
+		button.name = "City" + city
+		button.text = "%s 城倉庫" % city
+		button.focus_mode = Control.FOCUS_NONE
+		button.custom_minimum_size = CITY_TAB_SIZE
+		button.add_theme_font_size_override("font_size", NAME_FONT_SIZE)
+		button.pressed.connect(show_warehouse_city.bind(city))
+		_warehouse_city_tabs.add_child(button)
+		_warehouse_city_buttons[city] = button
+
+
 func _warehouse_label(good_id: String, node_name: String) -> Label:
 	return _warehouse_rows[good_id].find_child(node_name, true, false) as Label
 
@@ -451,9 +521,14 @@ func _apply_view(facility: String) -> void:
 	var transport := in_city and facility == FACILITY_TRANSPORT
 	var warehouse := in_city and facility == FACILITY_WAREHOUSE
 	var market := in_city and not transport and not warehouse
-	_title_label.visible = in_city
+	# The warehouse view trades the title, money and note lines for its own
+	# status line and city selector so the portrait layout keeps its height.
+	_title_label.visible = in_city and not warehouse
+	_money_label.visible = not warehouse
 	_facility_tabs.visible = in_city
-	_note_label.visible = in_city
+	_note_label.visible = in_city and not warehouse
+	_warehouse_status_label.visible = warehouse
+	_warehouse_city_tabs.visible = warehouse
 	_leave_button.visible = in_city
 	_market_rows.visible = market
 	_transport_rows_box.visible = transport
