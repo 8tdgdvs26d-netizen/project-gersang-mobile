@@ -192,7 +192,7 @@ func _verify_ui() -> void:
 	_check(hub.get_money_label_text() == "金錢：9916" and hub.get_cargo_label_text() == "背包容量：1 / 100", "Money and backpack must refresh in Chinese")
 	_check(hub.get_feedback_text() == "已買入 1 件測試商品一，支付 84", "Buy feedback must be Chinese")
 	hub.get_market_button("test_good_01", "sell").pressed.emit()
-	_check(hub.get_feedback_text() == "已賣出 1 件測試商品一，收入 76" and hub.get_market_row_texts("test_good_01")["stock"] == "庫存 100", "Sell feedback and stock must refresh")
+	_check(hub.get_feedback_text() == "已賣出 1 件測試商品一，收入 76，成本 84，虧損 -8" and hub.get_market_row_texts("test_good_01")["stock"] == "庫存 100", "Sell feedback (T05: with its FIFO cost and loss) and stock must refresh")
 	hub.get_market_button("test_good_01", "sell").pressed.emit()
 	_check(hub.get_feedback_text() == "持有貨物不足", "Failure feedback must be Chinese")
 	_check(_ui_matches(main), "UI must stay in sync with the quotes")

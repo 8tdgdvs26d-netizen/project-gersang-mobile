@@ -47,7 +47,7 @@ func _verify_static() -> void:
 	_check(MarketRecovery.STEP_MS == 12000 and MarketRecovery.STOCK_PER_STEP == 1, "Approved rule: 1 stock unit every 12 seconds")
 	_check(MarketRecovery.MAX_ELAPSED_MS == 30 * 60 * 1000, "Approved offline cap: 30 minutes")
 	_check(MarketPrices.TARGET_STOCK == 100 and MarketPrices.INITIAL_STOCK == 100, "Target stock stays 100")
-	_check(SaveStore.VERSION == 6 and SaveStore.V6_KEYS.has("market_recovery"), "Save version 6 carries the market recovery anchor")
+	_check(SaveStore.VERSION == 7 and SaveStore.V6_KEYS.has("market_recovery") and SaveStore.V7_KEYS.has("market_recovery"), "Save version 6 (and T05's 7) carries the market recovery anchor")
 	var recovery := _code_only("res://scripts/market_recovery.gd")
 	for clock in ["Time.", "OS.get_", "get_ticks"]:
 		_check(not recovery.contains(clock), "Recovery must take time from its caller, never read %s" % clock)
@@ -359,7 +359,7 @@ func _verify_save_reload() -> void:
 	# The v6 save carries the anchor; recovery state round-trips.
 	_write_save({"A": {"test_good_01": 60}, "B": {"test_good_02": 130}}, T0)
 	var raw := _read_json()
-	_check(int(raw["version"]) == 6 and raw["market_recovery"].keys() == ["anchor_ms"] and int(raw["market_recovery"]["anchor_ms"]) == T0, "The save stores only the anchor timestamp")
+	_check(int(raw["version"]) == SaveStore.VERSION and raw["market_recovery"].keys() == ["anchor_ms"] and int(raw["market_recovery"]["anchor_ms"]) == T0, "The save stores only the anchor timestamp")
 	_check(not JSON.stringify(raw).contains("dynamic") and not JSON.stringify(raw).contains("buy_price"), "The save never stores recovery prices")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["market_recovery"].anchor_ms == T0 and _stock(loaded["market"], "A", "test_good_01") == 60, "Loading restores stock and anchor unchanged (no recovery inside the loader)")
@@ -437,7 +437,7 @@ func _verify_save_reload() -> void:
 	var no_key := v6.duplicate(true)
 	no_key.erase("market_recovery")
 	var future_version := v6.duplicate(true)
-	future_version["version"] = 7
+	future_version["version"] = 8
 	var v5_with_key := v6.duplicate(true)
 	v5_with_key["version"] = 5
 	_check(SaveStore.validate(no_key).is_empty(), "A v6 save missing market_recovery is rejected as a whole")
@@ -471,6 +471,7 @@ func _verify_migration() -> void:
 	var full := SaveStore.serialize(_wallet(4321), inventory, _market_with({"A": {"test_good_01": 60}, "B": {"test_good_04": 130}}), PlayerLocation.from_dict(IN_CITY_A), warehouses)
 	var v5 := full.duplicate(true)
 	v5.erase("market_recovery")
+	v5.erase("cost_ledger")  # T05 (v7) data is not part of a real v5 save
 	v5["version"] = 5
 	v5["warehouses"] = {"A": {"items": {"test_good_02": 5}}, "B": {"items": {"test_good_06": 1}}}
 	var v4 := v5.duplicate(true)
@@ -500,7 +501,7 @@ func _verify_migration() -> void:
 		if label != "v1":
 			_check(_stock(main.market, "A", "test_good_01") == 62 and _stock(main.market, "B", "test_good_04") == 128, "%s: recovery starts from the first load (2 steps after 24 s)" % label)
 			var saved := _read_json()
-			_check(int(saved["version"]) == 6 and int(saved["market_recovery"]["anchor_ms"]) == T0 + HOUR + 2 * STEP and int(saved["money"]) == 4321, "%s: the first change writes a v6 save" % label)
+			_check(int(saved["version"]) == SaveStore.VERSION and int(saved["market_recovery"]["anchor_ms"]) == T0 + HOUR + 2 * STEP and int(saved["money"]) == 4321, "%s: the first change writes a current-version save" % label)
 		else:
 			_check(_stock(main.market, "A", "test_good_01") == 100 and _read(TEST_SAVE) == text, "v1: a market already at target stays put and nothing is written")
 		await _destroy(main)
