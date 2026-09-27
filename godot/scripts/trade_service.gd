@@ -5,8 +5,22 @@ extends RefCounted
 ## quote. Every check runs before any state changes, so a rejected trade leaves
 ## the wallet, inventory and market untouched. Inventory and stock are only
 ## changed through their own validated APIs.
+##
+## ORDER-LOCKED PRICING (T03): one order = one price. The unit price is read
+## from the quote once, before the order, and every unit of that order uses it
+## (total = unit price x quantity). Only after the whole order succeeds does
+## the stock change, so the NEXT order sees the new dynamic price. An order is
+## one atomic transaction, never split into per-unit trades.
 
 const INT64_MAX := 9223372036854775807
+## PROTOTYPE RULE (T03): the only allowed order sizes, enforced here in the
+## domain (not only in the UI), so no order can be large enough to buy at a
+## low pre-trade price and immediately sell at a much higher post-trade price.
+const ALLOWED_ORDER_QUANTITIES := [1, 10]
+
+
+static func is_allowed_quantity(quantity: Variant) -> bool:
+	return typeof(quantity) == TYPE_INT and quantity in ALLOWED_ORDER_QUANTITIES
 
 
 ## Player buys from the city at the quote's buy price; market stock goes down.
@@ -16,13 +30,13 @@ static func buy(city_id: Variant, good_id: Variant, quantity: Variant, wallet: W
 	var quote := market.get_quote(city_id, good_id)
 	if quote.is_empty() or quote["buy_price"] <= 0:
 		return _result(false, 0, "invalid_city_or_good")
-	if typeof(quantity) != TYPE_INT or quantity <= 0:
+	if not is_allowed_quantity(quantity):
 		return _result(false, 0, "invalid_quantity")
 	if not market.can_remove_stock(city_id, good_id, quantity):
 		return _result(false, 0, "insufficient_market_stock")
 	if not inventory.can_add(good_id, quantity):
 		return _result(false, 0, "insufficient_cargo_space")
-	var unit_price: int = quote["buy_price"]
+	var unit_price: int = quote["buy_price"]  # locked for the whole order
 	if quantity > INT64_MAX / unit_price:
 		return _result(false, 0, "invalid_quantity")
 	var total: int = unit_price * quantity
@@ -49,11 +63,11 @@ static func sell(city_id: Variant, good_id: Variant, quantity: Variant, wallet: 
 	var quote := market.get_quote(city_id, good_id)
 	if quote.is_empty() or quote["buyback_price"] <= 0:
 		return _result(false, 0, "invalid_city_or_good")
-	if typeof(quantity) != TYPE_INT or quantity <= 0:
+	if not is_allowed_quantity(quantity):
 		return _result(false, 0, "invalid_quantity")
 	if not inventory.can_remove(good_id, quantity):
 		return _result(false, 0, "insufficient_cargo")
-	var unit_price: int = quote["buyback_price"]
+	var unit_price: int = quote["buyback_price"]  # locked for the whole order
 	if quantity > INT64_MAX / unit_price:
 		return _result(false, 0, "invalid_quantity")
 	var total: int = unit_price * quantity

@@ -1,5 +1,7 @@
 extends SceneTree
 
+const DynamicPriceModel := preload("res://tests/dynamic_price_model.gd")
+
 ## Uses its own save file so the player's real save is never touched.
 const TEST_SAVE := "user://m2_07_test_save.json"
 const CITIES := ["A", "B"]
@@ -98,29 +100,30 @@ func _verify_stock_trades() -> void:
 	var cargo := Cargo.new()
 	var market := MarketState.create_default()
 	var before := market.get_snapshot()
-	var result := TradeService.buy("A", "test_good_03", 2, wallet, cargo, market)
-	_check(result["success"] and result["total_value"] == 882 and wallet.get_balance() == 10000 - 882, "Buy must charge the buy price")
-	_check(market.get_quote("A", "test_good_03")["stock"] == 98, "Successful buy must reduce stock")
+	# T03: orders are 1 or 10 units at one locked price (10 x 441).
+	var result := TradeService.buy("A", "test_good_03", 10, wallet, cargo, market)
+	_check(result["success"] and result["total_value"] == 4410 and wallet.get_balance() == 10000 - 4410, "Buy must charge the buy price")
+	_check(market.get_quote("A", "test_good_03")["stock"] == 90, "Successful buy must reduce stock")
 	_check(_changed_entries(before, market.get_snapshot()) == ["A/test_good_03"], "A buy must change only that city's good")
 	_check(market.get_quote("A", "test_good_03")["reference_price"] == 420, "Buying must not move the reference price")
 
 	before = market.get_snapshot()
-	result = TradeService.sell("B", "test_good_03", 2, wallet, cargo, market)
-	_check(result["success"] and result["total_value"] == 1234, "Sell must pay the buyback price")
-	_check(market.get_quote("B", "test_good_03")["stock"] == 102, "Successful sell must increase stock")
+	result = TradeService.sell("B", "test_good_03", 10, wallet, cargo, market)
+	_check(result["success"] and result["total_value"] == 6170, "Sell must pay the buyback price (10 x 617)")
+	_check(market.get_quote("B", "test_good_03")["stock"] == 110, "Successful sell must increase stock")
 	_check(_changed_entries(before, market.get_snapshot()) == ["B/test_good_03"], "A sell must change only that city's good")
 	_check(market.get_quote("B", "test_good_03")["reference_price"] == 650, "Selling must not move the reference price")
 	_check(market.get_quote("B", "test_good_03")["stock"] > market.get_quote("B", "test_good_03")["target_stock"], "Stock may rise above the target")
 
 	# Not enough market stock.
-	var low := _market_with({"A": {"test_good_01": 3}})
+	var low := _market_with({"A": {"test_good_01": 10, "test_good_02": 9}})
 	var low_wallet := Wallet.new()
 	var low_cargo := Cargo.new()
 	var low_before := low.get_snapshot()
-	result = TradeService.buy("A", "test_good_01", 4, low_wallet, low_cargo, low)
+	result = TradeService.buy("A", "test_good_02", 10, low_wallet, low_cargo, low)
 	_check(not result["success"] and result["reason"] == "insufficient_market_stock", "Buying more than the stock must be rejected")
 	_check(low_wallet.get_balance() == 10000 and low_cargo.is_empty() and low.get_snapshot() == low_before, "Rejected stock buy must change nothing")
-	_check(TradeService.buy("A", "test_good_01", 3, low_wallet, low_cargo, low)["success"] and low.get_quote("A", "test_good_01")["stock"] == 0, "Buying the exact stock must reach 0")
+	_check(TradeService.buy("A", "test_good_01", 10, low_wallet, low_cargo, low)["success"] and low.get_quote("A", "test_good_01")["stock"] == 0, "Buying the exact stock must reach 0")
 	_check(not TradeService.buy("A", "test_good_01", 1, low_wallet, low_cargo, low)["success"], "An empty stock must reject further buys")
 	_check(low.get_quote("A", "test_good_01")["stock"] == 0, "Stock must never go below 0")
 
@@ -130,7 +133,7 @@ func _verify_stock_trades() -> void:
 	sell_cargo.add("test_good_02", 2)
 	var sell_market := MarketState.create_default()
 	var sell_before := sell_market.get_snapshot()
-	for attempt in [["A", "test_good_02", 3], ["A", "test_good_05", 1], ["C", "test_good_02", 1], ["A", "bad", 1], ["A", "test_good_02", 0], ["A", "test_good_02", -1], ["A", "test_good_02", 1.5]]:
+	for attempt in [["A", "test_good_02", 3], ["A", "test_good_02", 10], ["A", "test_good_02", 2], ["A", "test_good_05", 1], ["C", "test_good_02", 1], ["A", "bad", 1], ["A", "test_good_02", 0], ["A", "test_good_02", -1], ["A", "test_good_02", 1.5]]:
 		var rejected := TradeService.sell(attempt[0], attempt[1], attempt[2], sell_wallet, sell_cargo, sell_market)
 		_check(not rejected["success"] and sell_wallet.get_balance() == 10000 and sell_cargo.get_items() == {"test_good_02": 2} and sell_market.get_snapshot() == sell_before, "Rejected sell %s must change nothing" % str(attempt))
 
@@ -157,7 +160,8 @@ func _verify_same_city_loss() -> void:
 			TradeService.buy(city, good_id, 1, wallet, cargo, market)
 			TradeService.sell(city, good_id, 1, wallet, cargo, market)
 			var net := wallet.get_balance() - 10000
-			_check(net < 0 and net == BUYBACK[city][good_id] - BUY[city][good_id], "%s %s same-city round trip must lose (net %d)" % [city, good_id, net])
+			# T03: the unit is sold back at stock 99, so the buyback is the dynamic one.
+			_check(net < 0 and net == DynamicPriceModel.buyback(REFERENCE[city][good_id], 99) - BUY[city][good_id], "%s %s same-city round trip must lose (net %d)" % [city, good_id, net])
 			_check(market.get_quote(city, good_id)["stock"] == 100, "%s %s round trip must restore stock" % [city, good_id])
 
 	# The approved same-city proof: A Good 1 x 10.
@@ -166,8 +170,10 @@ func _verify_same_city_loss() -> void:
 	var market := MarketState.create_default()
 	_check(TradeService.buy("A", "test_good_01", 10, wallet, cargo, market)["success"] and wallet.get_balance() == 9160, "Same-city: buy 10 @84 -> 9160")
 	_check(market.get_quote("A", "test_good_01")["stock"] == 90, "Same-city: stock 100 -> 90")
-	_check(TradeService.sell("A", "test_good_01", 10, wallet, cargo, market)["success"] and wallet.get_balance() == 9920, "Same-city: sell 10 @76 -> 9920")
-	_check(10000 - wallet.get_balance() == 80, "Same-city: loss must be 80")
+	# T03: the 10 units are sold back at stock 90 (dynamic buyback), still at a loss.
+	var sell_back := 10 * DynamicPriceModel.buyback(80, 90)
+	_check(TradeService.sell("A", "test_good_01", 10, wallet, cargo, market)["success"] and wallet.get_balance() == 9160 + sell_back, "Same-city: sell 10 at the stock-90 buyback")
+	_check(10000 - wallet.get_balance() == 840 - sell_back and 840 - sell_back > 0, "Same-city: the round trip must still lose money")
 	_check(market.get_quote("A", "test_good_01")["stock"] == 100 and market.get_quote("A", "test_good_01")["reference_price"] == 80, "Same-city: stock back to 100, reference 80 throughout")
 
 
@@ -224,14 +230,20 @@ func _verify_journey() -> void:
 	var hub := first.get_node("CityHub") as CityHub
 	for press in range(10):
 		hub.get_market_button("test_good_01", "buy").pressed.emit()
-	_check(first.wallet.get_balance() == 9160 and first.cargo.get_quantity("test_good_01") == 10, "Journey A buy: 9160 / 10")
+	# T03: each single buy / sell uses the dynamic price at the stock it happens at.
+	var after_buys := 10000
+	var income := 0
+	for unit in range(10):
+		after_buys -= DynamicPriceModel.buy(80, 100 - unit)
+		income += DynamicPriceModel.buyback(120, 100 + unit)
+	_check(first.wallet.get_balance() == after_buys and first.cargo.get_quantity("test_good_01") == 10, "Journey A buy: paid total / 10")
 	_check(_stock(first, "A", "test_good_01") == 90 and _stock(first, "B", "test_good_01") == 100, "Journey A buy: A stock 90, B stock 100")
 	var first_market: MarketState = first.market
 	await _destroy(first)
 
 	var second := await _new_main(TEST_SAVE)
 	_check(second.market != first_market, "Restart must build a new market object")
-	_check(second.wallet.get_balance() == 9160 and second.cargo.get_quantity("test_good_01") == 10, "Journey restart #1: 9160 / 10")
+	_check(second.wallet.get_balance() == after_buys and second.cargo.get_quantity("test_good_01") == 10, "Journey restart #1: paid total / 10")
 	_check(_stock(second, "A", "test_good_01") == 90 and _stock(second, "B", "test_good_01") == 100, "Journey restart #1: A stock 90, B stock 100")
 	await _enter(second, "B")
 	var quote_b: Dictionary = second.market.get_quote("B", "test_good_01")
@@ -240,12 +252,12 @@ func _verify_journey() -> void:
 	_check(hub_b.get_market_row_texts("test_good_01")["stock"] == "庫存 100", "B market must show its own stock after restart")
 	for press in range(10):
 		hub_b.get_market_button("test_good_01", "sell").pressed.emit()
-	_check(second.wallet.get_balance() == 10300 and second.cargo.is_empty(), "Journey B sell: 10300 / 0")
+	_check(second.wallet.get_balance() == after_buys + income and second.cargo.is_empty(), "Journey B sell: earned total / 0")
 	_check(_stock(second, "A", "test_good_01") == 90 and _stock(second, "B", "test_good_01") == 110, "Journey B sell: A stock 90, B stock 110")
 	await _destroy(second)
 
 	var third := await _new_main(TEST_SAVE)
-	_check(third.wallet.get_balance() == 10300 and third.cargo.is_empty(), "Journey restart #2: 10300 / 0")
+	_check(third.wallet.get_balance() == after_buys + income and third.cargo.is_empty(), "Journey restart #2: earned total / 0")
 	_check(_stock(third, "A", "test_good_01") == 90 and _stock(third, "B", "test_good_01") == 110, "Journey restart #2: A stock 90, B stock 110")
 	_check(third.market.get_quote("A", "test_good_01")["reference_price"] == 80 and third.market.get_quote("B", "test_good_01")["reference_price"] == 120, "Journey: reference prices never moved")
 	await _destroy(third)
@@ -258,16 +270,16 @@ func _verify_persistence() -> void:
 	_delete(TEST_SAVE)
 	var main := await _new_main(TEST_SAVE)
 	await _enter(main, "B")
-	main.buy_in_current_city("test_good_04", 3)
+	main.buy_in_current_city("test_good_02", 10)
 	var saved := _parse(TEST_SAVE)
 	_check(int(saved.get("version", 0)) == SaveStore.VERSION and saved.has("market") and saved.has("character"), "A successful trade must write the current character-inventory save with the market")
-	_check(int(saved["market"]["B"]["test_good_04"]["current_stock"]) == 97 and int(saved["market"]["B"]["test_good_04"]["target_stock"]) == 100 and int(saved["market"]["B"]["test_good_04"]["reference_price"]) == 1250, "Saved market must hold stock, target and reference")
+	_check(int(saved["market"]["B"]["test_good_02"]["current_stock"]) == 90 and int(saved["market"]["B"]["test_good_02"]["target_stock"]) == 100 and int(saved["market"]["B"]["test_good_02"]["reference_price"]) == 300, "Saved market must hold stock, target and reference")
 	var before_failure := _read(TEST_SAVE)
 	main.buy_in_current_city("test_good_06", 10)
 	_check(_read(TEST_SAVE) == before_failure, "A failed trade must not rewrite the market save")
 	await _destroy(main)
 	var reloaded := await _new_main(TEST_SAVE)
-	_check(_stock(reloaded, "B", "test_good_04") == 97 and reloaded.cargo.get_quantity("test_good_04") == 3, "Restart must restore market stock and cargo")
+	_check(_stock(reloaded, "B", "test_good_02") == 90 and reloaded.cargo.get_quantity("test_good_02") == 10, "Restart must restore market stock and cargo")
 	await _destroy(reloaded)
 
 	# Legacy M2-06 save without a market: keep money/cargo, fresh market.
@@ -336,7 +348,8 @@ func _verify_stress() -> void:
 		stock[c] = {}
 		for good_id in IDS:
 			stock[c][good_id] = low.get(c, {}).get(good_id, {}).get("current_stock", 100)
-	var quantities := [1, 1, 1, 2, 3, 0, -1, 25]
+	# T03: only 1 and 10 are order sizes; 2 / 25 must be rejected.
+	var quantities := [1, 1, 1, 1, 10, 10, 2, 0, -1, 25]
 	var seed := 70707
 	var drift := 0
 	var invariant_breaks := 0
@@ -362,10 +375,11 @@ func _verify_stress() -> void:
 				var held := cargo.keys()
 				held.sort()
 				good_id = held[(bits >> 13) % held.size()]
-			var valid := good_id in IDS and quantity > 0
+			var valid := good_id in IDS and quantity in [1, 10]
 			var expected := false
 			if is_buy:
-				var price: int = BUY[city].get(good_id, 0)
+				# T03: price at the model's current stock (dynamic reference).
+				var price: int = DynamicPriceModel.buy(REFERENCE[city][good_id], stock[city][good_id]) if good_id in IDS else 0
 				var stock_ok: bool = valid and quantity <= stock[city][good_id]
 				if valid and not stock_ok:
 					counts["stock_rejected"] += 1
@@ -377,7 +391,7 @@ func _verify_stress() -> void:
 			else:
 				expected = valid and cargo.get(good_id, 0) >= quantity
 				if expected:
-					money += BUYBACK[city][good_id] * quantity
+					money += DynamicPriceModel.buyback(REFERENCE[city][good_id], stock[city][good_id]) * quantity
 					cargo[good_id] -= quantity
 					if cargo[good_id] == 0:
 						cargo.erase(good_id)

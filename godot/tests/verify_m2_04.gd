@@ -1,5 +1,7 @@
 extends SceneTree
 
+const DynamicPriceModel := preload("res://tests/dynamic_price_model.gd")
+
 const FixedCapacityStats := preload("res://tests/fixed_capacity_stats.gd")
 
 const APPROVED_PRICES := {
@@ -95,15 +97,19 @@ func _verify_buy() -> void:
 	var wallet := Wallet.new()
 	var cargo := _cargo20()
 	var market := MarketState.create_default()
-	var result := TradeService.buy("A", "test_good_03", 3, wallet, cargo, market)
-	_check(result["success"] and result["total_value"] == 1323 and result["reason"] == "", "Valid buy must succeed with its total")
-	_check(wallet.get_balance() == 10000 - 1323, "Buy must reduce money by buy price x quantity")
-	_check(cargo.get_quantity("test_good_03") == 3, "Buy must add the exact quantity")
-	_check(cargo.get_used_capacity() == 6, "Buy must update used capacity")
-	_check(TradeService.buy("A", "test_good_03", 1, wallet, cargo, market)["success"] and cargo.get_quantity("test_good_03") == 4, "Buying the same good must stack")
-	_check(TradeService.buy("B", "test_good_02", 2, wallet, cargo, market)["success"], "Buying a second good must succeed")
-	_check(cargo.get_items() == {"test_good_03": 4, "test_good_02": 2} and cargo.get_used_capacity() == 10, "Multiple goods must be held together")
-	_check(wallet.get_balance() == 10000 - 441 * 4 - 315 * 2, "Money must reflect every buy exactly")
+	# T03: orders are 1 or 10 units, each at one locked unit price.
+	var result := TradeService.buy("A", "test_good_01", 10, wallet, cargo, market)
+	_check(result["success"] and result["total_value"] == 840 and result["reason"] == "", "Valid 10-unit buy must succeed with its total (84 x 10)")
+	_check(wallet.get_balance() == 10000 - 840, "Buy must reduce money by buy price x quantity")
+	_check(cargo.get_quantity("test_good_01") == 10, "Buy must add the exact quantity")
+	_check(cargo.get_used_capacity() == 10, "Buy must update used capacity")
+	_check(TradeService.buy("A", "test_good_01", 1, wallet, cargo, market)["success"] and cargo.get_quantity("test_good_01") == 11, "Buying the same good must stack")
+	_check(TradeService.buy("B", "test_good_02", 1, wallet, cargo, market)["success"], "Buying a second good must succeed")
+	_check(cargo.get_items() == {"test_good_01": 11, "test_good_02": 1} and cargo.get_used_capacity() == 12, "Multiple goods must be held together")
+	# The 11th unit is a new order at stock 90, so it costs the new dynamic price.
+	_check(wallet.get_balance() == 10000 - 840 - DynamicPriceModel.buy(80, 90) - 315, "Money must reflect every buy exactly")
+	for size in [2, 3, 5, 9, 11, 20, 100]:
+		_expect_buy_rejected("A", "test_good_01", size, Wallet.new(), _cargo20(), "invalid_quantity", "Order size %d" % size)
 
 	# Money is enough but cargo is full: nothing may change.
 	var full_cargo := _cargo20()
@@ -115,7 +121,7 @@ func _verify_buy() -> void:
 	var poor := Wallet.new()
 	poor.spend(9000)
 	_expect_buy_rejected("A", "test_good_06", 1, poor, _cargo20(), "insufficient_money", "Insufficient money")
-	_expect_buy_rejected("B", "test_good_02", 4, poor, _cargo20(), "insufficient_money", "Insufficient money by 260")
+	_expect_buy_rejected("B", "test_good_02", 10, poor, _cargo20(), "insufficient_money", "Insufficient money for 10 x 315")
 
 	for city_id in INVALID_CITIES:
 		_expect_buy_rejected(city_id, "test_good_01", 1, Wallet.new(), _cargo20(), "invalid_city_or_good", "Invalid city %s" % str(city_id))
@@ -123,8 +129,8 @@ func _verify_buy() -> void:
 		_expect_buy_rejected("A", good_id, 1, Wallet.new(), _cargo20(), "invalid_city_or_good", "Invalid good %s" % str(good_id))
 	for quantity in INVALID_QUANTITIES:
 		_expect_buy_rejected("A", "test_good_01", quantity, Wallet.new(), _cargo20(), "invalid_quantity", "Quantity %s" % str(quantity))
-	# M2-07 checks market stock before cargo, so a huge quantity now fails on stock.
-	_expect_buy_rejected("A", "test_good_01", 1_000_000_000_000_000, Wallet.new(), _cargo20(), "insufficient_market_stock", "Huge quantity")
+	# T03: a huge quantity is not an allowed order size.
+	_expect_buy_rejected("A", "test_good_01", 1_000_000_000_000_000, Wallet.new(), _cargo20(), "invalid_quantity", "Huge quantity")
 	_check(not TradeService.buy("A", "test_good_01", 1, null, _cargo20(), MarketState.create_default())["success"], "Buy without a wallet must fail")
 	_check(not TradeService.buy("A", "test_good_01", 1, Wallet.new(), null, MarketState.create_default())["success"], "Buy without a cargo must fail")
 	_check(not TradeService.buy("A", "test_good_01", 1, Wallet.new(), _cargo20(), null)["success"], "Buy without a market must fail")
@@ -151,18 +157,20 @@ func _expect_buy_rejected(city_id: Variant, good_id: Variant, quantity: Variant,
 
 func _verify_sell() -> void:
 	var wallet := Wallet.new()
-	var cargo := _cargo20()
-	cargo.add("test_good_04", 5)
+	var cargo := Cargo.new()
+	cargo.add("test_good_04", 11)
 	cargo.add("test_good_01", 2)
 	var market := MarketState.create_default()
-	var result := TradeService.sell("B", "test_good_04", 2, wallet, cargo, market)
-	_check(result["success"] and result["total_value"] == 2374, "Valid sell must succeed with its total")
-	_check(cargo.get_quantity("test_good_04") == 3, "Sell must reduce the exact quantity")
-	_check(wallet.get_balance() == 12374, "Sell must add buyback price x quantity")
-	_check(TradeService.sell("A", "test_good_04", 3, wallet, cargo, market)["success"], "Selling the rest must succeed")
-	_check(not cargo.get_items().has("test_good_04") and wallet.get_balance() == 12374 + 2565, "Selling to zero must remove the entry")
+	var result := TradeService.sell("B", "test_good_04", 10, wallet, cargo, market)
+	_check(result["success"] and result["total_value"] == 11870, "Valid 10-unit sell must succeed with its total (1187 x 10)")
+	_check(cargo.get_quantity("test_good_04") == 1, "Sell must reduce the exact quantity")
+	_check(wallet.get_balance() == 21870, "Sell must add buyback price x quantity")
+	_check(TradeService.sell("A", "test_good_04", 1, wallet, cargo, market)["success"], "Selling the rest must succeed")
+	_check(not cargo.get_items().has("test_good_04") and wallet.get_balance() == 21870 + 855, "Selling to zero must remove the entry")
 
-	_expect_sell_rejected("A", "test_good_01", 3, wallet, cargo, "insufficient_cargo", "Too many")
+	_expect_sell_rejected("A", "test_good_01", 10, wallet, cargo, "insufficient_cargo", "Too many")
+	for size in [2, 3, 5, 20, 100]:
+		_expect_sell_rejected("A", "test_good_01", size, wallet, cargo, "invalid_quantity", "Order size %d" % size)
 	_expect_sell_rejected("A", "test_good_06", 1, wallet, cargo, "insufficient_cargo", "Not held")
 	for city_id in INVALID_CITIES:
 		_expect_sell_rejected(city_id, "test_good_01", 1, wallet, cargo, "invalid_city_or_good", "Invalid city %s" % str(city_id))
@@ -191,17 +199,22 @@ func _verify_reverse_and_loss() -> void:
 	var wallet := Wallet.new()
 	var cargo := _cargo20()
 	var market := MarketState.create_default()
-	_check(not TradeService.buy("B", "test_good_05", 7, wallet, cargo, market)["success"], "7 x good 5 (21 units) must not fit")
-	_check(TradeService.buy("B", "test_good_05", 2, wallet, cargo, market)["success"] and wallet.get_balance() == 6430, "Reverse: buy 2 x good 5 in B for 3570")
-	_check(TradeService.sell("A", "test_good_05", 2, wallet, cargo, market)["success"] and wallet.get_balance() == 10420, "Reverse: sell 2 x good 5 in A for 3990")
-	_check(wallet.get_balance() - Wallet.STARTING_MONEY == 420 and cargo.is_empty(), "B to A good 5 must profit +420")
+	# T03: two single-unit orders each way, each at its own locked price.
+	_check(TradeService.buy("B", "test_good_05", 10, wallet, cargo, market)["reason"] == "insufficient_cargo_space", "10 x good 5 (30 units) must not fit")
+	var reverse_cost := DynamicPriceModel.buy(1700, 100) + DynamicPriceModel.buy(1700, 99)
+	var reverse_income := DynamicPriceModel.buyback(2100, 100) + DynamicPriceModel.buyback(2100, 101)
+	_check(TradeService.buy("B", "test_good_05", 1, wallet, cargo, market)["success"] and TradeService.buy("B", "test_good_05", 1, wallet, cargo, market)["success"] and wallet.get_balance() == 10000 - reverse_cost, "Reverse: buy 2 x good 5 in B")
+	_check(TradeService.sell("A", "test_good_05", 1, wallet, cargo, market)["success"] and TradeService.sell("A", "test_good_05", 1, wallet, cargo, market)["success"] and wallet.get_balance() == 10000 - reverse_cost + reverse_income, "Reverse: sell 2 x good 5 in A")
+	_check(wallet.get_balance() - Wallet.STARTING_MONEY == reverse_income - reverse_cost and reverse_income > reverse_cost and cargo.is_empty(), "B to A good 5 must profit")
 
 	var loss_wallet := Wallet.new()
 	var loss_cargo := _cargo20()
 	var loss_market := MarketState.create_default()
-	_check(TradeService.buy("A", "test_good_05", 2, loss_wallet, loss_cargo, loss_market)["success"] and loss_wallet.get_balance() == 5590, "Loss: buy 2 x good 5 in A for 4410")
-	_check(TradeService.sell("B", "test_good_05", 2, loss_wallet, loss_cargo, loss_market)["success"] and loss_wallet.get_balance() == 8820, "Loss: sell 2 x good 5 in B for 3230")
-	_check(loss_wallet.get_balance() - Wallet.STARTING_MONEY == -1180, "A to B good 5 must lose -1180")
+	var loss_cost := DynamicPriceModel.buy(2100, 100) + DynamicPriceModel.buy(2100, 99)
+	var loss_income := DynamicPriceModel.buyback(1700, 100) + DynamicPriceModel.buyback(1700, 101)
+	_check(TradeService.buy("A", "test_good_05", 1, loss_wallet, loss_cargo, loss_market)["success"] and TradeService.buy("A", "test_good_05", 1, loss_wallet, loss_cargo, loss_market)["success"] and loss_wallet.get_balance() == 10000 - loss_cost, "Loss: buy 2 x good 5 in A")
+	_check(TradeService.sell("B", "test_good_05", 1, loss_wallet, loss_cargo, loss_market)["success"] and TradeService.sell("B", "test_good_05", 1, loss_wallet, loss_cargo, loss_market)["success"] and loss_wallet.get_balance() == 10000 - loss_cost + loss_income, "Loss: sell 2 x good 5 in B")
+	_check(loss_wallet.get_balance() - Wallet.STARTING_MONEY == loss_income - loss_cost and loss_income < loss_cost, "A to B good 5 must lose money")
 
 
 func _verify_single_execution() -> void:
@@ -232,7 +245,8 @@ func _verify_stress() -> void:
 			model_stock[city][good] = 100
 	var cities := ["A", "A", "B", "B", "A", "B", "C", ""]
 	var goods := GoodsCatalog.get_ids() + ["bad_good"]
-	var quantities := [1, 1, 1, 2, 2, 3, 4, 0, -1, 25]
+	# T03: only 1 and 10 are order sizes; 2 / 3 / 25 must be rejected.
+	var quantities := [1, 1, 1, 1, 10, 10, 2, 0, -1, 25]
 	var seed := 424242
 	var mismatches := 0
 	var invariant_breaks := 0
@@ -257,9 +271,12 @@ func _verify_stress() -> void:
 		var money_before := wallet.get_balance()
 		var items_before := cargo.get_items()
 		var market_before := market.get_snapshot()
-		var buy_price: int = BUY_PRICES.get(city_id, {}).get(good_id, 0)
-		var buyback_price: int = BUYBACK_PRICES.get(city_id, {}).get(good_id, 0)
-		var valid_quantity: bool = typeof(quantity) == TYPE_INT and quantity > 0
+		# T03: prices follow the model's current stock (dynamic reference).
+		var baseline: int = APPROVED_PRICES.get(city_id, {}).get(good_id, 0)
+		var model_stock_now: int = model_stock.get(city_id, {}).get(good_id, 0)
+		var buy_price: int = DynamicPriceModel.buy(baseline, model_stock_now) if baseline > 0 else 0
+		var buyback_price: int = DynamicPriceModel.buyback(baseline, model_stock_now) if baseline > 0 else 0
+		var valid_quantity: bool = typeof(quantity) == TYPE_INT and quantity in [1, 10]
 		var expected := false
 		var result := {}
 		if is_buy:

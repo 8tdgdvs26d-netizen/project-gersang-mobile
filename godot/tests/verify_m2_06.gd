@@ -1,5 +1,7 @@
 extends SceneTree
 
+const DynamicPriceModel := preload("res://tests/dynamic_price_model.gd")
+
 ## Uses its own save file so the player's real save is never touched.
 const TEST_SAVE := "user://m2_06_test_save.json"
 const UNWRITABLE_SAVE := "user://m2_06_missing_dir/nested/save.json"
@@ -104,24 +106,27 @@ func _verify_trade_triggers() -> void:
 	# saves the location. Failed trades must still leave that save untouched.
 	var entered := _read(TEST_SAVE)
 	_check(_saved() == {"money": 10000, "cargo": {}}, "Entering a city saves the unchanged money and cargo with the location")
-	var rejected: Dictionary = main.buy_in_current_city("test_good_06", 3)
+	var rejected: Dictionary = main.buy_in_current_city("test_good_06", 10)
 	_check(not rejected["success"] and _read(TEST_SAVE) == entered, "A failed first buy must not change the save")
 	_check(not main.sell_in_current_city("test_good_01", 1)["success"] and _read(TEST_SAVE) == entered, "A failed first sell must not change the save")
 
-	_check(main.buy_in_current_city("test_good_02", 2)["success"], "Buy must succeed")
-	_check(_saved() == {"money": 9622, "cargo": {"test_good_02": 2}}, "Successful buy must write money and cargo")
+	# T03: orders are 1 or 10 units at one locked price (10 x 189).
+	_check(main.buy_in_current_city("test_good_02", 10)["success"], "Buy must succeed")
+	_check(_saved() == {"money": 8110, "cargo": {"test_good_02": 10}}, "Successful buy must write money and cargo")
 
 	var before := _read(TEST_SAVE)
-	for attempt in [["test_good_06", 3], ["bad_good", 1], ["test_good_01", 0], ["test_good_01", -2], ["test_good_01", 1.5], ["test_good_01", 101]]:
+	for attempt in [["test_good_06", 10], ["bad_good", 1], ["test_good_01", 0], ["test_good_01", -2], ["test_good_01", 1.5], ["test_good_01", 2], ["test_good_01", 101]]:
 		main.buy_in_current_city(attempt[0], attempt[1])
 		_check(_read(TEST_SAVE) == before, "Failed buy %s must not change the save" % str(attempt))
-	for attempt in [["test_good_02", 3], ["test_good_05", 1], ["bad_good", 1], ["test_good_02", 0], ["test_good_02", -1]]:
+	for attempt in [["test_good_02", 3], ["test_good_05", 1], ["bad_good", 1], ["test_good_02", 0], ["test_good_02", -1], ["test_good_02", 20]]:
 		main.sell_in_current_city(attempt[0], attempt[1])
 		_check(_read(TEST_SAVE) == before, "Failed sell %s must not change the save" % str(attempt))
-	_check(main.wallet.get_balance() == 9622 and main.cargo.get_items() == {"test_good_02": 2}, "Failed trades must not change runtime state")
+	_check(main.wallet.get_balance() == 8110 and main.cargo.get_items() == {"test_good_02": 10}, "Failed trades must not change runtime state")
 
-	_check(main.sell_in_current_city("test_good_02", 2)["success"], "Sell must succeed")
-	_check(_saved() == {"money": 9964, "cargo": {}}, "Successful sell must write money and cargo; the same-city round trip loses the spread")
+	_check(main.sell_in_current_city("test_good_02", 10)["success"], "Sell must succeed")
+	# T03: the ten units are sold back at stock 90, at one locked buyback price.
+	var round_trip := 8110 + 10 * DynamicPriceModel.buyback(180, 90)
+	_check(round_trip < 10000 and _saved() == {"money": round_trip, "cargo": {}}, "Successful sell must write money and cargo; the same-city round trip loses the spread")
 	await _destroy(main)
 
 
@@ -135,32 +140,38 @@ func _verify_full_journey() -> void:
 	var hub := first.get_node("CityHub") as CityHub
 	for press in range(10):
 		hub.get_market_button("test_good_01", "buy").pressed.emit()
-	_check(first.wallet.get_balance() == 9160 and first.cargo.get_quantity("test_good_01") == 10 and first.cargo.get_used_capacity() == 10, "Journey: A buy must reach 9160 / 10 units")
+	# T03: each unit costs the dynamic buy price at the stock it is bought at.
+	var after_buys := 10000
+	var income := 0
+	for unit in range(10):
+		after_buys -= DynamicPriceModel.buy(80, 100 - unit)
+		income += DynamicPriceModel.buyback(120, 100 + unit)
+	_check(first.wallet.get_balance() == after_buys and first.cargo.get_quantity("test_good_01") == 10 and first.cargo.get_used_capacity() == 10, "Journey: A buy must reach the paid total / 10 units")
 	var first_wallet: Wallet = first.wallet
 	var first_cargo: CharacterInventory = first.cargo
 	await _destroy(first)
 
 	var second := await _new_main(TEST_SAVE)
 	_check(second.wallet != first_wallet and second.cargo != first_cargo, "Journey: restart must create new wallet and cargo objects")
-	_check(second.wallet.get_balance() == 9160, "Journey restart #1: money must be restored to 9160")
+	_check(second.wallet.get_balance() == after_buys, "Journey restart #1: money must be restored")
 	_check(second.cargo.get_quantity("test_good_01") == 10 and second.cargo.get_used_capacity() == 10, "Journey restart #1: cargo must be restored to 10")
 	_check((second.get_node("Actors/Player") as Player).global_position == SPAWN, "Restart must use the normal world spawn, not a saved position")
 	# M2-09 supersedes "restart never restores the city": the saved city A hub reopens.
 	_check(second.current_city_id == "A" and (second.get_node("CityHub") as CityHub).is_open(), "Restart must restore the saved City A hub")
 	await _enter(second, "B")
 	var hub_b := second.get_node("CityHub") as CityHub
-	_check(hub_b.get_money_label_text() == "金錢：9160", "Market must show restored money")
+	_check(hub_b.get_money_label_text() == "金錢：%d" % after_buys, "Market must show restored money")
 	_check(hub_b.get_cargo_label_text() == "背包容量：10 / 100", "Market must show restored backpack capacity")
 	_check(hub_b.get_market_row_texts("test_good_01")["held"] == "持有 10", "Market must show restored held quantity")
 	for press in range(10):
 		hub_b.get_market_button("test_good_01", "sell").pressed.emit()
-	_check(second.wallet.get_balance() == 10300 and second.cargo.is_empty(), "Journey: B sell must reach 10300 / 0")
+	_check(second.wallet.get_balance() == after_buys + income and second.cargo.is_empty(), "Journey: B sell must reach the earned total / 0")
 	await _destroy(second)
 
 	var third := await _new_main(TEST_SAVE)
-	_check(third.wallet.get_balance() == 10300, "Journey restart #2: money must be restored to 10300")
+	_check(third.wallet.get_balance() == after_buys + income, "Journey restart #2: money must be restored")
 	_check(third.cargo.is_empty() and third.cargo.get_used_capacity() == 0, "Journey restart #2: cargo must be restored empty")
-	_check(third.wallet.get_balance() - Wallet.STARTING_MONEY == 300, "Journey: saved profit must be +300")
+	_check(third.wallet.get_balance() - Wallet.STARTING_MONEY == after_buys + income - 10000 and after_buys + income > 10000, "Journey: saved profit must be kept")
 	await _destroy(third)
 
 
@@ -212,10 +223,10 @@ func _verify_invalid_saves() -> void:
 func _verify_write_failure() -> void:
 	var main := await _new_main(UNWRITABLE_SAVE)
 	await _enter(main, "A")
-	var result: Dictionary = main.buy_in_current_city("test_good_01", 2)
-	_check(result["success"] and main.wallet.get_balance() == 9832 and main.cargo.get_quantity("test_good_01") == 2, "A failed save write must not roll back a successful trade")
+	var result: Dictionary = main.buy_in_current_city("test_good_01", 10)
+	_check(result["success"] and main.wallet.get_balance() == 9160 and main.cargo.get_quantity("test_good_01") == 10, "A failed save write must not roll back a successful trade")
 	_check(not FileAccess.file_exists(UNWRITABLE_SAVE), "The unwritable save must not exist")
-	_check(main.sell_in_current_city("test_good_01", 2)["success"] and main.wallet.get_balance() == 9984, "Trading must keep working after a failed write")
+	_check(main.sell_in_current_city("test_good_01", 10)["success"] and main.wallet.get_balance() == 9160 + 10 * DynamicPriceModel.buyback(80, 90), "Trading must keep working after a failed write")
 	await _destroy(main)
 
 
@@ -233,7 +244,12 @@ func _verify_stress() -> void:
 	var saved_money := 10000
 	var saved_cargo := {}
 	var goods := GoodsCatalog.get_ids() + ["bad_good"]
-	var quantities := [1, 1, 1, 2, 3, 0, -1, 101]
+	var model_stock := {"A": {}, "B": {}}
+	for stock_city in model_stock:
+		for stock_good in GoodsCatalog.get_ids():
+			model_stock[stock_city][stock_good] = 100
+	# T03: only 1 and 10 are order sizes; 2 / 101 must be rejected.
+	var quantities := [1, 1, 1, 1, 10, 10, 2, 0, -1, 101]
 	var seed := 60606
 	var drift := 0
 	var file_breaks := 0
@@ -266,18 +282,23 @@ func _verify_stress() -> void:
 				var held := model_cargo.keys()
 				held.sort()
 				good_id = held[(bits >> 12) % held.size()]
-			var price: int = (BUY_PRICES if is_buy else BUYBACK_PRICES)[city_id].get(good_id, 0)
+			# T03: prices follow the model's current stock (dynamic reference).
+			var baseline: int = APPROVED_PRICES[city_id].get(good_id, 0)
+			var stock_now: int = model_stock[city_id].get(good_id, 0)
+			var price: int = 0 if baseline == 0 else (DynamicPriceModel.buy(baseline, stock_now) if is_buy else DynamicPriceModel.buyback(baseline, stock_now))
 			var file_before := _read(TEST_SAVE)
 			var expected := false
 			if is_buy:
-				expected = price > 0 and quantity > 0 and _model_used(model_cargo) + quantity * APPROVED_SIZES.get(good_id, 99) <= CAPACITY and price * quantity <= model_money
+				expected = price > 0 and quantity in [1, 10] and _model_used(model_cargo) + quantity * APPROVED_SIZES.get(good_id, 99) <= CAPACITY and price * quantity <= model_money
 				if expected:
 					model_money -= price * quantity
 					model_cargo[good_id] = model_cargo.get(good_id, 0) + quantity
+					model_stock[city_id][good_id] -= quantity
 			else:
-				expected = price > 0 and quantity > 0 and model_cargo.get(good_id, 0) >= quantity
+				expected = price > 0 and quantity in [1, 10] and model_cargo.get(good_id, 0) >= quantity
 				if expected:
 					model_money += price * quantity
+					model_stock[city_id][good_id] += quantity
 					model_cargo[good_id] -= quantity
 					if model_cargo[good_id] == 0:
 						model_cargo.erase(good_id)
@@ -292,7 +313,7 @@ func _verify_stress() -> void:
 					file_breaks += 1
 			elif _read(TEST_SAVE) != file_before:
 				file_breaks += 1
-		if main.wallet.get_balance() != model_money or main.cargo.get_items() != model_cargo:
+		if main.wallet.get_balance() != model_money or main.cargo.get_items() != model_cargo or _stocks(main) != model_stock:
 			drift += 1
 		if main.wallet.get_balance() < 0 or main.cargo.get_used_capacity() > CAPACITY or main.cargo.get_used_capacity() != _model_used(main.cargo.get_items()):
 			invariant_breaks += 1
@@ -303,6 +324,14 @@ func _verify_stress() -> void:
 	_check(counts["buy_ok"] >= 30 and counts["sell_ok"] >= 30 and counts["buy_rejected"] >= 30 and counts["sell_rejected"] >= 30 and counts["recreate"] >= 15, "Stress: must mix trades, rejects and recreates %s" % str(counts))
 	print("M2-06 stress counts: ", counts)
 	await _destroy(main)
+
+
+func _stocks(main: Node) -> Dictionary:
+	var stocks := {"A": {}, "B": {}}
+	for city in stocks:
+		for good_id in GoodsCatalog.get_ids():
+			stocks[city][good_id] = main.market.get_quote(city, good_id)["stock"]
+	return stocks
 
 
 func _model_used(model: Dictionary) -> int:

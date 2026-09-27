@@ -9,8 +9,9 @@ extends CanvasLayer
 ## in main.gd. All player-facing text here is Traditional Chinese.
 
 signal leave_requested
-signal buy_requested(good_id: String)
-signal sell_requested(good_id: String)
+## Market orders carry their size: 1 or 10 (the trade domain enforces the rule).
+signal buy_requested(good_id: String, quantity: int)
+signal sell_requested(good_id: String, quantity: int)
 signal transport_requested(destination_city_id: String, request_id: String)
 signal facility_changed(facility: String)
 ## Transfer requests carry the city whose warehouse is shown, so the domain
@@ -40,7 +41,7 @@ const WAREHOUSE_FAILURE_MESSAGES := {
 	"ERR_SAVE_FAILED": "無法儲存，操作已取消",
 }
 const WAREHOUSE_GENERIC_FAILURE := "操作失敗"
-const MARKET_NOTE := "開發原型：每次買入或賣出 1 件"
+const MARKET_NOTE := "開發原型：每單買賣 1 件或 10 件，同一單使用同一價格"
 const TRANSPORT_NOTE := "只載乘客，貨物由角色自行攜帶（車費及時間為測試數值）"
 const TRANSPORT_FAILURE_MESSAGES := {
 	"ERR_INSUFFICIENT_FUNDS": "金錢不足",
@@ -59,6 +60,20 @@ const INFO_WIDTH := 400.0
 const TRADE_BUTTON_SIZE := Vector2(120, 88)
 const NAME_FONT_SIZE := 22
 const DETAIL_FONT_SIZE := 20
+## Market rows fit four order buttons (買入 1 / 買入 10 / 賣出 1 / 賣出 10) in
+## the 720-wide portrait layout, so they use narrower buttons and details.
+const MARKET_BUTTON_SIZE := Vector2(104, 88)
+const MARKET_INFO_WIDTH := 260.0
+const MARKET_DETAIL_FONT_SIZE := 18
+const MARKET_ROW_SEPARATION := 6
+## Button node name -> [label, is_buy, order quantity].
+const MARKET_ORDER_BUTTONS := {
+	"BuyButton": ["買入 1", true, 1],
+	"Buy10Button": ["買入 10", true, 10],
+	"SellButton": ["賣出 1", false, 1],
+	"Sell10Button": ["賣出 10", false, 10],
+}
+const MARKET_BUTTON_ACTIONS := {"buy": "BuyButton", "buy10": "Buy10Button", "sell": "SellButton", "sell10": "Sell10Button"}
 const FAILURE_MESSAGES := {
 	"insufficient_money": "金錢不足",
 	"insufficient_cargo_space": "背包容量不足",
@@ -400,34 +415,41 @@ func get_market_row_texts(good_id: String) -> Dictionary:
 func get_market_button(good_id: String, action: String) -> Button:
 	if not _rows.has(good_id):
 		return null
-	return _rows[good_id].get_node("BuyButton" if action == "buy" else "SellButton") as Button
+	## action: "buy" / "sell" (1 unit) or "buy10" / "sell10" (10 units).
+	if not MARKET_BUTTON_ACTIONS.has(action):
+		return null
+	return _rows[good_id].get_node(MARKET_BUTTON_ACTIONS[action]) as Button
 
 
 func _build_market_rows() -> void:
 	for good_id in GoodsCatalog.get_ids():
 		var row := HBoxContainer.new()
 		row.name = good_id
-		row.add_theme_constant_override("separation", 10)
+		row.add_theme_constant_override("separation", MARKET_ROW_SEPARATION)
 		var info := VBoxContainer.new()
 		info.name = "Info"
-		info.custom_minimum_size = Vector2(INFO_WIDTH, 0)
+		info.custom_minimum_size = Vector2(MARKET_INFO_WIDTH, 0)
 		info.add_theme_constant_override("separation", 0)
 		info.add_child(_make_label("NameLabel", GoodsCatalog.get_good(good_id)["display_name"], NAME_FONT_SIZE))
-		info.add_child(_make_line("PriceLine", ["BuyPriceLabel", "BuybackPriceLabel"]))
-		info.add_child(_make_line("StockLine", ["HeldLabel", "StockLabel"]))
+		info.add_child(_make_line("PriceLine", ["BuyPriceLabel", "BuybackPriceLabel"], MARKET_INFO_WIDTH, MARKET_DETAIL_FONT_SIZE))
+		info.add_child(_make_line("StockLine", ["HeldLabel", "StockLabel"], MARKET_INFO_WIDTH, MARKET_DETAIL_FONT_SIZE))
 		row.add_child(info)
-		row.add_child(_make_button("BuyButton", "買入 1", _on_buy_pressed.bind(good_id)))
-		row.add_child(_make_button("SellButton", "賣出 1", _on_sell_pressed.bind(good_id)))
+		for button_name in MARKET_ORDER_BUTTONS:
+			var order: Array = MARKET_ORDER_BUTTONS[button_name]
+			var handler := _on_buy_pressed if order[1] else _on_sell_pressed
+			var button := _make_button(button_name, order[0], handler.bind(good_id, order[2]))
+			button.custom_minimum_size = MARKET_BUTTON_SIZE
+			row.add_child(button)
 		_market_rows.add_child(row)
 		_rows[good_id] = row
 
 
-func _make_line(node_name: String, label_names: Array) -> HBoxContainer:
+func _make_line(node_name: String, label_names: Array, width: float = INFO_WIDTH, font_size: int = DETAIL_FONT_SIZE) -> HBoxContainer:
 	var line := HBoxContainer.new()
 	line.name = node_name
 	for label_name in label_names:
-		var label := _make_label(label_name, "", DETAIL_FONT_SIZE)
-		label.custom_minimum_size = Vector2(INFO_WIDTH / 2.0, 0)
+		var label := _make_label(label_name, "", font_size)
+		label.custom_minimum_size = Vector2(width / 2.0, 0)
 		line.add_child(label)
 	return line
 
@@ -547,9 +569,9 @@ static func _seconds(ms: int) -> int:
 	return (maxi(ms, 0) + 999) / 1000
 
 
-func _on_buy_pressed(good_id: String) -> void:
-	buy_requested.emit(good_id)
+func _on_buy_pressed(good_id: String, quantity: int) -> void:
+	buy_requested.emit(good_id, quantity)
 
 
-func _on_sell_pressed(good_id: String) -> void:
-	sell_requested.emit(good_id)
+func _on_sell_pressed(good_id: String, quantity: int) -> void:
+	sell_requested.emit(good_id, quantity)

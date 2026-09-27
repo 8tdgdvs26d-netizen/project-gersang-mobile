@@ -1,5 +1,7 @@
 extends SceneTree
 
+const DynamicPriceModel := preload("res://tests/dynamic_price_model.gd")
+
 const FixedCapacityStats := preload("res://tests/fixed_capacity_stats.gd")
 
 const APPROVED_PRICES := {
@@ -79,8 +81,13 @@ func _verify_architecture() -> void:
 
 	var main_source := FileAccess.get_file_as_string("res://scripts/main.gd")
 	_check(main_source.contains("TradeService.buy(") and main_source.contains("TradeService.sell("), "TradeService must remain the transaction authority")
-	_check(main_source.contains("buy_in_current_city(good_id, MARKET_TRADE_QUANTITY)") and main_source.contains("sell_in_current_city(good_id, MARKET_TRADE_QUANTITY)"), "Market presses must go through the existing trade path")
-	_check(_main.MARKET_TRADE_QUANTITY == 1, "Market buttons must trade exactly 1")
+	# T03 supersedes "every press trades exactly 1": presses send an order of 1 or 10.
+	_check(main_source.contains("buy_in_current_city(good_id, quantity)") and main_source.contains("sell_in_current_city(good_id, quantity)"), "Market presses must go through the existing trade path")
+	var sizes := []
+	for button_name in CityHub.MARKET_ORDER_BUTTONS:
+		sizes.append(CityHub.MARKET_ORDER_BUTTONS[button_name][2])
+	sizes.sort()
+	_check(sizes == [1, 1, 10, 10] and TradeService.ALLOWED_ORDER_QUANTITIES == [1, 10], "Market buttons must trade exactly 1 or 10")
 	_check(_hub.buy_requested.get_connections().size() == 1 and _hub.sell_requested.get_connections().size() == 1, "Market signals must be connected exactly once")
 	_check(_main.wallet is Wallet and _main.inventory is CharacterInventory and _main.cargo == _main.inventory, "Wallet and per-character inventory must stay owned by the session controller")
 
@@ -104,10 +111,12 @@ func _verify_layout() -> void:
 	_check(PORTRAIT_RECT.encloses(content.get_global_rect()), "Market must fit the 720 x 1280 portrait reference")
 	var previous_bottom := -1.0
 	for good_id in GoodsCatalog.get_ids():
-		for action in ["buy", "sell"]:
+		# T03: four order buttons per row (1 / 10 each way) must fit the 720-wide
+		# portrait layout, so the width minimum is 100 (was 120); height stays 88.
+		for action in ["buy", "buy10", "sell", "sell10"]:
 			var rect := _hub.get_market_button(good_id, action).get_global_rect()
 			_check(PORTRAIT_RECT.encloses(rect), "%s %s button must be on screen" % [good_id, action])
-			_check(rect.size.x >= 120.0 and rect.size.y >= 88.0, "%s %s button must be touch-sized" % [good_id, action])
+			_check(rect.size.x >= 100.0 and rect.size.y >= 88.0, "%s %s button must be touch-sized" % [good_id, action])
 		var row_rect := (_hub.get_market_button(good_id, "buy").get_parent() as Control).get_global_rect()
 		_check(row_rect.position.y >= previous_bottom, "%s row must not overlap the row above" % good_id)
 		previous_bottom = row_rect.end.y
@@ -122,8 +131,8 @@ func _verify_buy_and_sell_ui() -> void:
 	for good_id in GoodsCatalog.get_ids():
 		var before_money: int = _main.wallet.get_balance()
 		var before_items: Dictionary = _main.cargo.get_items()
+		var price: int = _price("A", good_id, true)
 		await _click(_hub.get_market_button(good_id, "buy"), false)
-		var price: int = BUY_PRICES["A"][good_id]
 		_check(_main.wallet.get_balance() == before_money - price, "One Buy 1 press on %s must cost exactly one A buy price" % good_id)
 		var expected_items := before_items.duplicate()
 		expected_items[good_id] = before_items.get(good_id, 0) + 1
@@ -134,14 +143,18 @@ func _verify_buy_and_sell_ui() -> void:
 	for good_id in GoodsCatalog.get_ids():
 		var before_money: int = _main.wallet.get_balance()
 		var before_held: int = _main.cargo.get_quantity(good_id)
+		var price: int = _price("A", good_id, false)
 		await _click(_hub.get_market_button(good_id, "sell"), true)
-		var price: int = BUYBACK_PRICES["A"][good_id]
 		_check(_main.wallet.get_balance() == before_money + price, "One Sell 1 touch on %s must earn exactly one A buyback price" % good_id)
 		_check(_main.cargo.get_quantity(good_id) == before_held - 1, "Sell 1 on %s must remove exactly one" % good_id)
 		_check(_ui_matches_model(), "Money, cargo and held must refresh after selling %s" % good_id)
 		_check(_hub.get_feedback_text() == "已賣出 1 件%s，收入 %d" % [GoodsCatalog.get_good(good_id)["display_name"], price], "Sell feedback for %s" % good_id)
-	# M2-07: a same-city round trip now always loses the spread (8+18+42+90+210+360).
-	_check(_main.wallet.get_balance() == 10000 - 728 and _main.cargo.is_empty(), "Buying and selling each good once in A must lose exactly the spread")
+	# M2-07: a same-city round trip always loses money. T03: each good is bought at
+	# stock 100 and sold back at stock 99 (dynamic price), so the loss is computed.
+	var round_trip_loss := 0
+	for good_id in GoodsCatalog.get_ids():
+		round_trip_loss += DynamicPriceModel.buy(APPROVED_PRICES["A"][good_id], 100) - DynamicPriceModel.buyback(APPROVED_PRICES["A"][good_id], 99)
+	_check(round_trip_loss > 0 and _main.wallet.get_balance() == 10000 - round_trip_loss and _main.cargo.is_empty(), "Buying and selling each good once in A must lose exactly the spread")
 
 
 func _verify_failures() -> void:
@@ -155,7 +168,7 @@ func _verify_failures() -> void:
 	# Not enough cargo space: fill with 10 x good 3 (20 units, 4410 money).
 	for press in range(10):
 		await _click(_hub.get_market_button("test_good_03", "buy"), false)
-	_check(_main.cargo.get_used_capacity() == 20 and _main.wallet.get_balance() == 5590, "Ten good 3 buys must fill the cargo")
+	_check(_main.cargo.get_used_capacity() == 20 and _main.wallet.get_balance() == 10000 - _sum_buys(420, 100, 10), "Ten good 3 buys must fill the cargo")
 	snapshot = _snapshot()
 	await _click(_hub.get_market_button("test_good_01", "buy"), false)
 	_check(_hub.get_feedback_text() == "背包容量不足", "Buying into a full backpack must say 背包容量不足")
@@ -165,7 +178,7 @@ func _verify_failures() -> void:
 	await _reset_session_in("A")
 	for press in range(4):
 		await _click(_hub.get_market_button("test_good_05", "buy"), false)
-	_check(_main.wallet.get_balance() == 10000 - 8820, "Four good 5 buys must leave 1180")
+	_check(_main.wallet.get_balance() == 10000 - _sum_buys(2100, 100, 4) and _main.wallet.get_balance() < DynamicPriceModel.buy(2100, 96), "Four good 5 buys must leave less than the fifth costs")
 	snapshot = _snapshot()
 	await _click(_hub.get_market_button("test_good_05", "buy"), false)
 	_check(_hub.get_feedback_text() == "金錢不足", "Buying without enough money must say Not enough money")
@@ -184,21 +197,24 @@ func _verify_a_to_b_loop() -> void:
 	_check(_hub.get_market_row_texts("test_good_05")["buy_price"] == "買入價 2205" and _hub.get_market_row_texts("test_good_05")["buyback_price"] == "賣出價 1995", "A must show Good 5 at 2205 / 1995")
 	var single_steps := true
 	for press in range(10):
+		var before_click: int = _main.wallet.get_balance()
+		var expected_price := DynamicPriceModel.buy(80, 100 - press)
 		await _click(_hub.get_market_button("test_good_01", "buy"), false)
-		if _main.wallet.get_balance() != 10000 - 84 * (press + 1) or _main.cargo.get_quantity("test_good_01") != press + 1:
+		if _main.wallet.get_balance() != before_click - expected_price or _main.cargo.get_quantity("test_good_01") != press + 1:
 			single_steps = false
-	_check(single_steps, "Every Buy 1 click in A must move exactly 84 money and 1 good")
-	_check(_hub.get_money_label_text() == "金錢：9160" and _main.wallet.get_balance() == 9160, "Ten Buy 1 clicks in A must show 9160")
+	_check(single_steps, "Every Buy 1 click in A must move exactly the current dynamic buy price and 1 good")
+	var after_buys := 10000 - _sum_buys(80, 100, 10)
+	_check(_hub.get_money_label_text() == "金錢：%d" % after_buys and _main.wallet.get_balance() == after_buys, "Ten Buy 1 clicks in A must show the paid total")
 	_check(_hub.get_cargo_label_text() == "背包容量：10 / 20", "Ten buys must show 背包容量 10 / 20")
 	_check(_hub.get_market_row_texts("test_good_01")["held"] == "持有 10", "Ten buys must show Held 10")
 
 	_check(_main.leave_city(), "Must leave A")
 	await _settle()
-	_check(_main.wallet.get_balance() == 9160 and _main.cargo.get_quantity("test_good_01") == 10, "A purchases must survive leaving")
+	_check(_main.wallet.get_balance() == after_buys and _main.cargo.get_quantity("test_good_01") == 10, "A purchases must survive leaving")
 	_check(_hub.get_market_row_texts("test_good_01")["buy_price"] == "" and _hub.get_market_row_texts("test_good_01")["buyback_price"] == "", "Closed hub must not keep stale prices")
 
 	await _enter("B")
-	_check(_hub.get_money_label_text() == "金錢：9160", "B market must show carried money")
+	_check(_hub.get_money_label_text() == "金錢：%d" % after_buys, "B market must show carried money")
 	_check(_hub.get_cargo_label_text() == "背包容量：10 / 20", "B market must show carried cargo")
 	_check(_hub.get_market_row_texts("test_good_01")["held"] == "持有 10", "B market must show carried holdings")
 	_check(_hub.get_market_row_texts("test_good_01")["buy_price"] == "買入價 126" and _hub.get_market_row_texts("test_good_01")["buyback_price"] == "賣出價 114", "B must show Good 1 at 126 / 114")
@@ -211,14 +227,20 @@ func _verify_a_to_b_loop() -> void:
 	_check(not stale, "Entering B must replace every A price")
 	single_steps = true
 	for press in range(10):
+		var before_sell: int = _main.wallet.get_balance()
+		var expected_income := DynamicPriceModel.buyback(120, 100 + press)
 		await _click(_hub.get_market_button("test_good_01", "sell"), true)
-		if _main.wallet.get_balance() != 9160 + 114 * (press + 1) or _main.cargo.get_quantity("test_good_01") != 9 - press \
+		if _main.wallet.get_balance() != before_sell + expected_income or _main.cargo.get_quantity("test_good_01") != 9 - press \
 				or _hub.get_market_row_texts("test_good_01")["held"] != "持有 %d" % (9 - press):
 			single_steps = false
-	_check(single_steps, "Every Sell 1 touch in B must move exactly 114 money and 1 good, and refresh Held")
-	_check(_hub.get_money_label_text() == "金錢：10300" and _main.wallet.get_balance() == 10300, "Ten Sell 1 touches in B must show 10300")
+	_check(single_steps, "Every Sell 1 touch in B must move exactly the current dynamic buyback and 1 good, and refresh Held")
+	var income := 0
+	for sold in range(10):
+		income += DynamicPriceModel.buyback(120, 100 + sold)
+	var final_money := after_buys + income
+	_check(_hub.get_money_label_text() == "金錢：%d" % final_money and _main.wallet.get_balance() == final_money, "Ten Sell 1 touches in B must show the earned total")
 	_check(_hub.get_cargo_label_text() == "背包容量：0 / 20" and _hub.get_market_row_texts("test_good_01")["held"] == "持有 0", "Selling all must show Cargo 0 / 20 and Held 0")
-	_check(_main.wallet.get_balance() - Wallet.STARTING_MONEY == 300, "A to B Good 1 loop must profit +300")
+	_check(_main.wallet.get_balance() - Wallet.STARTING_MONEY == income - _sum_buys(80, 100, 10) and income > _sum_buys(80, 100, 10), "A to B Good 1 loop must still profit with dynamic prices")
 
 
 # --- Stress ------------------------------------------------------------------
@@ -231,6 +253,10 @@ func _verify_stress() -> void:
 	var model_cargo := {}
 	var city_id := "A"
 	var ids := GoodsCatalog.get_ids()
+	var model_stock := {"A": {}, "B": {}}
+	for stock_city in model_stock:
+		for stock_good in ids:
+			model_stock[stock_city][stock_good] = 100
 	var seed := 5050
 	var model_breaks := 0
 	var ui_breaks := 0
@@ -247,7 +273,8 @@ func _verify_stress() -> void:
 		var bits := seed >> 8
 		var good_id: String = ids[bits % ids.size()]
 		var is_buy := (bits >> 4) % 2 == 0
-		var price: int = BUY_PRICES[city_id][good_id] if is_buy else BUYBACK_PRICES[city_id][good_id]
+		var baseline: int = APPROVED_PRICES[city_id][good_id]
+		var price: int = DynamicPriceModel.buy(baseline, model_stock[city_id][good_id]) if is_buy else DynamicPriceModel.buyback(baseline, model_stock[city_id][good_id])
 		var money_before: int = _main.wallet.get_balance()
 		var expected_reason := ""
 		if is_buy:
@@ -258,11 +285,13 @@ func _verify_stress() -> void:
 			else:
 				model_money -= price
 				model_cargo[good_id] = model_cargo.get(good_id, 0) + 1
+				model_stock[city_id][good_id] -= 1
 		else:
 			if model_cargo.get(good_id, 0) < 1:
 				expected_reason = "持有貨物不足"
 			else:
 				model_money += price
+				model_stock[city_id][good_id] += 1
 				model_cargo[good_id] -= 1
 				if model_cargo[good_id] == 0:
 					model_cargo.erase(good_id)
@@ -274,7 +303,8 @@ func _verify_stress() -> void:
 		var expected_delta := 0 if not ok else (-price if is_buy else price)
 		if _main.wallet.get_balance() - money_before != expected_delta:
 			double_exec += 1
-		if _main.wallet.get_balance() != model_money or _main.cargo.get_items() != model_cargo:
+		if _main.wallet.get_balance() != model_money or _main.cargo.get_items() != model_cargo \
+				or _main.market.get_quote(city_id, good_id)["stock"] != model_stock[city_id][good_id]:
 			model_breaks += 1
 		if not _ui_matches_model():
 			ui_breaks += 1
@@ -314,6 +344,21 @@ func _verify_leave_and_movement() -> void:
 
 # --- Helpers -------------------------------------------------------------------
 
+## T03: the price for the next unit at the market's current stock.
+func _price(city_id: String, good_id: String, is_buy: bool) -> int:
+	var stock: int = _main.market.get_quote(city_id, good_id)["stock"]
+	var baseline: int = APPROVED_PRICES[city_id][good_id]
+	return DynamicPriceModel.buy(baseline, stock) if is_buy else DynamicPriceModel.buyback(baseline, stock)
+
+
+## Total paid for `count` single buys starting at `start_stock`.
+func _sum_buys(baseline: int, start_stock: int, count: int) -> int:
+	var total := 0
+	for bought in range(count):
+		total += DynamicPriceModel.buy(baseline, start_stock - bought)
+	return total
+
+
 func _ui_matches_model() -> bool:
 	var city_id: String = _main.current_city_id
 	if _hub.get_money_label_text() != "金錢：%d" % _main.wallet.get_balance():
@@ -325,7 +370,8 @@ func _ui_matches_model() -> bool:
 		var quote: Dictionary = _main.market.get_quote(city_id, good_id)
 		if texts.get("buy_price") != "買入價 %d" % quote["buy_price"] or texts.get("buyback_price") != "賣出價 %d" % quote["buyback_price"]:
 			return false
-		if texts.get("buy_price") != "買入價 %d" % BUY_PRICES[city_id][good_id] or texts.get("buyback_price") != "賣出價 %d" % BUYBACK_PRICES[city_id][good_id]:
+		var baseline: int = APPROVED_PRICES[city_id][good_id]
+		if texts.get("buy_price") != "買入價 %d" % DynamicPriceModel.buy(baseline, quote["stock"]) or texts.get("buyback_price") != "賣出價 %d" % DynamicPriceModel.buyback(baseline, quote["stock"]):
 			return false
 		if texts.get("held") != "持有 %d" % _main.cargo.get_quantity(good_id):
 			return false
