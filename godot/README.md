@@ -282,9 +282,18 @@ should appear and the output should contain:
 
 `Myrial: Unwritten M2-09 passenger transport ready`
 
-Headless verification scripts live in `tests/` and run with, for example:
+Headless verification scripts live in `tests/`. Run them through the runner, which
+first performs the headless import (`--import`) and then runs the scripts:
 
-`godot --headless --path godot --script res://tests/verify_m2_09.gd`
+`GODOT=/Applications/Godot.app/Contents/MacOS/Godot godot/tests/run_tests.sh`
+(all `tests/verify_*.gd`) or `GODOT=... godot/tests/run_tests.sh verify_t01_warehouse`.
+
+The import step is required on a fresh clone: `godot/.godot/` is a generated cache
+(git-ignored, never committed), and a direct `--script` run does not scan the project,
+so without it `class_name` scripts cannot be resolved and the bundled font is not
+imported. Running a single script directly
+(`godot --headless --path godot --script res://tests/verify_t01_warehouse.gd`) works only
+after the project has been imported at least once since the last new `class_name` script.
 
 ## Deliberately not included
 
