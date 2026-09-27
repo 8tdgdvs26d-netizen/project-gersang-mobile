@@ -100,29 +100,30 @@ func _verify_stock_trades() -> void:
 	var cargo := Cargo.new()
 	var market := MarketState.create_default()
 	var before := market.get_snapshot()
-	var result := TradeService.buy("A", "test_good_03", 2, wallet, cargo, market)
-	_check(result["success"] and result["total_value"] == 882 and wallet.get_balance() == 10000 - 882, "Buy must charge the buy price")
-	_check(market.get_quote("A", "test_good_03")["stock"] == 98, "Successful buy must reduce stock")
+	# T03: orders are 1 or 10 units at one locked price (10 x 441).
+	var result := TradeService.buy("A", "test_good_03", 10, wallet, cargo, market)
+	_check(result["success"] and result["total_value"] == 4410 and wallet.get_balance() == 10000 - 4410, "Buy must charge the buy price")
+	_check(market.get_quote("A", "test_good_03")["stock"] == 90, "Successful buy must reduce stock")
 	_check(_changed_entries(before, market.get_snapshot()) == ["A/test_good_03"], "A buy must change only that city's good")
 	_check(market.get_quote("A", "test_good_03")["reference_price"] == 420, "Buying must not move the reference price")
 
 	before = market.get_snapshot()
-	result = TradeService.sell("B", "test_good_03", 2, wallet, cargo, market)
-	_check(result["success"] and result["total_value"] == 1234, "Sell must pay the buyback price")
-	_check(market.get_quote("B", "test_good_03")["stock"] == 102, "Successful sell must increase stock")
+	result = TradeService.sell("B", "test_good_03", 10, wallet, cargo, market)
+	_check(result["success"] and result["total_value"] == 6170, "Sell must pay the buyback price (10 x 617)")
+	_check(market.get_quote("B", "test_good_03")["stock"] == 110, "Successful sell must increase stock")
 	_check(_changed_entries(before, market.get_snapshot()) == ["B/test_good_03"], "A sell must change only that city's good")
 	_check(market.get_quote("B", "test_good_03")["reference_price"] == 650, "Selling must not move the reference price")
 	_check(market.get_quote("B", "test_good_03")["stock"] > market.get_quote("B", "test_good_03")["target_stock"], "Stock may rise above the target")
 
 	# Not enough market stock.
-	var low := _market_with({"A": {"test_good_01": 3}})
+	var low := _market_with({"A": {"test_good_01": 10, "test_good_02": 9}})
 	var low_wallet := Wallet.new()
 	var low_cargo := Cargo.new()
 	var low_before := low.get_snapshot()
-	result = TradeService.buy("A", "test_good_01", 4, low_wallet, low_cargo, low)
+	result = TradeService.buy("A", "test_good_02", 10, low_wallet, low_cargo, low)
 	_check(not result["success"] and result["reason"] == "insufficient_market_stock", "Buying more than the stock must be rejected")
 	_check(low_wallet.get_balance() == 10000 and low_cargo.is_empty() and low.get_snapshot() == low_before, "Rejected stock buy must change nothing")
-	_check(TradeService.buy("A", "test_good_01", 3, low_wallet, low_cargo, low)["success"] and low.get_quote("A", "test_good_01")["stock"] == 0, "Buying the exact stock must reach 0")
+	_check(TradeService.buy("A", "test_good_01", 10, low_wallet, low_cargo, low)["success"] and low.get_quote("A", "test_good_01")["stock"] == 0, "Buying the exact stock must reach 0")
 	_check(not TradeService.buy("A", "test_good_01", 1, low_wallet, low_cargo, low)["success"], "An empty stock must reject further buys")
 	_check(low.get_quote("A", "test_good_01")["stock"] == 0, "Stock must never go below 0")
 
@@ -132,7 +133,7 @@ func _verify_stock_trades() -> void:
 	sell_cargo.add("test_good_02", 2)
 	var sell_market := MarketState.create_default()
 	var sell_before := sell_market.get_snapshot()
-	for attempt in [["A", "test_good_02", 3], ["A", "test_good_05", 1], ["C", "test_good_02", 1], ["A", "bad", 1], ["A", "test_good_02", 0], ["A", "test_good_02", -1], ["A", "test_good_02", 1.5]]:
+	for attempt in [["A", "test_good_02", 3], ["A", "test_good_02", 10], ["A", "test_good_02", 2], ["A", "test_good_05", 1], ["C", "test_good_02", 1], ["A", "bad", 1], ["A", "test_good_02", 0], ["A", "test_good_02", -1], ["A", "test_good_02", 1.5]]:
 		var rejected := TradeService.sell(attempt[0], attempt[1], attempt[2], sell_wallet, sell_cargo, sell_market)
 		_check(not rejected["success"] and sell_wallet.get_balance() == 10000 and sell_cargo.get_items() == {"test_good_02": 2} and sell_market.get_snapshot() == sell_before, "Rejected sell %s must change nothing" % str(attempt))
 
@@ -269,16 +270,16 @@ func _verify_persistence() -> void:
 	_delete(TEST_SAVE)
 	var main := await _new_main(TEST_SAVE)
 	await _enter(main, "B")
-	main.buy_in_current_city("test_good_04", 3)
+	main.buy_in_current_city("test_good_02", 10)
 	var saved := _parse(TEST_SAVE)
 	_check(int(saved.get("version", 0)) == SaveStore.VERSION and saved.has("market") and saved.has("character"), "A successful trade must write the current character-inventory save with the market")
-	_check(int(saved["market"]["B"]["test_good_04"]["current_stock"]) == 97 and int(saved["market"]["B"]["test_good_04"]["target_stock"]) == 100 and int(saved["market"]["B"]["test_good_04"]["reference_price"]) == 1250, "Saved market must hold stock, target and reference")
+	_check(int(saved["market"]["B"]["test_good_02"]["current_stock"]) == 90 and int(saved["market"]["B"]["test_good_02"]["target_stock"]) == 100 and int(saved["market"]["B"]["test_good_02"]["reference_price"]) == 300, "Saved market must hold stock, target and reference")
 	var before_failure := _read(TEST_SAVE)
 	main.buy_in_current_city("test_good_06", 10)
 	_check(_read(TEST_SAVE) == before_failure, "A failed trade must not rewrite the market save")
 	await _destroy(main)
 	var reloaded := await _new_main(TEST_SAVE)
-	_check(_stock(reloaded, "B", "test_good_04") == 97 and reloaded.cargo.get_quantity("test_good_04") == 3, "Restart must restore market stock and cargo")
+	_check(_stock(reloaded, "B", "test_good_02") == 90 and reloaded.cargo.get_quantity("test_good_02") == 10, "Restart must restore market stock and cargo")
 	await _destroy(reloaded)
 
 	# Legacy M2-06 save without a market: keep money/cargo, fresh market.
@@ -347,7 +348,8 @@ func _verify_stress() -> void:
 		stock[c] = {}
 		for good_id in IDS:
 			stock[c][good_id] = low.get(c, {}).get(good_id, {}).get("current_stock", 100)
-	var quantities := [1, 1, 1, 2, 3, 0, -1, 25]
+	# T03: only 1 and 10 are order sizes; 2 / 25 must be rejected.
+	var quantities := [1, 1, 1, 1, 10, 10, 2, 0, -1, 25]
 	var seed := 70707
 	var drift := 0
 	var invariant_breaks := 0
@@ -373,7 +375,7 @@ func _verify_stress() -> void:
 				var held := cargo.keys()
 				held.sort()
 				good_id = held[(bits >> 13) % held.size()]
-			var valid := good_id in IDS and quantity > 0
+			var valid := good_id in IDS and quantity in [1, 10]
 			var expected := false
 			if is_buy:
 				# T03: price at the model's current stock (dynamic reference).

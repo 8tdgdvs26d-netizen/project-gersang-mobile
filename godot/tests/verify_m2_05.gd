@@ -81,8 +81,13 @@ func _verify_architecture() -> void:
 
 	var main_source := FileAccess.get_file_as_string("res://scripts/main.gd")
 	_check(main_source.contains("TradeService.buy(") and main_source.contains("TradeService.sell("), "TradeService must remain the transaction authority")
-	_check(main_source.contains("buy_in_current_city(good_id, MARKET_TRADE_QUANTITY)") and main_source.contains("sell_in_current_city(good_id, MARKET_TRADE_QUANTITY)"), "Market presses must go through the existing trade path")
-	_check(_main.MARKET_TRADE_QUANTITY == 1, "Market buttons must trade exactly 1")
+	# T03 supersedes "every press trades exactly 1": presses send an order of 1 or 10.
+	_check(main_source.contains("buy_in_current_city(good_id, quantity)") and main_source.contains("sell_in_current_city(good_id, quantity)"), "Market presses must go through the existing trade path")
+	var sizes := []
+	for button_name in CityHub.MARKET_ORDER_BUTTONS:
+		sizes.append(CityHub.MARKET_ORDER_BUTTONS[button_name][2])
+	sizes.sort()
+	_check(sizes == [1, 1, 10, 10] and TradeService.ALLOWED_ORDER_QUANTITIES == [1, 10], "Market buttons must trade exactly 1 or 10")
 	_check(_hub.buy_requested.get_connections().size() == 1 and _hub.sell_requested.get_connections().size() == 1, "Market signals must be connected exactly once")
 	_check(_main.wallet is Wallet and _main.inventory is CharacterInventory and _main.cargo == _main.inventory, "Wallet and per-character inventory must stay owned by the session controller")
 
@@ -106,10 +111,12 @@ func _verify_layout() -> void:
 	_check(PORTRAIT_RECT.encloses(content.get_global_rect()), "Market must fit the 720 x 1280 portrait reference")
 	var previous_bottom := -1.0
 	for good_id in GoodsCatalog.get_ids():
-		for action in ["buy", "sell"]:
+		# T03: four order buttons per row (1 / 10 each way) must fit the 720-wide
+		# portrait layout, so the width minimum is 100 (was 120); height stays 88.
+		for action in ["buy", "buy10", "sell", "sell10"]:
 			var rect := _hub.get_market_button(good_id, action).get_global_rect()
 			_check(PORTRAIT_RECT.encloses(rect), "%s %s button must be on screen" % [good_id, action])
-			_check(rect.size.x >= 120.0 and rect.size.y >= 88.0, "%s %s button must be touch-sized" % [good_id, action])
+			_check(rect.size.x >= 100.0 and rect.size.y >= 88.0, "%s %s button must be touch-sized" % [good_id, action])
 		var row_rect := (_hub.get_market_button(good_id, "buy").get_parent() as Control).get_global_rect()
 		_check(row_rect.position.y >= previous_bottom, "%s row must not overlap the row above" % good_id)
 		previous_bottom = row_rect.end.y

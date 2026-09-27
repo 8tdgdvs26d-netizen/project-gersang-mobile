@@ -60,7 +60,7 @@ text = "倉庫"
 [node name="NoteLabel" type="Label" parent="Center/Content"]
 theme_override_colors/font_color = Color(0.55, 0.65, 0.63, 1)
 theme_override_font_sizes/font_size = 16
-text = "開發原型：每次買入或賣出 1 件"
+text = "開發原型：每單買賣 1 件或 10 件，同一單使用同一價格"
 horizontal_alignment = 1
 
 [node name="MoneyLabel" type="Label" parent="Center/Content"]

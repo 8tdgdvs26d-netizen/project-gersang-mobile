@@ -63,6 +63,11 @@ T03 Dynamic Market Pricing: trade → stock → price.
 - buying lowers stock so the next quote is dearer; selling raises stock so it is cheaper.
   Cities and goods are independent. The market UI shows the new prices after every trade
 - no save schema change: only stock is saved, so a reload rebuilds identical prices
+- ORDER-LOCKED PRICING: one order = one price. `TradeService` only accepts orders of exactly
+  1 or 10 units (domain rule, `ALLOWED_ORDER_QUANTITIES`); every unit of an order uses the
+  quote read before it (total = unit price × quantity), and only after the whole order does
+  the stock — and so the next quote — change. Market rows offer 買入 1 / 買入 10 / 賣出 1 /
+  賣出 10 (104 × 88 buttons so four fit the 720-wide portrait layout)
 - NOT INCLUDED (T04 / T05): recovery or restock over time, price history, profit / loss
 - older market tests now compute expected prices with `tests/dynamic_price_model.gd`, an
   independent test-side model of the approved rule

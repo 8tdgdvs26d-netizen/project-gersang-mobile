@@ -6,8 +6,6 @@ extends Node2D
 ## the journey arrives inside the destination city.
 
 const BOOTSTRAP_VERSION := "M2-09"
-## Each market button press trades exactly one unit.
-const MARKET_TRADE_QUANTITY := 1
 ## Each warehouse button press moves exactly one unit.
 const WAREHOUSE_TRANSFER_QUANTITY := 1
 ## After a failed arrival save the journey stays unfinished; retry this often.
@@ -312,14 +310,16 @@ func _refresh_hub_summary() -> void:
 	_city_hub.show_warehouse(get_warehouse_view(view_city), inventory.get_items(), inventory.get_used_capacity(), inventory.get_max_capacity(), _next_request_id())
 
 
-func _on_market_buy_requested(good_id: String) -> void:
-	var result := buy_in_current_city(good_id, MARKET_TRADE_QUANTITY)
-	_city_hub.show_trade_feedback("buy", good_id, MARKET_TRADE_QUANTITY, result)
+## Market buttons send orders of 1 or 10; TradeService validates the size and
+## locks one unit price for the whole order.
+func _on_market_buy_requested(good_id: String, quantity: int) -> void:
+	var result := buy_in_current_city(good_id, quantity)
+	_city_hub.show_trade_feedback("buy", good_id, quantity, result)
 
 
-func _on_market_sell_requested(good_id: String) -> void:
-	var result := sell_in_current_city(good_id, MARKET_TRADE_QUANTITY)
-	_city_hub.show_trade_feedback("sell", good_id, MARKET_TRADE_QUANTITY, result)
+func _on_market_sell_requested(good_id: String, quantity: int) -> void:
+	var result := sell_in_current_city(good_id, quantity)
+	_city_hub.show_trade_feedback("sell", good_id, quantity, result)
 
 
 func _on_deposit_requested(city_id: String, item_id: String, request_id: String) -> void:

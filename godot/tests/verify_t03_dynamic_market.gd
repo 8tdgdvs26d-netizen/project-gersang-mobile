@@ -28,10 +28,11 @@ func _initialize() -> void:
 	_verify_trade_reaction()
 	_verify_independence_and_failures()
 	_verify_extremes()
+	_verify_order_locked_pricing()
 	await _verify_game_integration()
 	await _verify_save_reload()
 	_delete(TEST_SAVE)
-	_check(_sections_done.size() == 8, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 9, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("T03 dynamic market pricing verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -161,7 +162,7 @@ func _verify_trade_reaction() -> void:
 	for press in range(20):
 		TradeService.buy("A", "test_good_01", 1, wallet, inventory, market)
 	var before_sell := market.get_quote("A", "test_good_05")
-	_check(TradeService.buy("B", "test_good_05", 20, wallet, inventory, market)["success"], "Setup: carry 20 x good 5 from B")
+	_check(TradeService.buy("B", "test_good_05", 10, wallet, inventory, market)["success"] and TradeService.buy("B", "test_good_05", 10, wallet, inventory, market)["success"], "Setup: carry 20 x good 5 from B (two 10-unit orders)")
 	for press in range(20):
 		TradeService.sell("A", "test_good_05", 1, wallet, inventory, market)
 	var after_sells := market.get_quote("A", "test_good_05")
@@ -192,10 +193,11 @@ func _verify_independence_and_failures() -> void:
 	var quotes := _quotes(market)
 	var attempts := [
 		TradeService.buy("A", "test_good_06", 1, poor, inventory, market),
-		TradeService.buy("A", "test_good_01", 3, wallet, small, market),
+		TradeService.buy("A", "test_good_01", 10, wallet, small, market),
 		TradeService.buy("A", "test_good_01", 86, wallet, inventory, market),
 		TradeService.buy("A", "test_good_01", 0, wallet, inventory, market),
 		TradeService.sell("A", "test_good_02", 1, wallet, small, market),
+		TradeService.sell("B", "test_good_02", 10, wallet, inventory, market),
 		TradeService.sell("B", "test_good_01", 16, wallet, inventory, market),
 		TradeService.sell("C", "test_good_01", 1, wallet, inventory, market),
 	]
@@ -225,8 +227,8 @@ func _verify_extremes() -> void:
 	var sold_out := TradeService.buy("B", "test_good_06", 1, wallet, inventory, market)
 	_check(not sold_out["success"] and sold_out["reason"] == "insufficient_market_stock", "Nothing can be bought at stock 0")
 	# Repeated sells approach the floor but never go below it.
-	TradeService.buy("A", "test_good_06", 100, wallet, inventory, market)
-	TradeService.buy("A", "test_good_06", 0, wallet, inventory, market)
+	for order in range(10):
+		TradeService.buy("A", "test_good_06", 10, wallet, inventory, market)
 	var floor_price := 4300 / 2
 	previous = market.get_quote("B", "test_good_06")["dynamic_reference_price"]
 	var falling := true
@@ -242,6 +244,112 @@ func _verify_extremes() -> void:
 	_check(market.get_quote("B", "test_good_06")["reference_price"] == 4300, "The baseline stays unchanged after extreme trading")
 	_sections_done.append("extremes")
 
+# --- Order-locked pricing (review fix) -------------------------------------------------------
+
+## ONE ORDER = ONE PRICE: an order of 1 or 10 units uses the quote read before
+## it; only after the whole order does the stock (and so the next quote) change.
+func _verify_order_locked_pricing() -> void:
+	var market := MarketState.create_default()
+	var wallet := _rich_wallet()
+	var inventory := CharacterInventory.new("player", CharacterStats.new(1000))
+	_check(TradeService.ALLOWED_ORDER_QUANTITIES == [1, 10], "Only 1 and 10 are order sizes")
+
+	# Sizes 1 and 10 work both ways.
+	_check(TradeService.buy("A", "test_good_02", 1, wallet, inventory, market)["success"] and TradeService.sell("A", "test_good_02", 1, wallet, inventory, market)["success"], "Quantity 1 buy and sell succeed")
+	# Buy 10 at displayed price P costs exactly P x 10, with P locked.
+	var quote := market.get_quote("A", "test_good_04")
+	var price: int = quote["buy_price"]
+	var money := wallet.get_balance()
+	var bought := TradeService.buy("A", "test_good_04", 10, wallet, inventory, market)
+	_check(bought["success"] and bought["total_value"] == price * 10 and money - wallet.get_balance() == price * 10, "Buy 10 at %d costs exactly %d" % [price, price * 10])
+	var per_unit := 0
+	for unit in range(10):
+		per_unit += DynamicPriceModel.buy(900, 100 - unit)
+	_check(per_unit != price * 10, "Per-unit pricing would differ (%d), so the order really used one locked price" % per_unit)
+	var after_buy := market.get_quote("A", "test_good_04")
+	_check(after_buy["stock"] == quote["stock"] - 10 and after_buy["buy_price"] > price and after_buy["buy_price"] == DynamicPriceModel.buy(900, 90), "After Buy 10 the stock is 10 lower and only the NEXT quote is dearer")
+	# Sell 10 at displayed buyback P earns exactly P x 10.
+	var sell_quote := market.get_quote("A", "test_good_04")
+	var sell_price: int = sell_quote["buyback_price"]
+	money = wallet.get_balance()
+	var sold := TradeService.sell("A", "test_good_04", 10, wallet, inventory, market)
+	_check(sold["success"] and sold["total_value"] == sell_price * 10 and wallet.get_balance() - money == sell_price * 10, "Sell 10 at %d earns exactly %d" % [sell_price, sell_price * 10])
+	var after_sell := market.get_quote("A", "test_good_04")
+	_check(after_sell["stock"] == sell_quote["stock"] + 10 and after_sell["buyback_price"] < sell_price, "After Sell 10 the stock is 10 higher and the next quote is lower")
+
+	# Every other size is rejected in the domain, changing nothing.
+	inventory.restore_items({"test_good_01": 200})
+	for size in [2, 3, 5, 9, 11, 20, 50, 99, 100, 1000]:
+		var before_money := wallet.get_balance()
+		var before_items := inventory.get_stacks()
+		var before_market := market.get_snapshot()
+		var buy := TradeService.buy("B", "test_good_01", size, wallet, inventory, market)
+		var sell := TradeService.sell("B", "test_good_01", size, wallet, inventory, market)
+		_check(not buy["success"] and buy["reason"] == "invalid_quantity" and not sell["success"] and sell["reason"] == "invalid_quantity", "Order size %d must be rejected both ways" % size)
+		_check(wallet.get_balance() == before_money and inventory.get_stacks() == before_items and market.get_snapshot() == before_market, "Rejected size %d must change nothing" % size)
+
+	# 100 units only as ten separate 10-unit orders, each at its own price.
+	var hundred := MarketState.create_default()
+	var h_wallet := _rich_wallet()
+	var h_inventory := CharacterInventory.new("player", CharacterStats.new(1000))
+	var totals := []
+	var locked_ok := true
+	for order in range(10):
+		var unit: int = hundred.get_quote("A", "test_good_03")["buy_price"]
+		var result := TradeService.buy("A", "test_good_03", 10, h_wallet, h_inventory, hundred)
+		if not result["success"] or result["total_value"] != unit * 10 or unit != DynamicPriceModel.buy(420, 100 - order * 10):
+			locked_ok = false
+		totals.append(result["total_value"])
+	var rising := true
+	for i in range(1, totals.size()):
+		if totals[i] <= totals[i - 1]:
+			rising = false
+	_check(locked_ok and rising and hundred.get_quote("A", "test_good_03")["stock"] == 0, "Ten Buy 10 orders: each uses its own locked price and later orders cost more %s" % str(totals))
+	var sell_totals := []
+	var sell_ok := true
+	for order in range(10):
+		var unit: int = hundred.get_quote("A", "test_good_03")["buyback_price"]
+		var result := TradeService.sell("A", "test_good_03", 10, h_wallet, h_inventory, hundred)
+		if not result["success"] or result["total_value"] != unit * 10:
+			sell_ok = false
+		sell_totals.append(result["total_value"])
+	var falling := true
+	for i in range(1, sell_totals.size()):
+		if sell_totals[i] >= sell_totals[i - 1]:
+			falling = false
+	_check(sell_ok and falling and hundred.get_quote("A", "test_good_03")["stock"] == 100, "Ten Sell 10 orders: each uses its own locked price and later orders earn less %s" % str(sell_totals))
+	var spent := 0
+	var earned := 0
+	for i in range(10):
+		spent += totals[i]
+		earned += sell_totals[i]
+	_check(earned < spent, "Buying 100 then selling 100 in the same city in 10-unit orders loses money (spent %d, earned %d)" % [spent, earned])
+
+	# The earlier exploit: buy 100 at the low pre-trade price, then sell 100 at
+	# the post-trade price. Quantity 100 is not an order size, so it cannot run.
+	var exploit := MarketState.create_default()
+	var e_wallet := _rich_wallet()
+	var e_inventory := CharacterInventory.new("player", CharacterStats.new(1000))
+	e_inventory.restore_items({"test_good_06": 100})
+	var e_before := e_wallet.get_balance()
+	var big_buy := TradeService.buy("B", "test_good_06", 100, e_wallet, e_inventory, exploit)
+	var big_sell := TradeService.sell("B", "test_good_06", 100, e_wallet, e_inventory, exploit)
+	_check(big_buy["reason"] == "invalid_quantity" and big_sell["reason"] == "invalid_quantity" and e_wallet.get_balance() == e_before and exploit.get_snapshot() == MarketState.create_default().get_snapshot(), "Buy 100 / Sell 100 are rejected, closing the bulk-order exploit")
+	# No free profit from any sequence of 10-unit orders against one market.
+	var cycle_ok := true
+	for good_id in IDS:
+		for city in BASELINES:
+			var cycle := MarketState.create_default()
+			var c_wallet := _rich_wallet()
+			var c_inventory := CharacterInventory.new("player", CharacterStats.new(1000))
+			var start := c_wallet.get_balance()
+			TradeService.buy(city, good_id, 10, c_wallet, c_inventory, cycle)
+			TradeService.sell(city, good_id, 10, c_wallet, c_inventory, cycle)
+			if c_wallet.get_balance() >= start or cycle.get_quote(city, good_id)["stock"] != 100:
+				cycle_ok = false
+	_check(cycle_ok, "Buy 10 then Sell 10 in the same city always loses money for every city and good")
+	_sections_done.append("order_locked")
+
 
 # --- Game integration ---------------------------------------------------------------------------
 
@@ -250,6 +358,22 @@ func _verify_game_integration() -> void:
 	var hub := main.get_node("CityHub") as CityHub
 	await _walk_in(main, "A")
 	var shown_before := hub.get_market_row_texts("test_good_01")
+	var labels := []
+	for action in ["buy", "buy10", "sell", "sell10"]:
+		labels.append(hub.get_market_button("test_good_01", action).text)
+	var row_buttons := hub.get_market_button("test_good_01", "buy").get_parent().find_children("*", "Button", false, false)
+	_check(labels == ["買入 1", "買入 10", "賣出 1", "賣出 10"] and row_buttons.size() == 4, "Each market row has exactly 買入 1 / 買入 10 / 賣出 1 / 賣出 10 (%s)" % str(labels))
+	# 買入 10: one order at the displayed price, then the UI shows the new price.
+	var displayed: int = main.market.get_quote("A", "test_good_01")["buy_price"]
+	var money_before: int = main.wallet.get_balance()
+	hub.get_market_button("test_good_01", "buy10").pressed.emit()
+	_check(money_before - main.wallet.get_balance() == displayed * 10 and hub.get_feedback_text() == "已買入 10 件測試商品一，支付 %d" % (displayed * 10), "買入 10 charges exactly 10 x the displayed price (%d)" % displayed)
+	_check(main.market.get_quote("A", "test_good_01")["stock"] == 90 and hub.get_market_row_texts("test_good_01")["buy_price"] == "買入價 %d" % DynamicPriceModel.buy(80, 90), "After 買入 10 the UI shows the new price")
+	var sell_displayed: int = main.market.get_quote("A", "test_good_01")["buyback_price"]
+	money_before = main.wallet.get_balance()
+	hub.get_market_button("test_good_01", "sell10").pressed.emit()
+	_check(main.wallet.get_balance() - money_before == sell_displayed * 10 and main.market.get_quote("A", "test_good_01")["stock"] == 100, "賣出 10 earns exactly 10 x the displayed buyback")
+	_check(main.buy_in_current_city("test_good_01", 2)["reason"] == "invalid_quantity" and main.sell_in_current_city("test_good_01", 5)["reason"] == "invalid_quantity", "The game path rejects other order sizes too")
 	for press in range(12):
 		hub.get_market_button("test_good_01", "buy").pressed.emit()
 	var quote: Dictionary = main.market.get_quote("A", "test_good_01")

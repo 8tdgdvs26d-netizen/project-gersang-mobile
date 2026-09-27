@@ -106,25 +106,26 @@ func _verify_trade_triggers() -> void:
 	# saves the location. Failed trades must still leave that save untouched.
 	var entered := _read(TEST_SAVE)
 	_check(_saved() == {"money": 10000, "cargo": {}}, "Entering a city saves the unchanged money and cargo with the location")
-	var rejected: Dictionary = main.buy_in_current_city("test_good_06", 3)
+	var rejected: Dictionary = main.buy_in_current_city("test_good_06", 10)
 	_check(not rejected["success"] and _read(TEST_SAVE) == entered, "A failed first buy must not change the save")
 	_check(not main.sell_in_current_city("test_good_01", 1)["success"] and _read(TEST_SAVE) == entered, "A failed first sell must not change the save")
 
-	_check(main.buy_in_current_city("test_good_02", 2)["success"], "Buy must succeed")
-	_check(_saved() == {"money": 9622, "cargo": {"test_good_02": 2}}, "Successful buy must write money and cargo")
+	# T03: orders are 1 or 10 units at one locked price (10 x 189).
+	_check(main.buy_in_current_city("test_good_02", 10)["success"], "Buy must succeed")
+	_check(_saved() == {"money": 8110, "cargo": {"test_good_02": 10}}, "Successful buy must write money and cargo")
 
 	var before := _read(TEST_SAVE)
-	for attempt in [["test_good_06", 3], ["bad_good", 1], ["test_good_01", 0], ["test_good_01", -2], ["test_good_01", 1.5], ["test_good_01", 101]]:
+	for attempt in [["test_good_06", 10], ["bad_good", 1], ["test_good_01", 0], ["test_good_01", -2], ["test_good_01", 1.5], ["test_good_01", 2], ["test_good_01", 101]]:
 		main.buy_in_current_city(attempt[0], attempt[1])
 		_check(_read(TEST_SAVE) == before, "Failed buy %s must not change the save" % str(attempt))
-	for attempt in [["test_good_02", 3], ["test_good_05", 1], ["bad_good", 1], ["test_good_02", 0], ["test_good_02", -1]]:
+	for attempt in [["test_good_02", 3], ["test_good_05", 1], ["bad_good", 1], ["test_good_02", 0], ["test_good_02", -1], ["test_good_02", 20]]:
 		main.sell_in_current_city(attempt[0], attempt[1])
 		_check(_read(TEST_SAVE) == before, "Failed sell %s must not change the save" % str(attempt))
-	_check(main.wallet.get_balance() == 9622 and main.cargo.get_items() == {"test_good_02": 2}, "Failed trades must not change runtime state")
+	_check(main.wallet.get_balance() == 8110 and main.cargo.get_items() == {"test_good_02": 10}, "Failed trades must not change runtime state")
 
-	_check(main.sell_in_current_city("test_good_02", 2)["success"], "Sell must succeed")
-	# T03: the two units are sold back at stock 98 (dynamic buyback).
-	var round_trip := 9622 + 2 * DynamicPriceModel.buyback(180, 98)
+	_check(main.sell_in_current_city("test_good_02", 10)["success"], "Sell must succeed")
+	# T03: the ten units are sold back at stock 90, at one locked buyback price.
+	var round_trip := 8110 + 10 * DynamicPriceModel.buyback(180, 90)
 	_check(round_trip < 10000 and _saved() == {"money": round_trip, "cargo": {}}, "Successful sell must write money and cargo; the same-city round trip loses the spread")
 	await _destroy(main)
 
@@ -222,10 +223,10 @@ func _verify_invalid_saves() -> void:
 func _verify_write_failure() -> void:
 	var main := await _new_main(UNWRITABLE_SAVE)
 	await _enter(main, "A")
-	var result: Dictionary = main.buy_in_current_city("test_good_01", 2)
-	_check(result["success"] and main.wallet.get_balance() == 9832 and main.cargo.get_quantity("test_good_01") == 2, "A failed save write must not roll back a successful trade")
+	var result: Dictionary = main.buy_in_current_city("test_good_01", 10)
+	_check(result["success"] and main.wallet.get_balance() == 9160 and main.cargo.get_quantity("test_good_01") == 10, "A failed save write must not roll back a successful trade")
 	_check(not FileAccess.file_exists(UNWRITABLE_SAVE), "The unwritable save must not exist")
-	_check(main.sell_in_current_city("test_good_01", 2)["success"] and main.wallet.get_balance() == 9984, "Trading must keep working after a failed write")
+	_check(main.sell_in_current_city("test_good_01", 10)["success"] and main.wallet.get_balance() == 9160 + 10 * DynamicPriceModel.buyback(80, 90), "Trading must keep working after a failed write")
 	await _destroy(main)
 
 
@@ -247,7 +248,8 @@ func _verify_stress() -> void:
 	for stock_city in model_stock:
 		for stock_good in GoodsCatalog.get_ids():
 			model_stock[stock_city][stock_good] = 100
-	var quantities := [1, 1, 1, 2, 3, 0, -1, 101]
+	# T03: only 1 and 10 are order sizes; 2 / 101 must be rejected.
+	var quantities := [1, 1, 1, 1, 10, 10, 2, 0, -1, 101]
 	var seed := 60606
 	var drift := 0
 	var file_breaks := 0
@@ -287,13 +289,13 @@ func _verify_stress() -> void:
 			var file_before := _read(TEST_SAVE)
 			var expected := false
 			if is_buy:
-				expected = price > 0 and quantity > 0 and _model_used(model_cargo) + quantity * APPROVED_SIZES.get(good_id, 99) <= CAPACITY and price * quantity <= model_money
+				expected = price > 0 and quantity in [1, 10] and _model_used(model_cargo) + quantity * APPROVED_SIZES.get(good_id, 99) <= CAPACITY and price * quantity <= model_money
 				if expected:
 					model_money -= price * quantity
 					model_cargo[good_id] = model_cargo.get(good_id, 0) + quantity
 					model_stock[city_id][good_id] -= quantity
 			else:
-				expected = price > 0 and quantity > 0 and model_cargo.get(good_id, 0) >= quantity
+				expected = price > 0 and quantity in [1, 10] and model_cargo.get(good_id, 0) >= quantity
 				if expected:
 					model_money += price * quantity
 					model_stock[city_id][good_id] += quantity
