@@ -62,7 +62,7 @@ current_runtime() {
 }
 
 acceptance_user_data() {
-	printf '%s/Library/Application Support/Godot/app_userdata/%s\n' "$HOME" "$ACCEPTANCE_DIR_NAME"
+	printf '%s/Library/Application Support/%s\n' "$HOME" "$ACCEPTANCE_DIR_NAME"
 }
 
 show_runtime() {
