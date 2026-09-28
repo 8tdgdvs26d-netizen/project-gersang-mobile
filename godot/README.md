@@ -47,7 +47,21 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-T06 World Exploration v0.1: world position persistence & state integrity.
+World Threat WT01: visible prototype monster foundation.
+
+- one prototype monster: stable id `prototype_monster_01`, fixed position (720, 320) as layout
+  data in `WorldLayout` (inside the playable rect, clear of both obstacles, City A's entry
+  trigger and return point, reachable from the default spawn)
+- `WorldMonster` (`scenes/world_monster.tscn`): a minimal drawn red shape labelled
+  「怪物（原型）」 and a 48 px contact circle. `player_contacted(monster_id)` fires once when the
+  player enters, never while the player stays inside, and again only after leaving and
+  re-entering (a debug line is printed on contact)
+- active only in WORLD mode: `main.gd` switches it off with the world in IN_CITY / TRAVELING
+- contact changes no game state: no encounter, combat, patrol, aggro or chase, and nothing
+  monster-related is saved (save version unchanged)
+- tests: `tests/verify_wt01_visible_monster.gd`
+
+Previous: T06 World Exploration v0.1: world position persistence & state integrity.
 
 - `PlayerLocation` holds the exact world position (`world_position`), only in WORLD mode;
   IN_CITY and TRAVELING have none (null), so no fake coordinate is ever stored

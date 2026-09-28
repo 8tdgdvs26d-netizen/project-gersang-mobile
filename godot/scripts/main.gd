@@ -66,6 +66,8 @@ var _last_world_autosave_ms := 0
 @onready var _joystick := $TouchControls/Joystick as TouchJoystick
 @onready var _city_hub := $CityHub as CityHub
 @onready var _enter_city_button := $EnterControls/EnterCityButton as Button
+## World Threat WT01: the one prototype monster (contact only, WORLD mode only).
+@onready var _prototype_monster := $Actors/PrototypeMonster as WorldMonster
 
 
 func _ready() -> void:
@@ -467,3 +469,4 @@ func _set_world_active(active: bool) -> void:
 	_joystick.set_process_input(active)
 	_player.velocity = Vector2.ZERO
 	_player.set_physics_process(active)
+	_prototype_monster.set_threat_active(active)

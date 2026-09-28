@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
@@ -8,6 +8,7 @@
 [ext_resource type="Script" path="res://scripts/world_grid.gd" id="6_grid"]
 [ext_resource type="PackedScene" path="res://scenes/city_marker.tscn" id="7_city"]
 [ext_resource type="PackedScene" path="res://scenes/city_hub.tscn" id="8_hub"]
+[ext_resource type="PackedScene" path="res://scenes/world_monster.tscn" id="9_monster"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -35,6 +36,8 @@ position = Vector2(950, 500)
 [node name="UpperObstacle" parent="Actors" instance=ExtResource("4_obstacle")]
 position = Vector2(640, 900)
 rotation = 1.5708
+
+[node name="PrototypeMonster" parent="Actors" instance=ExtResource("9_monster")]
 
 [node name="Player" parent="Actors" instance=ExtResource("2_player")]
 position = Vector2(420, 500)
