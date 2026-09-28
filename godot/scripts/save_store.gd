@@ -1,7 +1,14 @@
 class_name SaveStore
 extends RefCounted
 
-## Prototype local persistence. Version 7 adds the trade cost ledger (T05)
+## Prototype local persistence. Version 8 (T06) stores the exact WORLD
+## coordinates inside `location` (PlayerLocation owns and validates the shape;
+## non-finite or out-of-bounds coordinates reject the whole save, never
+## clamped). v4-v7 locations migrate through PlayerLocation.from_legacy_dict:
+## WORLD -> the last city's return point, or the default world spawn without a
+## city; IN_CITY / TRAVELING unchanged. Saves are written with full float
+## precision so exact coordinates round-trip.
+## Version 7 adds the trade cost ledger (T05)
 ## through TradeCostLedger: ordered FIFO cost lots for the backpack and every
 ## city warehouse. Its lot totals must match the saved item quantities exactly
 ## or the whole save is rejected. v1-v6 saves get an UNKNOWN-cost lot for every
@@ -27,8 +34,8 @@ extends RefCounted
 ## returning any runtime object.
 
 const DEFAULT_PATH := "user://myrial_save.json"
-const VERSION := 7
-const INVENTORY_VERSIONS := [3, 4, 5, 6, 7]
+const VERSION := 8
+const INVENTORY_VERSIONS := [3, 4, 5, 6, 7, 8]
 const LEGACY_CARGO_VERSIONS := [1, 2]
 const MAX_SAVED_MONEY := 9007199254740992
 ## The fixed capacity legacy v1/v2 Cargo had when those saves were written.
@@ -39,6 +46,8 @@ const V4_KEYS := ["version", "money", "character", "market", "location"]
 const V5_KEYS := ["version", "money", "character", "market", "location", "warehouses"]
 const V6_KEYS := ["version", "money", "character", "market", "location", "warehouses", "market_recovery"]
 const V7_KEYS := ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger"]
+## Same sections as v7; only the location gains exact world coordinates.
+const V8_KEYS := V7_KEYS
 const LEGACY_KEYS := ["version", "money", "cargo", "market"]
 const CHARACTER_KEYS := ["id", "stats", "inventory"]
 const STATS_KEYS := ["strength"]
@@ -75,6 +84,10 @@ static func serialize(wallet: Wallet, inventory: CharacterInventory, market: Mar
 static func save(path: String, wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null) -> bool:
 	if path == "" or wallet == null or inventory == null or market == null:
 		return false
+	# T06: never write an invalid location (e.g. world coordinates outside the
+	# playable rect); checked before any file is created.
+	if location != null and PlayerLocation.from_dict(location.to_dict()) == null:
+		return false
 	# T05: never write a cost ledger that does not account for exactly every
 	# carried and stored unit. Checked before any file is created, so a refused
 	# save leaves the existing save file untouched.
@@ -84,7 +97,7 @@ static func save(path: String, wallet: Wallet, inventory: CharacterInventory, ma
 	var file := FileAccess.open(temp_path, FileAccess.WRITE)
 	if file == null:
 		return false
-	file.store_string(JSON.stringify(serialize(wallet, inventory, market, location, warehouses, recovery, ledger)))
+	file.store_string(JSON.stringify(serialize(wallet, inventory, market, location, warehouses, recovery, ledger), "", true, true))
 	file.close()
 	var error := DirAccess.rename_absolute(ProjectSettings.globalize_path(temp_path), ProjectSettings.globalize_path(path))
 	return error == OK
@@ -122,12 +135,16 @@ static func validate(data: Variant) -> Dictionary:
 ## stored quantities; older versions get the default world location, empty
 ## warehouses, no recovery anchor and unknown-cost lots.
 static func _validate_inventory_save(data: Dictionary, version: int) -> Dictionary:
-	var keys: Array = {3: V3_KEYS, 4: V4_KEYS, 5: V5_KEYS, 6: V6_KEYS, 7: V7_KEYS}[version]
+	var keys: Array = {3: V3_KEYS, 4: V4_KEYS, 5: V5_KEYS, 6: V6_KEYS, 7: V7_KEYS, 8: V8_KEYS}[version]
 	if not _has_only_keys(data, keys) or not data.has_all(keys):
 		return {}
 	var location := PlayerLocation.new()
-	if version >= 4:
+	if version >= 8:
 		location = PlayerLocation.from_dict(data["location"])
+		if location == null:
+			return {}
+	elif version >= 4:
+		location = PlayerLocation.from_legacy_dict(data["location"])
 		if location == null:
 			return {}
 	var warehouses := WarehouseState.create_default()

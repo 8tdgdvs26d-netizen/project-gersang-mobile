@@ -80,7 +80,7 @@ func _verify_static() -> void:
 	for path in ["res://scripts/transport_service.gd", "res://scripts/main.gd", "res://scripts/city_hub.gd"]:
 		var code := _code_only(path)
 		_check(not code.contains("90000") and not code.contains("300"), "%s must not hard-code fares or durations" % path)
-	_check(SaveStore.VERSION == 7, "Save version must be 4+ with location (T01 bumped it to 5 for warehouses, T04 to 6 for market recovery, T05 to 7 for the cost ledger)")
+	_check(SaveStore.VERSION == 8, "Save version must be 4+ with location (T01 bumped it to 5 for warehouses, T04 to 6 for market recovery, T05 to 7 for the cost ledger, T06 to 8 for the exact world position)")
 	_sections_done.append("_verify_static")
 
 
@@ -261,6 +261,16 @@ func _verify_rollback() -> void:
 
 # --- Location validation --------------------------------------------------------------------------
 
+## The v8 location shape of a v4-v7 location: WORLD gets a valid exact world
+## position, every other mode world_position = null.
+func _current_shape(data: Variant) -> Variant:
+	if typeof(data) != TYPE_DICTIONARY:
+		return data
+	var current: Dictionary = data.duplicate(true)
+	current["world_position"] = {"x": 600.0, "y": 700.0} if typeof(data.get("mode")) == TYPE_STRING and data["mode"] == "WORLD" else null
+	return current
+
+
 func _verify_location_validation() -> void:
 	var journey := {"journey_id": "j1", "status": "traveling", "origin_city_id": "A", "destination_city_id": "B", "started_at_ms": T0, "arrives_at_ms": T0 + DURATION, "fare": FARE}
 	var valid := [
@@ -270,8 +280,11 @@ func _verify_location_validation() -> void:
 		{"mode": "TRAVELING", "city_id": "", "journey": journey, "last_journey_id": "j1"},
 		{"mode": "TRAVELING", "city_id": "", "journey": _with(journey, {"started_at_ms": float(T0), "arrives_at_ms": float(T0 + DURATION), "fare": 300.0}), "last_journey_id": "j1"},
 	]
+	# T06: these are the v4-v7 shape (legacy path); the v8 shape adds the exact
+	# world position. Every case is checked through both.
 	for data in valid:
-		_check(PlayerLocation.from_dict(data) != null, "Valid location must load: %s" % str(data))
+		_check(PlayerLocation.from_legacy_dict(data) != null, "Valid location must load: %s" % str(data))
+		_check(PlayerLocation.from_dict(_current_shape(data)) != null, "Valid v8 location must load: %s" % str(_current_shape(data)))
 	var corrupt := {
 		"not a dictionary": [1, 2],
 		"missing key": {"mode": "WORLD", "city_id": "", "journey": null},
@@ -310,7 +323,8 @@ func _verify_location_validation() -> void:
 		var last_id: String = bad_journey.get("journey_id", "j1") if typeof(bad_journey) == TYPE_DICTIONARY and typeof(bad_journey.get("journey_id")) == TYPE_STRING else "j1"
 		corrupt[label] = {"mode": "TRAVELING", "city_id": "", "journey": bad_journey, "last_journey_id": last_id}
 	for label in corrupt:
-		_check(PlayerLocation.from_dict(corrupt[label]) == null, "Corrupt location must be rejected (%s)" % label)
+		_check(PlayerLocation.from_legacy_dict(corrupt[label]) == null, "Corrupt location must be rejected (%s)" % label)
+		_check(PlayerLocation.from_dict(_current_shape(corrupt[label])) == null, "Corrupt v8 location must be rejected (%s)" % label)
 	# Transitions.
 	var location := PlayerLocation.new()
 	_check(location.is_in_world() and location.get_journey_status() == "none", "A new location is in the world")
@@ -338,7 +352,7 @@ func _verify_save_versions() -> void:
 		var loaded := SaveStore.load_session(TEST_SAVE)
 		_check(not loaded.is_empty() and loaded["wallet"].get_balance() == 7777 and loaded["inventory"].get_quantity("test_good_02") == 3, "%s save must load money and goods" % label)
 		var location: PlayerLocation = loaded.get("location")
-		_check(location != null and location.to_dict() == {"mode": "WORLD", "city_id": "", "journey": null, "last_journey_id": ""}, "%s save without a location must use the safe world default" % label)
+		_check(location != null and location.to_dict() == {"mode": "WORLD", "city_id": "", "journey": null, "last_journey_id": "", "world_position": {"x": 420.0, "y": 500.0}}, "%s save without a location must use the safe world default (T06: the default world spawn)" % label)
 		_check(_read(TEST_SAVE) == text, "Loading a %s save must not rewrite it" % label)
 
 	# v4 round trips for every mode.
@@ -348,6 +362,7 @@ func _verify_save_versions() -> void:
 		{"mode": "IN_CITY", "city_id": "B", "journey": null, "last_journey_id": ""},
 		{"mode": "TRAVELING", "city_id": "", "journey": journey, "last_journey_id": "j9"},
 	]:
+		data = _current_shape(data)
 		var location := PlayerLocation.from_dict(data)
 		_check(SaveStore.save(TEST_SAVE, _wallet_with(5000), CharacterInventory.new(), MarketState.create_default(), location), "v4 save must write (%s)" % data["mode"])
 		var raw := _read_json()
@@ -454,7 +469,7 @@ func _verify_game_flow() -> void:
 	_check(main.wallet.get_balance() == money_before - FARE, "Arrival must not change money")
 	_check(_goods_unchanged(main, stacks_before, used_before, max_before) and main.market.get_snapshot() == RecoveryModel.recovered_snapshot(market_before, RecoveryModel.steps_for_ms(DURATION)), "Arrival must not change goods, capacity or market (beyond T04 recovery for the 90 s ride)")
 	saved = _read_json()
-	_check(saved["location"] == {"mode": "IN_CITY", "city_id": "B", "journey": null, "last_journey_id": saved["location"]["last_journey_id"]} and saved["location"]["last_journey_id"] != "", "Arrival must be saved as inside City B with no journey")
+	_check(saved["location"] == {"mode": "IN_CITY", "city_id": "B", "journey": null, "last_journey_id": saved["location"]["last_journey_id"], "world_position": null} and saved["location"]["last_journey_id"] != "", "Arrival must be saved as inside City B with no journey")
 	_check(main.update_journey() == false and main.current_city_id == "B", "A settled journey must not settle again")
 	_check(main.request_transport("A", saved["location"]["last_journey_id"])["reason"] == "ERR_DUPLICATE_REQUEST" and main.current_city_id == "B", "The finished journey's request must not start B->A")
 	hub.show_facility("transport")
@@ -504,7 +519,7 @@ func _verify_return_point() -> void:
 	var player := main.get_node("Actors/Player") as Player
 	_check(player.global_position == WorldLayout.CITY_RETURN_POINTS["B"], "Leaving B must use the B return point")
 	_check(player.is_physics_processing() and (main.get_node("TouchControls/Joystick") as TouchJoystick).is_processing_input(), "Movement must resume in the world")
-	_check(_read_json()["location"] == {"mode": "WORLD", "city_id": "B", "journey": null, "last_journey_id": "to-b"}, "Leaving must save the world location with the B return context")
+	_check(_read_json()["location"] == {"mode": "WORLD", "city_id": "B", "journey": null, "last_journey_id": "to-b", "world_position": {"x": 39460.0, "y": 200.0}}, "Leaving must save the world location with the B return context (T06: at B's return point)")
 	await _destroy(main)
 	main = await _new_main(TEST_SAVE, T0 + DURATION * 2)
 	player = main.get_node("Actors/Player") as Player
@@ -605,7 +620,7 @@ func _verify_arrival_save_failure() -> void:
 	_check(main.current_city_id == "B" and not main.is_traveling() and (main.get_node("CityHub") as CityHub).get_city_label_text() == "【B 城】", "Reopening must settle the saved journey into City B")
 	_check(main.wallet.get_balance() == 10000 - FARE, "Settling on reopen must not charge again")
 	var settled := _read_json()
-	_check(settled["location"] == {"mode": "IN_CITY", "city_id": "B", "journey": null, "last_journey_id": "fragile"}, "The single settlement must be saved")
+	_check(settled["location"] == {"mode": "IN_CITY", "city_id": "B", "journey": null, "last_journey_id": "fragile", "world_position": null}, "The single settlement must be saved")
 	_check(main.request_transport("A", "fragile")["reason"] == "ERR_DUPLICATE_REQUEST" and main.wallet.get_balance() == 10000 - FARE, "The settled journey's request must not start another journey")
 	await _destroy(main)
 	var settled_text := _read(TEST_SAVE)
@@ -635,7 +650,7 @@ func _verify_arrival_save_failure() -> void:
 	main.time_source.advance_ms(main.ARRIVAL_RETRY_MS)
 	await process_frame
 	_check(main.current_city_id == "A" and arrivals == [["recover", "A"]], "Once saving works the journey arrives exactly once")
-	_check(_read_json()["location"] == {"mode": "IN_CITY", "city_id": "A", "journey": null, "last_journey_id": "recover"} and int(_read_json()["money"]) == 10000 - FARE, "The recovered arrival must be saved with one fare charged")
+	_check(_read_json()["location"] == {"mode": "IN_CITY", "city_id": "A", "journey": null, "last_journey_id": "recover", "world_position": null} and int(_read_json()["money"]) == 10000 - FARE, "The recovered arrival must be saved with one fare charged")
 	for extra in range(3):
 		main.time_source.advance_ms(main.ARRIVAL_RETRY_MS)
 		await process_frame
