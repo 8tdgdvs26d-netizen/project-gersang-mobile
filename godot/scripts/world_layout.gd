@@ -26,3 +26,9 @@ const CITY_RETURN_POINTS := {
 	"A": Vector2(540.0, 200.0),
 	"B": Vector2(39460.0, 200.0),
 }
+
+## World Threat WT01: the single prototype monster. Fixed identity and fixed
+## position (layout data, never random): near the default spawn and City A,
+## clear of both obstacles, City A's entry trigger and its return point.
+const PROTOTYPE_MONSTER_ID := "prototype_monster_01"
+const PROTOTYPE_MONSTER_POSITION := Vector2(720.0, 320.0)
