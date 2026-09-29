@@ -12,9 +12,13 @@ extends Node
 ##   valid contact -> context built, pending, monster held, encounter_triggered
 ##   while pending -> every further contact is ignored (no second trigger)
 ##   consume_pending_encounter() -> pending cleared, monster released
-## Nothing clears a pending encounter by itself. After the consume a new
-## trigger needs a new contact, i.e. the player and monster must separate and
-## touch again.
+##   cancel_pending_encounter()  -> recovery when the player leaves WORLD (city
+##                                  or travel): pending dropped, monster
+##                                  released and back at home, IDLE
+## Nothing else clears a pending encounter: it never times out, and it stays
+## pending while the player remains in WORLD (safe buffers included). After a
+## consume a new trigger needs a new contact, i.e. the player and monster must
+## separate and touch again.
 
 signal encounter_triggered(context: EncounterContext)
 
@@ -53,6 +57,20 @@ func consume_pending_encounter() -> EncounterContext:
 	if context != null:
 		_monster.set_hold(false)
 	return context
+
+
+## Recovery path, not a hand-back: the player left WORLD before any Encounter
+## System took the pending encounter. Drops it (no signal), releases the
+## monster and puts it back at home, IDLE. Safe no-op when nothing is pending.
+## Returns whether an encounter was cancelled.
+func cancel_pending_encounter() -> bool:
+	if _pending == null:
+		return false
+	print("Myrial: encounter cancelled ", _pending.encounter_id, " (left WORLD)")
+	_pending = null
+	_monster.set_hold(false)
+	_monster.reset_to_home()
+	return true
 
 
 func _on_player_contacted(monster_id: String) -> void:

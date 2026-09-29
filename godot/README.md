@@ -59,14 +59,19 @@ World Threat WT04: encounter trigger + context foundation.
   every zone) and `triggered_at_ms` (TimeSource)
 - pending latch: after a trigger the encounter stays pending and every further contact is
   ignored. Only `consume_pending_encounter()` (the future Encounter System's hand-back)
-  clears it; nothing clears it by itself. After a consume, a new trigger needs a new contact
-  (separate, then touch again)
+  clears it as a hand-back. After a consume, a new trigger needs a new contact (separate,
+  then touch again)
+- recovery (review fix): leaving WORLD (entering a city, or starting travel) calls
+  `cancel_pending_encounter()`: the pending encounter is dropped (no signal), the monster is
+  released and put back at home, IDLE. While the player stays in WORLD (safe buffers
+  included) nothing clears it: no timeout, no auto-consume
 - while pending the monster is held: its AI stands still in its current state and shows
   「遭遇觸發」. The monster only knows this neutral hold (`set_hold`); all encounter logic lives
   in the handoff. The consume releases it; it is never despawned, defeated or reset
 - no encounter screen, combat, rewards or mode change: the player keeps moving in WORLD.
-  Until an Encounter System exists nothing consumes the trigger in normal play, so after
-  one catch the monster stays held until the game is reloaded
+  Until an Encounter System exists nothing consumes the trigger in normal play: the monster
+  stays held until the player enters a city (or reloads); back in WORLD it can catch the
+  player again (a new `encounter_id`)
 - save version 8 unchanged; a reload starts with nothing pending
 - tests: `tests/verify_wt04_encounter_trigger.gd`. WT02's test hands each trigger straight
   back so its chase checks run with nothing pending

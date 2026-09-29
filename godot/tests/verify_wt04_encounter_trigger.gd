@@ -12,6 +12,9 @@ const HOME := Vector2(760.0, 650.0)
 const CITY_A := Vector2(200.0, 200.0)
 const FAR := Vector2(3000.0, 3000.0)
 const SAFE_SPOT := Vector2(560.0, 300.0)
+## In the zone, inside aggro range: the chase catches a player standing here
+## away from home, so a held monster is visibly off its home.
+const CATCH_SPOT := Vector2(900.0, 650.0)
 const CONTEXT_FIELDS := ["encounter_id", "monster_id", "player_world_position", "threat_zone_id", "trigger_world_position", "triggered_at_ms"]
 
 var _checks := 0
@@ -28,9 +31,10 @@ func _initialize() -> void:
 	await _verify_acceptance_flow()
 	await _verify_guards()
 	await _verify_world_only()
+	await _verify_recovery()
 	await _verify_save()
 	_delete(TEST_SAVE)
-	_check(_sections_done.size() == 5, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 6, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("WT04 encounter trigger verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -219,6 +223,76 @@ func _verify_world_only() -> void:
 	_sections_done.append("world_only")
 
 
+# --- Recovery: leaving WORLD cancels a pending encounter -----------------------------------------
+
+func _verify_recovery() -> void:
+	var main := await _new_main(TEST_SAVE, T0)
+	var monster := _monster(main)
+	var player := _player(main)
+	var handoff := _handoff(main)
+	_listen(main)
+	_check(not handoff.cancel_pending_encounter() and not handoff.has_pending_encounter() and monster.global_position == HOME and _states.is_empty() and _encounters.is_empty(), "Cancel with nothing pending is a safe no-op")
+	# Pending in WORLD, the monster held away from home.
+	var first := await _get_caught(player, 1)
+	_check(first != null and handoff.get_pending_encounter() == first and monster.is_held() and monster.global_position != HOME, "Valid contact: pending, the monster held off home")
+	var frozen := monster.global_position
+	await _frames(120)
+	_check(handoff.get_pending_encounter() == first and monster.is_held() and monster.global_position == frozen, "Staying in WORLD: still pending after 120 frames (no timeout)")
+	player.global_position = SAFE_SPOT
+	await _settle()
+	await _frames(60)
+	_check(WorldThreatZones.safe_buffer_city_at(player.global_position) == "A" and main.location.is_in_world() and handoff.get_pending_encounter() == first and monster.is_held() and monster.global_position == frozen, "Crossing into a safe buffer while in WORLD: still pending")
+	# WORLD -> IN_CITY: cancelled.
+	player.global_position = CITY_A
+	await _settle()
+	_check(main.try_enter_city() and main.location.is_in_city(), "Entered City A with an encounter pending")
+	_check(not handoff.has_pending_encounter() and handoff.get_pending_encounter() == null, "IN_CITY: the pending encounter is cleared")
+	_check(not monster.is_held() and (monster.get_node("StateLabel") as Label).text == "待機", "IN_CITY: the hold is released")
+	_check(monster.global_position == HOME and monster.get_state() == WorldMonster.State.IDLE and not monster.is_in_contact(), "IN_CITY: the monster is home, IDLE, no contact latched")
+	_check(_encounters.size() == 1, "Cancelling emits no trigger")
+	# Back in WORLD: aggro, chase and a new trigger with a new id.
+	_check(main.leave_city() and main.location.is_in_world(), "Back in WORLD")
+	_states.clear()
+	var second := await _get_caught(player, 2)
+	_check(_states.size() >= 1 and _states[0] == WorldMonster.State.CHASE, "After the city cancel: the monster aggroes again")
+	_check(second != null and second.encounter_id == "encounter_2" and second.encounter_id != first.encounter_id, "After the city cancel: a new trigger with a new id")
+	await _frames(60)
+	_check(_encounters.size() == 2 and handoff.get_pending_encounter() == second, "Duplicate prevention while pending still holds")
+	# WORLD -> TRAVELING: the location switches to the city in data only, so
+	# the view goes straight from the world to the travelling screen.
+	frozen = monster.global_position
+	_check(monster.is_held() and frozen != HOME, "Test setup: held off home again")
+	_check(main.location.enter_city("A") and main.request_transport("B", "wt04-recovery-ride")["success"] and main.is_traveling(), "WORLD view straight to TRAVELING")
+	_check(not handoff.has_pending_encounter(), "TRAVELING: the pending encounter is cleared")
+	_check(not monster.is_held(), "TRAVELING: the hold is released")
+	_check(monster.global_position == HOME and monster.get_state() == WorldMonster.State.IDLE and not monster.is_in_contact(), "TRAVELING: the monster is home, IDLE, no contact latched")
+	player.global_position = FAR
+	await _settle()
+	main.time_source.advance_ms(90000)
+	await process_frame
+	_check(main.current_city_id == "B" and main.leave_city() and main.location.is_in_world(), "Arrived in B and back in WORLD")
+	_states.clear()
+	var third := await _get_caught(player, 3)
+	_check(_states.size() >= 1 and _states[0] == WorldMonster.State.CHASE, "After the travel cancel: the monster aggroes again")
+	_check(third != null and third.encounter_id == "encounter_3" and third.encounter_id != second.encounter_id, "After the travel cancel: a new trigger with a new id")
+	# Consume is separate from cancel: it releases in place.
+	var held_at := monster.global_position
+	_check(handoff.consume_pending_encounter() == third and not monster.is_held() and monster.global_position == held_at and monster.get_state() == WorldMonster.State.CHASE, "Consume still hands back in place (no reset)")
+	# The cancel API itself resets the monster, even without a mode change.
+	player.global_position = FAR
+	await _settle()
+	_check(not monster.is_in_contact(), "Test setup: separated")
+	_check(await _get_caught(player, 4) != null and monster.is_held(), "Test setup: caught again")
+	player.global_position = FAR
+	await _settle()
+	_check(handoff.cancel_pending_encounter() and not handoff.has_pending_encounter() and not monster.is_held() and monster.global_position == HOME and monster.get_state() == WorldMonster.State.IDLE, "cancel_pending_encounter(): released, home, IDLE")
+	await _frames(30)
+	_check(_encounters.size() == 4 and not monster.is_in_contact() and monster.global_position == HOME, "After the cancel: quiet, nothing latched")
+	await _destroy(main)
+	_delete(TEST_SAVE)
+	_sections_done.append("recovery")
+
+
 # --- Save ----------------------------------------------------------------------------------------
 
 func _verify_save() -> void:
@@ -259,6 +333,16 @@ func _listen(main: Node) -> void:
 	_monster(main).player_contacted.connect(func(id: String) -> void: _events.append(id))
 	_monster(main).state_changed.connect(func(_id: String, state: int) -> void: _states.append(state))
 	_handoff(main).encounter_triggered.connect(func(context: EncounterContext) -> void: _encounters.append(context))
+
+
+## Stands the player at CATCH_SPOT until the chase makes trigger number `count`.
+func _get_caught(player: Player, count: int) -> EncounterContext:
+	player.global_position = CATCH_SPOT
+	var frames := 0
+	while _encounters.size() < count and frames < 300:
+		await physics_frame
+		frames += 1
+	return _encounters[count - 1] as EncounterContext if _encounters.size() >= count else null
 
 
 ## Holds a move action for physics frames until `done` or 300 frames.

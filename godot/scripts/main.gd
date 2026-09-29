@@ -475,4 +475,8 @@ func _set_world_active(active: bool) -> void:
 	_joystick.set_process_input(active)
 	_player.velocity = Vector2.ZERO
 	_player.set_physics_process(active)
+	if not active:
+		# WT04 recovery: leaving WORLD (city or travel) cancels an encounter
+		# no Encounter System has taken yet.
+		_encounter_handoff.cancel_pending_encounter()
 	_prototype_monster.set_threat_active(active)
