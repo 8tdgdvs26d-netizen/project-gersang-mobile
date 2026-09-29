@@ -66,7 +66,8 @@ var _last_world_autosave_ms := 0
 @onready var _joystick := $TouchControls/Joystick as TouchJoystick
 @onready var _city_hub := $CityHub as CityHub
 @onready var _enter_city_button := $EnterControls/EnterCityButton as Button
-## World Threat WT01: the one prototype monster (contact only, WORLD mode only).
+## World Threat: the one prototype monster (WT01 contact, WT02 aggro / chase /
+## disengage). Active in WORLD mode only; never saved.
 @onready var _prototype_monster := $Actors/PrototypeMonster as WorldMonster
 
 
@@ -84,6 +85,7 @@ func _ready() -> void:
 	_city_hub.warehouse_city_selected.connect(_on_warehouse_city_selected)
 	_city_hub.facility_changed.connect(_on_hub_facility_changed)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
+	_prototype_monster.set_chase_target(_player)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
 	# save: the saved anchor + stock rebuild the same result on every reload.
 	update_market_recovery(false)

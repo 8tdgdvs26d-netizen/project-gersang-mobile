@@ -7,7 +7,7 @@ extends SceneTree
 const TEST_SAVE := "user://wt01_visible_monster_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
-const MONSTER_POS := Vector2(720.0, 320.0)
+const MONSTER_POS := Vector2(760.0, 650.0)
 const CONTACT_RADIUS := 48.0
 const PLAYER_SIZE := Vector2(32, 48)
 const PLAYER_OFFSET := Vector2(0, -24)
@@ -44,7 +44,9 @@ func _verify_static() -> void:
 	for unrelated in ["trade_service", "warehouse_service", "warehouse_state", "market_state", "market_rules", "transport_service", "save_store", "city_hub", "trade_cost_ledger", "player_location"]:
 		var code := _code_only("res://scripts/%s.gd" % unrelated).to_lower()
 		_check(not code.contains("monster") and not code.contains("threat"), "No world-threat logic in %s" % unrelated)
-	for word in ["patrol", "aggro", "chase", "leash", "encounter", "combat", "damage", "health", "respawn", "loot"]:
+	# WT02 brought aggro / chase / leash into scope (verify_wt02_aggro_chase);
+	# everything else stays out.
+	for word in ["patrol", "encounter", "combat", "damage", "health", "respawn", "loot"]:
 		_check(not script.to_lower().contains(word), "No out-of-scope behaviour in the monster (%s)" % word)
 	_check(SaveStore.VERSION == 8, "No save schema change (still version 8)")
 	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
@@ -106,15 +108,20 @@ func _verify_position() -> void:
 		_check(MONSTER_POS.clamp(player_rect.position, player_rect.end).distance_to(MONSTER_POS) > CONTACT_RADIUS + 40.0, "A player at City %s's return point is well clear of the contact area" % city)
 	_check(MONSTER_POS.distance_to(PlayerLocation.DEFAULT_WORLD_SPAWN) < 600.0, "Close to the spawn for development testing")
 	# Reachable by normal movement: walk from the spawn with the move actions.
+	# WT02: without a chase target the monster stays at home, so this checks
+	# the static layout exactly as WT01 did (the chase is covered by WT02).
+	monster.set_chase_target(null)
 	_events.clear()
 	monster.player_contacted.connect(_on_contact)
 	var player := _player(main)
 	_check(player.global_position == PlayerLocation.DEFAULT_WORLD_SPAWN, "New game starts at the spawn (%s)" % player.global_position)
-	var frames := await _walk(player, "move_right", func() -> bool: return player.global_position.x >= MONSTER_POS.x)
-	_check(frames < 300 and absf(player.global_position.y - 500.0) < 1.0, "Walked right from the spawn unobstructed (%d frames)" % frames)
-	frames = await _walk(player, "move_up", func() -> bool: return _events.size() > 0)
-	_check(frames < 300 and _events == [MONSTER_ID], "Walking up reaches the monster and makes contact (%d frames, %s)" % [frames, str(_events)])
-	frames = await _walk(player, "move_up", func() -> bool: return player.global_position.y < MONSTER_POS.y - 150.0)
+	# WT02 review: the monster moved from (720, 320) to (760, 650), so the walk
+	# is now down, then right (was right, then up).
+	var frames := await _walk(player, "move_down", func() -> bool: return player.global_position.y >= MONSTER_POS.y)
+	_check(frames < 300 and absf(player.global_position.x - PlayerLocation.DEFAULT_WORLD_SPAWN.x) < 1.0, "Walked down from the spawn unobstructed (%d frames)" % frames)
+	frames = await _walk(player, "move_right", func() -> bool: return _events.size() > 0)
+	_check(frames < 300 and _events == [MONSTER_ID], "Walking right reaches the monster and makes contact (%d frames, %s)" % [frames, str(_events)])
+	frames = await _walk(player, "move_right", func() -> bool: return player.global_position.x > MONSTER_POS.x + 150.0)
 	_check(frames < 300 and _events.size() == 1 and not monster.is_in_contact(), "The player walks through and away normally; still one event")
 	await _destroy(main)
 	_delete(TEST_SAVE)
@@ -127,6 +134,9 @@ func _verify_contact_lifecycle() -> void:
 	var main := await _new_main("")
 	var monster := _monster(main)
 	var player := _player(main)
+	# WT02: contact geometry against a stationary monster (no chase target);
+	# contact while chasing is covered by WT02.
+	monster.set_chase_target(null)
 	_events.clear()
 	monster.player_contacted.connect(_on_contact)
 	player.global_position = FAR

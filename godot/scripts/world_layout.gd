@@ -27,8 +27,11 @@ const CITY_RETURN_POINTS := {
 	"B": Vector2(39460.0, 200.0),
 }
 
-## World Threat WT01: the single prototype monster. Fixed identity and fixed
-## position (layout data, never random): near the default spawn and City A,
-## clear of both obstacles, City A's entry trigger and its return point.
+## World Threat: the single prototype monster. Fixed identity and fixed home
+## (layout data, never random). WT02 review: a stand-in low-level threat spot
+## away from City A's exit, a short walk from the default spawn (372 px),
+## between the two obstacles and never straight behind one (so returning home
+## can always slide around them). Every city return point stays far outside
+## its aggro radius (City A's: 501 px), so leaving a city never starts a chase.
 const PROTOTYPE_MONSTER_ID := "prototype_monster_01"
-const PROTOTYPE_MONSTER_POSITION := Vector2(720.0, 320.0)
+const PROTOTYPE_MONSTER_POSITION := Vector2(760.0, 650.0)
