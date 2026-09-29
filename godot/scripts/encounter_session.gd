@@ -16,6 +16,11 @@ extends Node
 ## and unlocks the player. Before Combat exists, a LOCKED encounter is ended by
 ## the temporary prototype_end_encounter() (button 「返回世界（原型）」). Nothing
 ## here is saved: a reload starts with no encounter and no lock.
+##
+## E02: while JOINING, other World Enemy Groups whose aggro radius holds the
+## player join through EncounterHandoff.join_groups_in_range() (up to 3; never
+## after LOCKED). Joining never resets or extends the window. From 2 groups on
+## the overlay adds 「敵軍加入 ×N」.
 
 signal phase_changed(phase: int)
 
@@ -24,6 +29,7 @@ enum Phase { NONE, JOINING, LOCKED }
 const JOIN_WINDOW_MS := 5000
 const JOINING_TEXT := "遭遇準備 %.1f..."
 const LOCKED_TEXT := "遭遇鎖定"
+const GROUPS_TEXT := "敵軍加入 ×%d"
 ## TEMPORARY (pre-Combat) recovery button, shown only while LOCKED.
 const PROTOTYPE_END_TEXT := "返回世界（原型）"
 
@@ -39,6 +45,7 @@ var _context: EncounterContext
 var _layer: CanvasLayer
 var _status_label: Label
 var _end_button: Button
+var _groups_label: Label
 
 
 func _ready() -> void:
@@ -59,6 +66,12 @@ func _ready() -> void:
 	_status_label.add_theme_font_size_override("font_size", 34)
 	_status_label.add_theme_color_override("font_color", Color(0.95, 0.8, 0.45, 1.0))
 	box.add_child(_status_label)
+	_groups_label = Label.new()
+	_groups_label.name = "GroupsLabel"
+	_groups_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_groups_label.add_theme_font_size_override("font_size", 28)
+	_groups_label.add_theme_color_override("font_color", Color(0.95, 0.45, 0.35, 1.0))
+	box.add_child(_groups_label)
 	_end_button = Button.new()
 	_end_button.name = "PrototypeEndButton"
 	_end_button.text = PROTOTYPE_END_TEXT
@@ -121,6 +134,7 @@ func _process(_delta: float) -> void:
 		if get_remaining_ms() == 0:
 			_set_phase(Phase.LOCKED)
 		else:
+			_handoff.join_groups_in_range()
 			_refresh_ui()
 
 
@@ -159,4 +173,7 @@ func _refresh_ui() -> void:
 		_:
 			_status_label.text = ""
 	_status_label.visible = _phase != Phase.NONE
+	var groups := _context.get_group_count() if _context != null else 0
+	_groups_label.text = GROUPS_TEXT % groups if groups >= 2 else ""
+	_groups_label.visible = _phase != Phase.NONE and groups >= 2
 	_end_button.visible = _phase == Phase.LOCKED

@@ -45,6 +45,12 @@ rotation = 1.5708
 
 [node name="PrototypeMonster" parent="Actors" instance=ExtResource("9_monster")]
 
+[node name="PrototypeMonster2" parent="Actors" instance=ExtResource("9_monster")]
+group_index = 1
+
+[node name="PrototypeMonster3" parent="Actors" instance=ExtResource("9_monster")]
+group_index = 2
+
 [node name="Player" parent="Actors" instance=ExtResource("2_player")]
 position = Vector2(420, 500)
 touch_joystick_path = NodePath("../../TouchControls/Joystick")

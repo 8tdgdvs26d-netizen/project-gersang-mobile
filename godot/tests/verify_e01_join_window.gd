@@ -45,10 +45,10 @@ func _verify_static() -> void:
 	var lower := code.to_lower()
 	for word in ["body_entered", "overlaps_body", "player_contacted", "area2d"]:
 		_check(not lower.contains(word), "No contact detection of its own (%s)" % word)
-	for word in ["combat", "battle", "damage", "hp ", "health", "reward", "loot", "retreat", "group", "hostile", "passive", "aggressive", "time.", "os.", "save"]:
+	for word in ["combat", "battle", "damage", "hp ", "health", "reward", "loot", "retreat", "hostile", "passive", "aggressive", "time.", "os.", "save"]:
 		_check(not lower.contains(word), "Not in E01: %s" % word)
-	for path in ["res://scripts/encounter_handoff.gd", "res://scripts/world_monster.gd"]:
-		_check(not _code_only(path).to_lower().contains("group"), "No enemy-group / multi-group logic in %s" % path.get_file())
+	# E02 brought World Enemy Groups / multi-group join into scope
+	# (verify_e02_multi_group).
 	_check(not _code_only("res://scripts/save_store.gd").to_lower().contains("encounter"), "The save format knows nothing about encounters")
 	_check(SaveStore.VERSION == 8, "Save version still 8")
 	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
@@ -205,6 +205,7 @@ func _verify_reload() -> void:
 		_check(int(JSON.parse_string(text)["version"]) == 8 and not lower.contains("encounter") and not lower.contains("joining") and not lower.contains("locked") and not lower.contains("monster"), "Save version 8; no encounter state saved")
 		await _destroy(main)
 		main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+		_single_group(main)
 		main.save_path = TEST_SAVE
 		main.time_source = TimeSource.fixed(T0 + 10000)
 		root.add_child(main)
@@ -304,6 +305,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
@@ -328,6 +330,14 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## E02: only World Enemy Group 1 (groups 2 and 3 removed before the scene
+## starts): the one-group world these checks were written for;
+## verify_e02_multi_group covers all three groups.
+func _single_group(main: Node) -> void:
+	for extra in ["Actors/PrototypeMonster2", "Actors/PrototypeMonster3"]:
+		main.get_node(extra).free()
 
 
 func _check(condition: bool, message: String) -> void:

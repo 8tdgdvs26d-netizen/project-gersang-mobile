@@ -45,3 +45,23 @@ const PROTOTYPE_MONSTER_PATROL := [
 	Vector2(700.0, 720.0),
 	Vector2(760.0, 650.0),
 ]
+
+## Encounter E02: the three prototype World Enemy Groups (one monster each),
+## all in low_threat_zone_01. Group 1 is the WT01–WT05 monster; groups 2 and 3
+## use the same loop shape, shifted. The homes form a ~260 px triangle so the
+## player can deliberately meet one group (west of group 1), two (north,
+## between groups 1 and 2, out of group 3's reach) or all three (the middle).
+## No group's aggro reaches the new-game spawn or a city return point.
+const PROTOTYPE_GROUPS := [
+	{"id": PROTOTYPE_MONSTER_ID, "home": PROTOTYPE_MONSTER_POSITION, "patrol": PROTOTYPE_MONSTER_PATROL},
+	{
+		"id": "prototype_monster_02",
+		"home": Vector2(1020.0, 650.0),
+		"patrol": [Vector2(1120.0, 610.0), Vector2(1120.0, 720.0), Vector2(960.0, 720.0), Vector2(1020.0, 650.0)],
+	},
+	{
+		"id": "prototype_monster_03",
+		"home": Vector2(890.0, 860.0),
+		"patrol": [Vector2(990.0, 820.0), Vector2(990.0, 930.0), Vector2(830.0, 930.0), Vector2(890.0, 860.0)],
+	},
+]

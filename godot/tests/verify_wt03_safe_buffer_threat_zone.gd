@@ -7,7 +7,9 @@ extends SceneTree
 const TEST_SAVE := "user://wt03_safe_buffer_test_save.json"
 const T0 := 1800000000000
 const ZONE_ID := "low_threat_zone_01"
-const ZONE := Rect2(560.0, 450.0, 440.0, 400.0)
+## E02 grew the zone east and south (was Rect2(560, 450, 440, 400)); the
+## corner nearest City A is unchanged.
+const ZONE := Rect2(560.0, 450.0, 680.0, 580.0)
 const SAFE_RADIUS := 420.0
 const HOME := Vector2(760.0, 650.0)
 const CITY_A := Vector2(200.0, 200.0)
@@ -270,6 +272,7 @@ func _verify_save() -> void:
 		_check(not lower.contains("zone") and not lower.contains("safe") and not lower.contains("threat") and not lower.contains("monster"), "No zone, safety or monster data is saved")
 		await _destroy(main)
 		main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+		_single_group(main)
 		_no_patrol(main)
 		main.save_path = TEST_SAVE
 		main.time_source = TimeSource.fixed(T0)
@@ -347,6 +350,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	_no_patrol(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
@@ -378,6 +382,14 @@ func _settle() -> void:
 ## premise these checks were written for; verify_wt05_patrol covers patrol.
 func _no_patrol(main: Node) -> void:
 	(main.get_node("Actors/PrototypeMonster") as WorldMonster).patrol_points = []
+
+
+## E02: only World Enemy Group 1 (groups 2 and 3 removed before the scene
+## starts): the one-group world these checks were written for;
+## verify_e02_multi_group covers all three groups.
+func _single_group(main: Node) -> void:
+	for extra in ["Actors/PrototypeMonster2", "Actors/PrototypeMonster3"]:
+		main.get_node(extra).free()
 
 
 func _check(condition: bool, message: String) -> void:

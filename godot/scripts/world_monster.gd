@@ -61,6 +61,16 @@ const PATROL_TEXT := "巡邏"
 ## Shown while held for a pending handoff (WT04).
 const HOLD_TEXT := "遭遇觸發"
 
+## E02: which prototype World Enemy Group this monster is (index into
+## WorldLayout.PROTOTYPE_GROUPS); setting it takes that group's id, home and
+## patrol loop. Group 0 (the default) is the WT01–WT05 monster.
+@export_range(0, 2) var group_index := 0:
+	set(value):
+		group_index = value
+		var group: Dictionary = WorldLayout.PROTOTYPE_GROUPS[value]
+		monster_id = group["id"]
+		home_position = group["home"]
+		patrol_points = (group["patrol"] as Array).duplicate()
 var monster_id := WorldLayout.PROTOTYPE_MONSTER_ID
 var home_position := WorldLayout.PROTOTYPE_MONSTER_POSITION
 ## The patrol loop (world positions), walked in order while IDLE.

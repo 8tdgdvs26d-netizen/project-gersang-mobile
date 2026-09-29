@@ -6,23 +6,33 @@ extends Node
 ## Encounter System takes it. It starts no encounter, combat or UI, and
 ## changes no player / world state. Nothing here is saved.
 ##
-## Valid contact: the watched monster reports contact with its own id, it is
+## Valid contact: a watched monster reports contact with its own id, it is
 ## active, the player is in WORLD, outside every city safe buffer, and really
 ## overlaps the monster. Lifecycle:
 ##   valid contact -> context built, pending, monster held, encounter_triggered
 ##   while pending -> every further contact is ignored (no second trigger)
-##   consume_pending_encounter() -> pending cleared, monster released
+##   consume_pending_encounter() -> pending cleared, every group released
 ##   cancel_pending_encounter()  -> recovery when the player leaves WORLD (city
-##                                  or travel): pending dropped, monster
+##                                  or travel): pending dropped, every group
 ##                                  released and back at home, IDLE
 ## Nothing else clears a pending encounter: it never times out, and it stays
 ## pending while the player remains in WORLD (safe buffers included). After a
 ## consume a new trigger needs a new contact, i.e. the player and monster must
 ## separate and touch again.
+##
+## E02: every prototype World Enemy Group (monster) is watched; the one that
+## catches the player is the primary group. join_groups_in_range() (called by
+## the EncounterSession during its join window only) adds other groups whose
+## aggro radius holds the player, up to MAX_GROUPS, without a new trigger,
+## id or timestamp. Joined groups are held like the primary group.
 
 signal encounter_triggered(context: EncounterContext)
+signal group_joined(context: EncounterContext, monster_id: String)
 
-var _monster: WorldMonster
+## At most this many World Enemy Groups take part in one encounter.
+const MAX_GROUPS := 3
+
+var _monsters := {}
 var _player: Node2D
 var _is_world := Callable()
 var _time_source: TimeSource
@@ -30,14 +40,15 @@ var _pending: EncounterContext
 var _sequence := 0
 
 
-## Starts watching `monster` for contacts with `player`. `is_world` answers
-## whether the player is in WORLD mode.
-func watch(monster: WorldMonster, player: Node2D, is_world: Callable, time_source: TimeSource) -> void:
-	_monster = monster
+## Starts watching `monsters` (the World Enemy Groups) for contacts with
+## `player`. `is_world` answers whether the player is in WORLD mode.
+func watch(monsters: Array, player: Node2D, is_world: Callable, time_source: TimeSource) -> void:
 	_player = player
 	_is_world = is_world
 	_time_source = time_source
-	_monster.player_contacted.connect(_on_player_contacted)
+	for monster in monsters:
+		_monsters[(monster as WorldMonster).monster_id] = monster
+		monster.player_contacted.connect(_on_player_contacted)
 
 
 func has_pending_encounter() -> bool:
@@ -50,49 +61,89 @@ func get_pending_encounter() -> EncounterContext:
 
 
 ## The Encounter System's hand-back: returns the pending context (null when
-## none), clears it and releases the monster.
+## none), clears it and releases every group taking part.
 func consume_pending_encounter() -> EncounterContext:
 	var context := _pending
 	_pending = null
 	if context != null:
-		_monster.set_hold(false)
+		for monster in _participants(context):
+			monster.set_hold(false)
 	return context
 
 
 ## Recovery path, not a hand-back: the player left WORLD before any Encounter
-## System took the pending encounter. Drops it (no signal), releases the
-## monster and puts it back at home, IDLE. Safe no-op when nothing is pending.
-## Returns whether an encounter was cancelled.
+## System took the pending encounter. Drops it (no signal), releases every
+## group taking part and puts each back at home, IDLE. Safe no-op when nothing
+## is pending. Returns whether an encounter was cancelled.
 func cancel_pending_encounter() -> bool:
 	if _pending == null:
 		return false
 	print("Myrial: encounter cancelled ", _pending.encounter_id, " (left WORLD)")
+	var participants := _participants(_pending)
 	_pending = null
-	_monster.set_hold(false)
-	_monster.reset_to_home()
+	for monster in participants:
+		monster.set_hold(false)
+		monster.reset_to_home()
 	return true
+
+
+## E02: adds every other group whose aggro radius holds the player (active,
+## player in WORLD and outside every safe buffer), in the order they qualify,
+## until MAX_GROUPS take part. Returns how many joined now.
+func join_groups_in_range() -> int:
+	if _pending == null or not _is_world.call():
+		return 0
+	if WorldThreatZones.is_in_city_safe_buffer(_player.global_position):
+		return 0
+	var joined := 0
+	for monster_id in _monsters:
+		if _pending.group_monster_ids.size() >= MAX_GROUPS:
+			break
+		if not is_instance_valid(_monsters[monster_id]):
+			continue
+		var monster := _monsters[monster_id] as WorldMonster
+		if monster_id in _pending.group_monster_ids or not monster.is_threat_active():
+			continue
+		if monster.global_position.distance_to(_player.global_position) > WorldMonster.AGGRO_RADIUS:
+			continue
+		_pending.group_monster_ids.append(monster_id)
+		monster.set_hold(true)
+		joined += 1
+		print("Myrial: group ", monster_id, " joined ", _pending.encounter_id, " (", _pending.group_monster_ids.size(), " groups)")
+		group_joined.emit(_pending, monster_id)
+	return joined
+
+
+func _participants(context: EncounterContext) -> Array:
+	var monsters := []
+	for monster_id in context.group_monster_ids:
+		if _monsters.has(monster_id) and is_instance_valid(_monsters[monster_id]):
+			monsters.append(_monsters[monster_id])
+	return monsters
 
 
 func _on_player_contacted(monster_id: String) -> void:
 	if _pending != null:
 		return
-	if monster_id == "" or monster_id != _monster.monster_id:
+	if monster_id == "" or not _monsters.has(monster_id):
 		return
-	if not _monster.is_threat_active() or not _is_world.call():
+	var monster := _monsters[monster_id] as WorldMonster
+	if not monster.is_threat_active() or not _is_world.call():
 		return
 	if WorldThreatZones.is_in_city_safe_buffer(_player.global_position):
 		return
-	if not (_player is PhysicsBody2D and _monster.overlaps_body(_player)):
+	if not (_player is PhysicsBody2D and monster.overlaps_body(_player)):
 		return
 	_sequence += 1
 	var context := EncounterContext.new()
 	context.encounter_id = "encounter_%d" % _sequence
 	context.monster_id = monster_id
-	context.trigger_world_position = _monster.global_position
+	context.group_monster_ids.append(monster_id)
+	context.trigger_world_position = monster.global_position
 	context.player_world_position = _player.global_position
 	context.threat_zone_id = WorldThreatZones.threat_zone_at(_player.global_position)
 	context.triggered_at_ms = _time_source.now_ms()
 	_pending = context
-	_monster.set_hold(true)
+	monster.set_hold(true)
 	print("Myrial: encounter triggered ", context.encounter_id, " by ", monster_id, " in '", context.threat_zone_id, "'")
 	encounter_triggered.emit(context)

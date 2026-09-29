@@ -347,6 +347,7 @@ func _verify_save() -> void:
 	_check(not lower.contains("monster") and not lower.contains("threat") and not lower.contains("chase") and not lower.contains("aggro"), "No monster state, position or timer is saved")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	_no_patrol(main)
 	_no_join_window(main)
 	main.save_path = TEST_SAVE
@@ -450,6 +451,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	_no_patrol(main)
 	_no_join_window(main)
 	main.save_path = path
@@ -493,6 +495,14 @@ func _no_patrol(main: Node) -> void:
 ## checks were written for; verify_e01_join_window covers the lock.
 func _no_join_window(main: Node) -> void:
 	(main.get_node("EncounterSession") as EncounterSession).enabled = false
+
+
+## E02: only World Enemy Group 1 (groups 2 and 3 removed before the scene
+## starts): the one-group world these checks were written for;
+## verify_e02_multi_group covers all three groups.
+func _single_group(main: Node) -> void:
+	for extra in ["Actors/PrototypeMonster2", "Actors/PrototypeMonster3"]:
+		main.get_node(extra).free()
 
 
 func _check(condition: bool, message: String) -> void:

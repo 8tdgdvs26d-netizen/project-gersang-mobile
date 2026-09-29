@@ -318,6 +318,7 @@ func _verify_reload() -> void:
 	await _destroy(main)
 	var reference := await _patrol_track("", 200)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
@@ -340,6 +341,7 @@ func _verify_reload() -> void:
 ## main scene is added (player far away).
 func _patrol_track(path: String, frames: int) -> Array:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
@@ -408,6 +410,7 @@ func _code_only(path: String) -> String:
 ## `settle` false keeps the monster exactly at its start (no physics frames).
 func _new_main(path: String, now: int = T0, settle := true) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
@@ -433,6 +436,14 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## E02: only World Enemy Group 1 (groups 2 and 3 removed before the scene
+## starts): the one-group world these checks were written for;
+## verify_e02_multi_group covers all three groups.
+func _single_group(main: Node) -> void:
+	for extra in ["Actors/PrototypeMonster2", "Actors/PrototypeMonster3"]:
+		main.get_node(extra).free()
 
 
 func _check(condition: bool, message: String) -> void:
