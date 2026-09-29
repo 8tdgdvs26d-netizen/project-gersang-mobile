@@ -7,6 +7,10 @@ extends CharacterBody2D
 const BOUNDARY_MIN_OFFSET := Vector2(16.0, 48.0)
 const BOUNDARY_MAX_OFFSET := Vector2(16.0, 0.0)
 
+## Encounter E01: true during an encounter's join window / lock. Keyboard and
+## touch input are both ignored and the player stands still.
+var movement_locked := false
+
 var _touch_joystick: TouchJoystick
 
 
@@ -16,6 +20,9 @@ func _ready() -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	if movement_locked:
+		velocity = Vector2.ZERO
+		return
 	velocity = get_movement_direction() * move_speed
 	move_and_slide()
 	_clamp_to_world_boundary()

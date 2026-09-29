@@ -47,7 +47,30 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-World Threat WT05: minimal patrol foundation.
+Encounter E01: join window & lock foundation.
+
+- `EncounterSession` (new node in the main scene) follows the WT04 `EncounterHandoff`: it does
+  no contact detection and keeps the handoff's pending `EncounterContext` as the one active
+  encounter. Phases: NONE → JOINING → LOCKED
+- JOINING starts once, at the first catch (`triggered_at_ms`), and lasts exactly 5000 ms on the
+  TimeSource. The player cannot move (keyboard or joystick: `Player.movement_locked`) and
+  cannot escape; the WT04 hold keeps the monster frozen. The overlay counts down
+  「遭遇準備 5.0...」 … 「遭遇準備 0.1...」 (rounded up to tenths, never below 0); a second trigger
+  never starts another encounter or resets the timer
+- at 5000 ms: LOCKED, 「遭遇鎖定」. No combat, no rewards; `get_context()` still carries the full
+  context for the future Combat System
+- TEMPORARY, pre-Combat: while LOCKED a 「返回世界（原型）」 button (`prototype_end_encounter()`)
+  ends the encounter through the WT04 recovery (monster home, IDLE, patrol restarted) and
+  unlocks the player; refused during JOINING. No result of any kind
+- leaving WORLD (city, travel) during JOINING or LOCKED cancels it the same way
+  (`cancel_for_world_exit()`); nothing is saved (save version 8), a reload starts with no
+  encounter and no lock
+- only the one existing monster; no multi-group join, combat, retreat or aggression types
+- tests: `tests/verify_e01_join_window.gd`. The WT01, WT02 and WT04 tests run with the join
+  window off (`EncounterSession.enabled = false`): they were written for a caught player who
+  keeps moving; E01 covers the lock
+
+Previous: World Threat WT05: minimal patrol foundation.
 
 - the one monster no longer stands still: while IDLE it walks a fixed loop (「巡邏」)
   home (760, 650) → (860, 610) → (860, 720) → (700, 720) → home, at 60 px/s (chase stays

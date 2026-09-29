@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
@@ -11,6 +11,7 @@
 [ext_resource type="PackedScene" path="res://scenes/world_monster.tscn" id="9_monster"]
 [ext_resource type="Script" path="res://scripts/threat_zone_overlay.gd" id="10_zones"]
 [ext_resource type="Script" path="res://scripts/encounter_handoff.gd" id="11_encounter"]
+[ext_resource type="Script" path="res://scripts/encounter_session.gd" id="12_session"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -50,6 +51,9 @@ touch_joystick_path = NodePath("../../TouchControls/Joystick")
 
 [node name="EncounterHandoff" type="Node" parent="."]
 script = ExtResource("11_encounter")
+
+[node name="EncounterSession" type="Node" parent="."]
+script = ExtResource("12_session")
 
 [node name="TouchControls" parent="." instance=ExtResource("5_joystick")]
 

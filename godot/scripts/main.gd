@@ -72,6 +72,9 @@ var _last_world_autosave_ms := 0
 ## World Threat WT04: turns the monster's valid contact into one pending
 ## Encounter Trigger + context for the future Encounter System.
 @onready var _encounter_handoff := $EncounterHandoff as EncounterHandoff
+## Encounter E01: the 5 s join window (player locked) and LOCKED phase that
+## follow each trigger.
+@onready var _encounter_session := $EncounterSession as EncounterSession
 
 
 func _ready() -> void:
@@ -90,6 +93,7 @@ func _ready() -> void:
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	_prototype_monster.set_chase_target(_player)
 	_encounter_handoff.watch(_prototype_monster, _player, func() -> bool: return location.is_in_world(), time_source)
+	_encounter_session.watch(_encounter_handoff, _player, time_source)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
 	# save: the saved anchor + stock rebuild the same result on every reload.
 	update_market_recovery(false)
@@ -477,6 +481,6 @@ func _set_world_active(active: bool) -> void:
 	_player.set_physics_process(active)
 	if not active:
 		# WT04 recovery: leaving WORLD (city or travel) cancels an encounter
-		# no Encounter System has taken yet.
-		_encounter_handoff.cancel_pending_encounter()
+		# no Encounter System has taken yet (E01: its join window / lock too).
+		_encounter_session.cancel_for_world_exit()
 	_prototype_monster.set_threat_active(active)

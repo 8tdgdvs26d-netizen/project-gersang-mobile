@@ -259,6 +259,7 @@ func _verify_world_position_unchanged() -> void:
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_no_patrol(main)
+	_no_join_window(main)
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0)
 	_events.clear()
@@ -310,6 +311,7 @@ func _code_only(path: String) -> String:
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_no_patrol(main)
+	_no_join_window(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
@@ -346,6 +348,12 @@ func _settle() -> void:
 ## premise these checks were written for; verify_wt05_patrol covers patrol.
 func _no_patrol(main: Node) -> void:
 	(main.get_node("Actors/PrototypeMonster") as WorldMonster).patrol_points = []
+
+
+## E01: no join window: a caught player keeps moving, the premise these
+## checks were written for; verify_e01_join_window covers the lock.
+func _no_join_window(main: Node) -> void:
+	(main.get_node("EncounterSession") as EncounterSession).enabled = false
 
 
 func _check(condition: bool, message: String) -> void:
