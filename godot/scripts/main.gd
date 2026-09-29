@@ -69,6 +69,9 @@ var _last_world_autosave_ms := 0
 ## World Threat: the one prototype monster (WT01 contact, WT02 aggro / chase /
 ## disengage). Active in WORLD mode only; never saved.
 @onready var _prototype_monster := $Actors/PrototypeMonster as WorldMonster
+## World Threat WT04: turns the monster's valid contact into one pending
+## Encounter Trigger + context for the future Encounter System.
+@onready var _encounter_handoff := $EncounterHandoff as EncounterHandoff
 
 
 func _ready() -> void:
@@ -86,6 +89,7 @@ func _ready() -> void:
 	_city_hub.facility_changed.connect(_on_hub_facility_changed)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	_prototype_monster.set_chase_target(_player)
+	_encounter_handoff.watch(_prototype_monster, _player, func() -> bool: return location.is_in_world(), time_source)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
 	# save: the saved anchor + stock rebuild the same result on every reload.
 	update_market_recovery(false)
@@ -471,4 +475,8 @@ func _set_world_active(active: bool) -> void:
 	_joystick.set_process_input(active)
 	_player.velocity = Vector2.ZERO
 	_player.set_physics_process(active)
+	if not active:
+		# WT04 recovery: leaving WORLD (city or travel) cancels an encounter
+		# no Encounter System has taken yet.
+		_encounter_handoff.cancel_pending_encounter()
 	_prototype_monster.set_threat_active(active)

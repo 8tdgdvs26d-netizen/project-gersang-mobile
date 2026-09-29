@@ -47,7 +47,36 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-World Threat WT03: city safe buffer + low-level threat zone foundation.
+World Threat WT04: encounter trigger + context foundation.
+
+- `EncounterHandoff` (new node in the main scene) turns the monster's contact into exactly one
+  Encounter Trigger: signal `encounter_triggered(context)`. Valid only when the monster
+  reports contact with its own id, the threat is active, the player is in WORLD, outside
+  every city safe buffer, and really overlaps the monster
+- `EncounterContext` (new, never saved): `encounter_id` ("encounter_1", "encounter_2" … in
+  trigger order, per session), `monster_id`, `trigger_world_position` (the monster),
+  `player_world_position`, `threat_zone_id` (from `WorldThreatZones` at the player; "" outside
+  every zone) and `triggered_at_ms` (TimeSource)
+- pending latch: after a trigger the encounter stays pending and every further contact is
+  ignored. Only `consume_pending_encounter()` (the future Encounter System's hand-back)
+  clears it as a hand-back. After a consume, a new trigger needs a new contact (separate,
+  then touch again)
+- recovery (review fix): leaving WORLD (entering a city, or starting travel) calls
+  `cancel_pending_encounter()`: the pending encounter is dropped (no signal), the monster is
+  released and put back at home, IDLE. While the player stays in WORLD (safe buffers
+  included) nothing clears it: no timeout, no auto-consume
+- while pending the monster is held: its AI stands still in its current state and shows
+  「遭遇觸發」. The monster only knows this neutral hold (`set_hold`); all encounter logic lives
+  in the handoff. The consume releases it; it is never despawned, defeated or reset
+- no encounter screen, combat, rewards or mode change: the player keeps moving in WORLD.
+  Until an Encounter System exists nothing consumes the trigger in normal play: the monster
+  stays held until the player enters a city (or reloads); back in WORLD it can catch the
+  player again (a new `encounter_id`)
+- save version 8 unchanged; a reload starts with nothing pending
+- tests: `tests/verify_wt04_encounter_trigger.gd`. WT02's test hands each trigger straight
+  back so its chase checks run with nothing pending
+
+Previous: World Threat WT03: city safe buffer + low-level threat zone foundation.
 
 - `WorldThreatZones` (new, layout data only, never saved): answers "is this position in a
   city safe buffer?" (`safe_buffer_city_at`) and "in which threat zone?" (`threat_zone_at`).
