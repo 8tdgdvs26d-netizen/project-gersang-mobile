@@ -47,7 +47,30 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-World Threat WT02: aggro, chase & disengage foundation.
+World Threat WT03: city safe buffer + low-level threat zone foundation.
+
+- `WorldThreatZones` (new, layout data only, never saved): answers "is this position in a
+  city safe buffer?" (`safe_buffer_city_at`) and "in which threat zone?" (`threat_zone_at`).
+  Kept out of trading, warehouse, market, transport, save and City Hub code
+- city safe buffer: a 420 px circle around every active city (A, B; prototype value). It
+  covers the 240 px entry trigger and the return point (340 px out) with 80 px to spare, so
+  leaving a city starts safe. The new-game spawn is inside City A's
+- `low_threat_zone_01`: one fixed rectangle x 560–1000, y 450–850 south-east of City A (spatial
+  intent for the future outer Level 1–4 areas; no enemy levels). It holds the monster's home
+  (760, 650) and its whole 200 px aggro circle, and stays 18 px clear of City A's buffer
+- the monster treats safe buffers as sanctuary: it never aggroes a player inside one,
+  reports no contact there, and a chase turns to RETURNING as soon as the player (or the
+  monster itself) is inside one, before the 450 px leash. It then returns home as in WT02
+  and can aggro again once the player leaves safety. The home must lie outside every buffer
+  (checked at start). The zone itself is not a wall
+- prototype markings under the cities and actors: faint green circles 「安全區」 and a faint
+  red rectangle 「低級威脅區」 (`ThreatZoneOverlay`), drawn straight from the layout data
+- no combat, encounter, levels, patrol, extra monsters or cities; save version 8 unchanged
+- tests: `tests/verify_wt03_safe_buffer_threat_zone.gd`. WT01 / WT02 tests: a detached test
+  player now stands at the monster (not at (0, 0), which is inside City A's buffer), and the
+  bounds test uses the far corner instead of City A's
+
+Previous: World Threat WT02: aggro, chase & disengage foundation.
 
 - the same single monster now runs IDLE → CHASE → RETURNING → IDLE, shown as
   「待機」／「追擊」／「返回」 under its name. `state_changed(monster_id, state)` fires once per change

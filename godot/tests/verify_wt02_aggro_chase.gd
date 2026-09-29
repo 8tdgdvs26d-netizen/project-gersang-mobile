@@ -259,11 +259,12 @@ func _verify_obstacles() -> void:
 
 func _verify_bounds() -> void:
 	# A standalone monster whose home is near the corner chases a target that
-	# sits outside the world: it stops at the edge.
+	# sits outside the world: it stops at the edge. (WT03: the far corner, away
+	# from every city safe buffer; (60, 60) is inside City A's.)
 	var unit := (load("res://scenes/world_monster.tscn") as PackedScene).instantiate() as WorldMonster
-	unit.home_position = Vector2(60.0, 60.0)
+	unit.home_position = Vector2(39940.0, 39940.0)
 	var target := Node2D.new()
-	target.position = Vector2(-60.0, -60.0)
+	target.position = Vector2(40060.0, 40060.0)
 	root.add_child(target)
 	root.add_child(unit)
 	unit.set_chase_target(target)
@@ -274,7 +275,7 @@ func _verify_bounds() -> void:
 		await physics_frame
 		inside = inside and allowed.grow(0.01).has_point(unit.global_position)
 	_check(unit.get_state() == WorldMonster.State.CHASE, "Test setup: chasing a target beyond the corner")
-	_check(inside and unit.global_position.is_equal_approx(allowed.position), "The chase stops at the world edge (%s)" % unit.global_position)
+	_check(inside and unit.global_position.is_equal_approx(allowed.end), "The chase stops at the world edge (%s)" % unit.global_position)
 	root.remove_child(unit)
 	unit.free()
 	root.remove_child(target)

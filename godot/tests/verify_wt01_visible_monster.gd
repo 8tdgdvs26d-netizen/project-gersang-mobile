@@ -179,6 +179,9 @@ func _verify_world_only() -> void:
 	# Unit level: an inactive monster ignores the player.
 	var unit := (load("res://scenes/world_monster.tscn") as PackedScene).instantiate() as WorldMonster
 	var body := (load("res://scenes/player.tscn") as PackedScene).instantiate() as Player
+	# WT03: contact is ignored inside a city safe buffer; this player stands at
+	# the monster (a detached node would otherwise sit at (0, 0), inside City A's).
+	body.position = MONSTER_POS
 	root.add_child(unit)
 	var count := [0]
 	unit.player_contacted.connect(func(_id: String) -> void: count[0] += 1)

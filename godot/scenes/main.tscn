@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=11 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
 [ext_resource type="PackedScene" path="res://scenes/player.tscn" id="2_player"]
@@ -9,6 +9,7 @@
 [ext_resource type="PackedScene" path="res://scenes/city_marker.tscn" id="7_city"]
 [ext_resource type="PackedScene" path="res://scenes/city_hub.tscn" id="8_hub"]
 [ext_resource type="PackedScene" path="res://scenes/world_monster.tscn" id="9_monster"]
+[ext_resource type="Script" path="res://scripts/threat_zone_overlay.gd" id="10_zones"]
 
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
@@ -18,6 +19,9 @@ script = ExtResource("6_grid")
 
 [node name="WorldBoundary" type="Node2D" parent="."]
 script = ExtResource("3_boundary")
+
+[node name="ThreatZones" type="Node2D" parent="."]
+script = ExtResource("10_zones")
 
 [node name="Cities" type="Node2D" parent="."]
 
