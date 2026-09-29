@@ -51,9 +51,13 @@ World Threat WT02: aggro, chase & disengage foundation.
 
 - the same single monster now runs IDLE → CHASE → RETURNING → IDLE, shown as
   「待機」／「追擊」／「返回」 under its name. `state_changed(monster_id, state)` fires once per change
-- aggro: the player comes within 250 px of the idle monster. Leash: the chase ends once the
-  player is more than 450 px from home (720, 320); the gap between the two radii prevents
-  flicker. RETURNING ignores the player until it is home, then IDLE may aggro again
+- home (760, 650): a stand-in low-level threat spot south-east of City A, between the two
+  obstacles and never straight behind one, 372 px from the new-game spawn. Moved from WT01's
+  (720, 320) in the WT02 review so that leaving a city never starts a chase (no formal zones)
+- aggro: the player comes within 200 px of the idle monster (prototype tuning; was 250).
+  Leash: the chase ends once the player is more than 450 px from home; the gap between the
+  two radii prevents flicker. RETURNING ignores the player until it is home, then IDLE may
+  aggro again
 - chase / return speed 160 px/s, slower than the player's 220 px/s, so walking away always
   escapes. Straight line toward the target; each step is shape-cast (24 px circle) against
   the static obstacles one axis at a time, so it stops at a wall and slides along it, never
@@ -62,8 +66,9 @@ World Threat WT02: aggro, chase & disengage foundation.
 - the monster stays the WT01 `Area2D` (no physics body, so it never pushes or blocks the
   player); WT01 contact keeps its once-per-overlap semantics, also while chasing
 - WORLD only: entering a city or travelling resets it to home / IDLE; returning to the world
-  starts from there. City A's return point (540, 200) is 216 px from home, inside the aggro
-  radius, so leaving City A starts one chase
+  starts from there. Safe city exit: every return point is far outside the aggro radius
+  (City A's (540, 200) is 501 px from home, City B's much farther), so the player chooses
+  when to walk into the threat
 - no attack, damage, encounter or combat. Nothing about the monster is saved (save
   version 8 unchanged); a load always rebuilds it at home, IDLE
 - tests: `tests/verify_wt02_aggro_chase.gd` (WT01's test keeps its static-contact checks

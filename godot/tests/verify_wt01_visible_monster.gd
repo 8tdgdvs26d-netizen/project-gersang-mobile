@@ -7,7 +7,7 @@ extends SceneTree
 const TEST_SAVE := "user://wt01_visible_monster_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
-const MONSTER_POS := Vector2(720.0, 320.0)
+const MONSTER_POS := Vector2(760.0, 650.0)
 const CONTACT_RADIUS := 48.0
 const PLAYER_SIZE := Vector2(32, 48)
 const PLAYER_OFFSET := Vector2(0, -24)
@@ -115,11 +115,13 @@ func _verify_position() -> void:
 	monster.player_contacted.connect(_on_contact)
 	var player := _player(main)
 	_check(player.global_position == PlayerLocation.DEFAULT_WORLD_SPAWN, "New game starts at the spawn (%s)" % player.global_position)
-	var frames := await _walk(player, "move_right", func() -> bool: return player.global_position.x >= MONSTER_POS.x)
-	_check(frames < 300 and absf(player.global_position.y - 500.0) < 1.0, "Walked right from the spawn unobstructed (%d frames)" % frames)
-	frames = await _walk(player, "move_up", func() -> bool: return _events.size() > 0)
-	_check(frames < 300 and _events == [MONSTER_ID], "Walking up reaches the monster and makes contact (%d frames, %s)" % [frames, str(_events)])
-	frames = await _walk(player, "move_up", func() -> bool: return player.global_position.y < MONSTER_POS.y - 150.0)
+	# WT02 review: the monster moved from (720, 320) to (760, 650), so the walk
+	# is now down, then right (was right, then up).
+	var frames := await _walk(player, "move_down", func() -> bool: return player.global_position.y >= MONSTER_POS.y)
+	_check(frames < 300 and absf(player.global_position.x - PlayerLocation.DEFAULT_WORLD_SPAWN.x) < 1.0, "Walked down from the spawn unobstructed (%d frames)" % frames)
+	frames = await _walk(player, "move_right", func() -> bool: return _events.size() > 0)
+	_check(frames < 300 and _events == [MONSTER_ID], "Walking right reaches the monster and makes contact (%d frames, %s)" % [frames, str(_events)])
+	frames = await _walk(player, "move_right", func() -> bool: return player.global_position.x > MONSTER_POS.x + 150.0)
 	_check(frames < 300 and _events.size() == 1 and not monster.is_in_contact(), "The player walks through and away normally; still one event")
 	await _destroy(main)
 	_delete(TEST_SAVE)

@@ -7,12 +7,18 @@ extends SceneTree
 const TEST_SAVE := "user://wt02_aggro_chase_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
-const HOME := Vector2(720.0, 320.0)
+## WT02 review: moved from (720, 320), away from City A's exit.
+const HOME := Vector2(760.0, 650.0)
 const PLAYER_SPEED := 220.0
 const FAR := Vector2(3000.0, 3000.0)
 ## Just outside / inside the aggro radius, on the open ground east of home.
-const OUTSIDE_AGGRO := Vector2(980.0, 320.0)
-const INSIDE_AGGRO := Vector2(960.0, 320.0)
+const OUTSIDE_AGGRO := Vector2(980.0, 650.0)
+const INSIDE_AGGRO := Vector2(950.0, 650.0)
+## Leaving a city must leave at least this much room before the aggro edge.
+const CITY_EXIT_BUFFER := 100.0
+const PLAYER_SIZE := Vector2(32, 48)
+const PLAYER_OFFSET := Vector2(0, -24)
+const CONTACT_RADIUS := 48.0
 const RIGHT_OBSTACLE := Rect2(830.0, 460.0, 240.0, 40.0)
 
 var _checks := 0
@@ -26,13 +32,14 @@ func _initialize() -> void:
 	_delete(TEST_SAVE)
 	_verify_static()
 	await _verify_start()
+	await _verify_placement()
 	await _verify_aggro_chase_disengage()
 	await _verify_obstacles()
 	await _verify_bounds()
 	await _verify_world_only()
 	await _verify_save()
 	_delete(TEST_SAVE)
-	_check(_sections_done.size() == 7, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 8, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("WT02 aggro chase verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -42,7 +49,7 @@ func _initialize() -> void:
 
 func _verify_static() -> void:
 	_check(WorldLayout.PROTOTYPE_MONSTER_ID == MONSTER_ID and WorldLayout.PROTOTYPE_MONSTER_POSITION == HOME, "Stable id and home are layout data")
-	_check(WorldMonster.AGGRO_RADIUS == 250.0, "Aggro radius 250")
+	_check(WorldMonster.AGGRO_RADIUS == 200.0, "Aggro radius 200 (WT02 review: was 250)")
 	_check(WorldMonster.LEASH_RADIUS == 450.0 and WorldMonster.LEASH_RADIUS >= WorldMonster.AGGRO_RADIUS + 150.0, "Leash 450, well beyond the aggro radius")
 	_check(WorldMonster.MOVE_SPEED == 160.0 and WorldMonster.MOVE_SPEED < PLAYER_SPEED, "Chase speed 160 px/s, slower than the player")
 	_check(WorldMonster.CHASE_STOP_DISTANCE < 48.0, "The chase closes into contact range")
@@ -78,6 +85,41 @@ func _verify_start() -> void:
 	_check(monster.global_position == HOME and monster.get_state() == WorldMonster.State.IDLE, "A new game stays idle at home")
 	await _destroy(main)
 	_sections_done.append("start")
+
+
+# --- Placement (WT02 review) ------------------------------------------------------------------------
+
+func _verify_placement() -> void:
+	var main := await _new_main("")
+	var monster := _monster(main)
+	var player := _player(main)
+	_check(PlayerLocation.is_valid_world_position(HOME) and WorldBoundary.BOUNDS.grow(-WorldMonster.BODY_RADIUS).has_point(HOME), "Home is inside the playable world bounds")
+	_check(not _overlaps_static(main, HOME + PLAYER_OFFSET, PLAYER_SIZE), "No obstacle under a player standing on home")
+	_check(not _circle_hits_static(main, HOME, CONTACT_RADIUS), "The contact area overlaps no obstacle")
+	_check(not _monster_in_obstacle(main, monster, 0.0), "The monster's body is clear of obstacles at home")
+	for city in WorldLayout.ACTIVE_CITY_IDS:
+		var marker := main.get_node("Cities/City%s" % city) as CityMarker
+		var trigger := ((marker.get_node("TriggerShape") as CollisionShape2D).shape as CircleShape2D).radius
+		_check(HOME.distance_to(marker.global_position) > trigger + WorldMonster.AGGRO_RADIUS, "City %s's entry trigger is entirely outside the aggro radius" % city)
+		var exit: Vector2 = WorldLayout.CITY_RETURN_POINTS[city]
+		_check(exit.distance_to(HOME) > WorldMonster.AGGRO_RADIUS + CITY_EXIT_BUFFER, "City %s's return point is %.0f px from home: safely outside the aggro radius" % [city, exit.distance_to(HOME)])
+		_check(exit.distance_to(HOME) > CONTACT_RADIUS + WorldMonster.AGGRO_RADIUS, "City %s's return point is clear of the monster" % city)
+	_check(PlayerLocation.DEFAULT_WORLD_SPAWN.distance_to(HOME) > WorldMonster.AGGRO_RADIUS + CITY_EXIT_BUFFER and PlayerLocation.DEFAULT_WORLD_SPAWN.distance_to(HOME) < 600.0, "A short walk from the new-game spawn, which is safely outside the aggro radius")
+	# Reachable with normal movement, and the chase starts only once the player
+	# deliberately walks into the radius.
+	_listen(monster)
+	var frames := await _walk(player, "move_down", func() -> bool: return player.global_position.y >= HOME.y)
+	_check(frames < 300 and _states.is_empty(), "Walked down from the spawn: still outside the radius, idle (%d frames)" % frames)
+	var entered_at := [0.0]
+	frames = await _walk(player, "move_right", func() -> bool:
+		if _states.is_empty():
+			entered_at[0] = player.global_position.distance_to(HOME)
+			return false
+		return true)
+	_check(frames < 300 and _states == [WorldMonster.State.CHASE], "Walking right toward the monster starts the chase (%d frames)" % frames)
+	_check(entered_at[0] <= WorldMonster.AGGRO_RADIUS and entered_at[0] > WorldMonster.AGGRO_RADIUS - 10.0, "The chase starts at the aggro edge (%.1f px)" % entered_at[0])
+	await _destroy(main)
+	_sections_done.append("placement")
 
 
 # --- Aggro, chase, contact, disengage, return, second cycle -----------------------------------------
@@ -180,10 +222,10 @@ func _verify_obstacles() -> void:
 	var monster := _monster(main)
 	var player := _player(main)
 	_listen(monster)
-	# Start a chase, then put the player straight behind the right obstacle.
-	player.global_position = Vector2(900.0, 330.0)
+	# Start a chase, then put the player straight behind (above) the right obstacle.
+	player.global_position = Vector2(900.0, 560.0)
 	await _frames(60)
-	var behind := Vector2(950.0, 580.0)
+	var behind := Vector2(950.0, 400.0)
 	_check(behind.distance_to(HOME) < WorldMonster.LEASH_RADIUS and not _overlaps_static(main, behind + Vector2(0, -24), Vector2(32, 48)), "Test setup: a clear spot behind the obstacle inside the leash")
 	player.global_position = behind
 	var clean := true
@@ -195,19 +237,20 @@ func _verify_obstacles() -> void:
 	_check(touched, "The chase ran up against the obstacle (within 1 px)")
 	_check(clean, "The monster never entered an obstacle while chasing")
 	_check(monster.get_state() == WorldMonster.State.CHASE, "Still chasing behind the obstacle")
-	# Returning from straight below the obstacle (test setup puts the monster
-	# there): it slides along it and around, never through.
-	var below := Vector2(950.0, 540.0)
-	monster.global_position = below
+	# Returning from straight above the obstacle, home being below it (test
+	# setup puts the monster there): it slides along it and around, never
+	# through, and home is never straight behind it (no dead end).
+	var above := Vector2(950.0, 420.0)
+	monster.global_position = above
 	player.global_position = FAR
-	_check(not _monster_in_obstacle(main, monster) and RIGHT_OBSTACLE.has_point(Vector2(below.x, RIGHT_OBSTACLE.get_center().y)), "Test setup: the monster is clear, directly below the obstacle")
+	_check(not _monster_in_obstacle(main, monster) and RIGHT_OBSTACLE.has_point(Vector2(above.x, RIGHT_OBSTACLE.get_center().y)), "Test setup: the monster is clear, directly above the obstacle")
 	var frames := 0
 	clean = true
 	while monster.get_state() != WorldMonster.State.IDLE and frames < 900:
 		await physics_frame
 		frames += 1
 		clean = clean and not _monster_in_obstacle(main, monster)
-	_check(clean and frames < 900 and monster.global_position == HOME, "Returns home from below the obstacle without passing through it (%d frames)" % frames)
+	_check(clean and frames < 900 and monster.global_position == HOME, "Returns home from above the obstacle without passing through it (%d frames)" % frames)
 	await _destroy(main)
 	_sections_done.append("obstacles")
 
@@ -272,15 +315,14 @@ func _verify_world_only() -> void:
 	_check(main.current_city_id == "B" and main.leave_city() and main.location.is_in_world(), "Arrived in B and left to the world")
 	_check(monster.is_threat_active() and monster.global_position == HOME and monster.get_state() == WorldMonster.State.IDLE, "Back in WORLD: active, at home, IDLE")
 	await _frames(60)
-	_check(monster.global_position == HOME and _states.is_empty(), "Back in WORLD at B's return point: stays idle")
-	# City A's return point is inside the aggro radius: leaving A always starts
-	# from home / IDLE and then deterministically begins one chase.
+	_check(monster.global_position == HOME and _states.is_empty(), "Leaving City B: no chase starts, stays idle at home")
+	# WT02 review: leaving City A gives a safe exit too (no immediate chase).
 	player.global_position = WorldLayout.CITY_ANCHORS["A"]
 	await _frames(300)
 	_states.clear()
 	_check(main.try_enter_city() and main.leave_city() and monster.global_position == HOME and monster.get_state() == WorldMonster.State.IDLE, "Leaving City A: the monster starts at home, IDLE")
-	await _frames(3)
-	_check(_states == [WorldMonster.State.CHASE], "City A's return point is inside the radius: exactly one chase starts (%s)" % str(_states))
+	await _frames(120)
+	_check(_states.is_empty() and monster.global_position == HOME and _events.is_empty(), "Leaving City A: no chase starts (%s)" % str(_states))
 	await _destroy(main)
 	_delete(TEST_SAVE)
 	_sections_done.append("world_only")
@@ -292,7 +334,7 @@ func _verify_save() -> void:
 	var main := await _new_main(TEST_SAVE, T0)
 	var monster := _monster(main)
 	var player := _player(main)
-	player.global_position = Vector2(960.5, 320.25)
+	player.global_position = Vector2(950.5, 650.25)
 	await _frames(40)
 	_check(monster.get_state() == WorldMonster.State.CHASE and monster.global_position != HOME, "Test setup: saving mid-chase")
 	_check(main.save_world_position(), "Exact world position saves")
@@ -307,7 +349,7 @@ func _verify_save() -> void:
 	root.add_child(main)
 	monster = _monster(main)
 	_check(monster.global_position == HOME and monster.get_state() == WorldMonster.State.IDLE, "Reload rebuilds the monster at home, IDLE")
-	_check(main.get_world_position() == Vector2(960.5, 320.25), "Reload restores the exact player position")
+	_check(main.get_world_position() == Vector2(950.5, 650.25), "Reload restores the exact player position")
 	await _frames(10)
 	_check(FileAccess.get_file_as_string(TEST_SAVE) == text, "Loading and the new chase do not rewrite the save")
 	await _destroy(main)
@@ -338,6 +380,18 @@ func _monster_in_obstacle(main: Node, monster: WorldMonster, grow := -0.5) -> bo
 	circle.radius = WorldMonster.BODY_RADIUS + grow
 	query.shape = circle
 	query.transform = Transform2D(0.0, monster.global_position)
+	for hit in main.get_world_2d().direct_space_state.intersect_shape(query, 32):
+		if hit["collider"] is StaticBody2D:
+			return true
+	return false
+
+
+func _circle_hits_static(main: Node, center: Vector2, radius: float) -> bool:
+	var query := PhysicsShapeQueryParameters2D.new()
+	var circle := CircleShape2D.new()
+	circle.radius = radius
+	query.shape = circle
+	query.transform = Transform2D(0.0, center)
 	for hit in main.get_world_2d().direct_space_state.intersect_shape(query, 32):
 		if hit["collider"] is StaticBody2D:
 			return true

@@ -23,7 +23,7 @@ signal state_changed(monster_id: String, state: int)
 enum State { IDLE, CHASE, RETURNING }
 
 ## The player must come this close to the idle monster to be chased.
-const AGGRO_RADIUS := 250.0
+const AGGRO_RADIUS := 200.0
 ## The chase ends once the player is farther than this from the monster's home.
 const LEASH_RADIUS := 450.0
 ## Chase and return speed in px/s (the player walks at 220 px/s).
