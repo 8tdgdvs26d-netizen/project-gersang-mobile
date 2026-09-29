@@ -47,7 +47,26 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-World Threat WT04: encounter trigger + context foundation.
+World Threat WT05: minimal patrol foundation.
+
+- the one monster no longer stands still: while IDLE it walks a fixed loop (「巡邏」)
+  home (760, 650) → (860, 610) → (860, 720) → (700, 720) → home, at 60 px/s (chase stays
+  160 px/s, player 220 px/s). One loop is about 470 px, just under 8 s
+- the loop is layout data (`WorldLayout.PROTOTYPE_MONSTER_PATROL`): every point and straight
+  leg is 130+ px inside low_threat_zone_01, clear of both obstacles (no pathfinding), and
+  far from every city safe buffer; the new-game spawn and City A's return point stay out of
+  aggro range of the whole loop
+- no new state: IDLE now means patrolling (smallest change). Aggro works from anywhere on
+  the loop; CHASE / RETURNING / safe buffers / leash are unchanged. Reaching home after a
+  chase, entering a city, travelling, the WT04 cancel and a reload all restart the loop from
+  its first point at home, so the patrol is deterministic
+- WT04: a pending encounter holds the monster, patrol included (frozen position and target)
+- nothing about patrol is saved (save version 8 unchanged)
+- tests: `tests/verify_wt05_patrol.gd`. The WT01–WT04 tests run with the patrol loop off
+  (`patrol_points = []`), the stationary idle monster they were written for; WT05 checks
+  the same rules with patrol on
+
+Previous: World Threat WT04: encounter trigger + context foundation.
 
 - `EncounterHandoff` (new node in the main scene) turns the monster's contact into exactly one
   Encounter Trigger: signal `encounter_triggered(context)`. Valid only when the monster

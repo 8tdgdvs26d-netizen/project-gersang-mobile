@@ -35,3 +35,13 @@ const CITY_RETURN_POINTS := {
 ## its aggro radius (City A's: 501 px), so leaving a city never starts a chase.
 const PROTOTYPE_MONSTER_ID := "prototype_monster_01"
 const PROTOTYPE_MONSTER_POSITION := Vector2(760.0, 650.0)
+## World Threat WT05: the prototype monster's fixed patrol loop, visited in
+## this order and ending back at home. Every point and straight leg lies well
+## inside low_threat_zone_01 (130+ px from its edges), clear of both obstacles
+## and far from every city safe buffer.
+const PROTOTYPE_MONSTER_PATROL := [
+	Vector2(860.0, 610.0),
+	Vector2(860.0, 720.0),
+	Vector2(700.0, 720.0),
+	Vector2(760.0, 650.0),
+]
