@@ -20,6 +20,9 @@ extends Area2D
 ## is never aggroed and reports no contact; a chase ends (-> RETURNING) as soon
 ## as the player, or the monster itself, is inside one. The home must lie
 ## outside every safe buffer.
+## WT04: while an encounter it triggered is pending (EncounterHandoff), the
+## monster is held: its AI stands still in its current state, it shows
+## 「遭遇觸發」, and it resumes only when the handoff releases it.
 
 signal player_contacted(monster_id: String)
 signal state_changed(monster_id: String, state: int)
@@ -47,6 +50,8 @@ const STATE_TEXT := {
 	State.CHASE: "追擊",
 	State.RETURNING: "返回",
 }
+## Shown while held for a pending handoff (WT04).
+const HOLD_TEXT := "遭遇觸發"
 
 var monster_id := WorldLayout.PROTOTYPE_MONSTER_ID
 var home_position := WorldLayout.PROTOTYPE_MONSTER_POSITION
@@ -54,6 +59,7 @@ var _active := true
 var _in_contact := false
 var _state := State.IDLE
 var _target: Node2D
+var _held := false
 var _step_query := PhysicsShapeQueryParameters2D.new()
 
 @onready var _state_label := $StateLabel as Label
@@ -69,7 +75,7 @@ func _ready() -> void:
 	_step_query.collision_mask = OBSTACLE_MASK
 	body_entered.connect(_on_body_entered)
 	body_exited.connect(_on_body_exited)
-	_state_label.text = STATE_TEXT[_state]
+	_refresh_label()
 
 
 func is_threat_active() -> bool:
@@ -82,6 +88,17 @@ func is_in_contact() -> bool:
 
 func get_state() -> int:
 	return _state
+
+
+func is_held() -> bool:
+	return _held
+
+
+## Freezes (true) or resumes (false) the AI while a handoff is pending (WT04).
+## State, position and contact are kept as they are.
+func set_hold(held: bool) -> void:
+	_held = held
+	_refresh_label()
 
 
 ## The node the monster watches and chases (the player; null: none). Movement
@@ -105,7 +122,7 @@ func reset_to_home() -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if not _active:
+	if not _active or _held:
 		return
 	match _state:
 		State.IDLE:
@@ -155,9 +172,13 @@ func _set_state(state: State) -> void:
 	if state == _state:
 		return
 	_state = state
-	_state_label.text = STATE_TEXT[state]
+	_refresh_label()
 	print("Myrial: world threat ", monster_id, " state ", State.keys()[state])
 	state_changed.emit(monster_id, state)
+
+
+func _refresh_label() -> void:
+	_state_label.text = HOLD_TEXT if _held else STATE_TEXT[_state]
 
 
 func _on_body_entered(body: Node2D) -> void:

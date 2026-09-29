@@ -449,6 +449,11 @@ func _new_main(path: String, now: int = T0) -> Node2D:
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
+	# WT04: a caught player holds the monster for a pending encounter. These
+	# WT02 checks run with no encounter pending: hand each one straight back,
+	# as an Encounter System that returns at once would.
+	var handoff := main.get_node("EncounterHandoff") as EncounterHandoff
+	handoff.encounter_triggered.connect(func(_context: EncounterContext) -> void: handoff.consume_pending_encounter())
 	await _settle()
 	return main
 
