@@ -7,7 +7,8 @@ extends SceneTree
 const TEST_SAVE := "user://wt01_visible_monster_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
-const MONSTER_POS := Vector2(760.0, 650.0)
+## E02 fix pass: group 1's home moved from (760, 650) to (800, 700).
+const MONSTER_POS := Vector2(800.0, 700.0)
 const CONTACT_RADIUS := 48.0
 const PLAYER_SIZE := Vector2(32, 48)
 const PLAYER_OFFSET := Vector2(0, -24)

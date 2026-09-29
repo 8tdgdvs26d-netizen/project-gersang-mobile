@@ -25,6 +25,11 @@ extends Node
 ## the EncounterSession during its join window only) adds other groups whose
 ## aggro radius holds the player, up to MAX_GROUPS, without a new trigger,
 ## id or timestamp. Joined groups are held like the primary group.
+##
+## E02 fix pass: set_protected(true) is a runtime-only player protection
+## (used by the prototype recovery; meant for later reuse by Combat retreat):
+## every group stops aggroing (they keep patrolling, a chase turns back) and no
+## contact becomes an encounter until set_protected(false).
 
 signal encounter_triggered(context: EncounterContext)
 signal group_joined(context: EncounterContext, monster_id: String)
@@ -38,6 +43,7 @@ var _is_world := Callable()
 var _time_source: TimeSource
 var _pending: EncounterContext
 var _sequence := 0
+var _protected := false
 
 
 ## Starts watching `monsters` (the World Enemy Groups) for contacts with
@@ -49,6 +55,18 @@ func watch(monsters: Array, player: Node2D, is_world: Callable, time_source: Tim
 	for monster in monsters:
 		_monsters[(monster as WorldMonster).monster_id] = monster
 		monster.player_contacted.connect(_on_player_contacted)
+
+
+func is_protected() -> bool:
+	return _protected
+
+
+## Starts (true) or ends (false) the player protection for every group.
+func set_protected(protected: bool) -> void:
+	_protected = protected
+	for monster_id in _monsters:
+		if is_instance_valid(_monsters[monster_id]):
+			(_monsters[monster_id] as WorldMonster).set_aggro_suppressed(protected)
 
 
 func has_pending_encounter() -> bool:
@@ -123,7 +141,7 @@ func _participants(context: EncounterContext) -> Array:
 
 
 func _on_player_contacted(monster_id: String) -> void:
-	if _pending != null:
+	if _pending != null or _protected:
 		return
 	if monster_id == "" or not _monsters.has(monster_id):
 		return

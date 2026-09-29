@@ -20,12 +20,13 @@ extends RefCounted
 const CITY_SAFE_BUFFER_RADIUS := 420.0
 
 const LOW_THREAT_ZONE_01_ID := "low_threat_zone_01"
-## South-east of City A: x 560–1240, y 450–1030 (E02: grown east and south
-## from x 560–1000, y 450–850 to hold the three prototype groups; the
-## top-left corner, nearest City A, is unchanged). It holds group 1's home
-## (760, 650) and its whole 200 px aggro circle, every group's home and patrol
-## loop, and stays clear of City A's safe buffer.
-const LOW_THREAT_ZONE_01 := Rect2(560.0, 450.0, 680.0, 580.0)
+## South-east of City A: x 560–1240, y 450–1060 (E02: grown east and south
+## from x 560–1000, y 450–850 to hold the three prototype groups; the E02 fix
+## pass added 30 px south for group 3's roaming. The top-left corner, nearest
+## City A, is unchanged). It holds group 1's home (800, 700) and its whole
+## 240 px aggro circle, every group's home and patrol itinerary, and stays
+## clear of City A's safe buffer.
+const LOW_THREAT_ZONE_01 := Rect2(560.0, 450.0, 680.0, 610.0)
 
 
 ## Id of the active city whose safe buffer contains `position` ("" if none).

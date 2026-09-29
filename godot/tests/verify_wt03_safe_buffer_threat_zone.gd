@@ -9,9 +9,10 @@ const T0 := 1800000000000
 const ZONE_ID := "low_threat_zone_01"
 ## E02 grew the zone east and south (was Rect2(560, 450, 440, 400)); the
 ## corner nearest City A is unchanged.
-const ZONE := Rect2(560.0, 450.0, 680.0, 580.0)
+const ZONE := Rect2(560.0, 450.0, 680.0, 610.0)
 const SAFE_RADIUS := 420.0
-const HOME := Vector2(760.0, 650.0)
+## E02 fix pass: group 1's home moved from (760, 650) to (800, 700).
+const HOME := Vector2(800.0, 700.0)
 const CITY_A := Vector2(200.0, 200.0)
 const PLAYER_SIZE := Vector2(32, 48)
 const FAR := Vector2(3000.0, 3000.0)
@@ -61,7 +62,7 @@ func _verify_layout() -> void:
 		_check(_rect_distance(ZONE, anchor) > SAFE_RADIUS, "The threat zone does not overlap City %s's safe buffer" % city)
 	for city in WorldLayout.RESERVED_CITY_IDS:
 		_check(WorldThreatZones.safe_buffer_city_at(WorldLayout.CITY_ANCHORS[city]) == "", "Reserved City %s has no buffer yet (not implemented)" % city)
-	_check(WorldLayout.PROTOTYPE_MONSTER_POSITION == HOME, "Monster home unchanged (760, 650)")
+	_check(WorldLayout.PROTOTYPE_MONSTER_POSITION == HOME, "Monster home (800, 700)")
 	_check(not WorldThreatZones.is_in_city_safe_buffer(HOME), "The monster home lies outside every safe buffer")
 	_check(WorldThreatZones.is_in_city_safe_buffer(PlayerLocation.DEFAULT_WORLD_SPAWN), "The new-game spawn is inside City A's safe buffer")
 	# The zone.

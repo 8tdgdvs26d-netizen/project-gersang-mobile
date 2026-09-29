@@ -8,12 +8,14 @@ const TEST_SAVE := "user://wt02_aggro_chase_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
 ## WT02 review: moved from (720, 320), away from City A's exit.
-const HOME := Vector2(760.0, 650.0)
+## E02 fix pass: group 1's home moved from (760, 650) to (800, 700).
+const HOME := Vector2(800.0, 700.0)
 const PLAYER_SPEED := 220.0
 const FAR := Vector2(3000.0, 3000.0)
 ## Just outside / inside the aggro radius, on the open ground east of home.
-const OUTSIDE_AGGRO := Vector2(980.0, 650.0)
-const INSIDE_AGGRO := Vector2(950.0, 650.0)
+## E02 fix pass (aggro 240): 10 px outside / inside the radius, east of home.
+const OUTSIDE_AGGRO := Vector2(1050.0, 700.0)
+const INSIDE_AGGRO := Vector2(1030.0, 700.0)
 ## Leaving a city must leave at least this much room before the aggro edge.
 const CITY_EXIT_BUFFER := 100.0
 const PLAYER_SIZE := Vector2(32, 48)
@@ -49,7 +51,7 @@ func _initialize() -> void:
 
 func _verify_static() -> void:
 	_check(WorldLayout.PROTOTYPE_MONSTER_ID == MONSTER_ID and WorldLayout.PROTOTYPE_MONSTER_POSITION == HOME, "Stable id and home are layout data")
-	_check(WorldMonster.AGGRO_RADIUS == 200.0, "Aggro radius 200 (WT02 review: was 250)")
+	_check(WorldMonster.AGGRO_RADIUS == 240.0, "Aggro radius 240 (E02 fix pass; was 200, WT02 review; 250 before)")
 	_check(WorldMonster.LEASH_RADIUS == 450.0 and WorldMonster.LEASH_RADIUS >= WorldMonster.AGGRO_RADIUS + 150.0, "Leash 450, well beyond the aggro radius")
 	_check(WorldMonster.MOVE_SPEED == 160.0 and WorldMonster.MOVE_SPEED < PLAYER_SPEED, "Chase speed 160 px/s, slower than the player")
 	_check(WorldMonster.CHASE_STOP_DISTANCE < 48.0, "The chase closes into contact range")

@@ -8,16 +8,18 @@ extends SceneTree
 const TEST_SAVE := "user://e02_multi_group_test_save.json"
 const T0 := 1800000000000
 const IDS := ["prototype_monster_01", "prototype_monster_02", "prototype_monster_03"]
-const HOMES := [Vector2(760.0, 650.0), Vector2(1020.0, 650.0), Vector2(890.0, 860.0)]
-const ZONE := Rect2(560.0, 450.0, 680.0, 580.0)
+## E02 fix pass: new homes (aggro 240 px) and zone (30 px further south).
+const HOMES := [Vector2(800.0, 700.0), Vector2(1100.0, 700.0), Vector2(950.0, 930.0)]
+const ZONE := Rect2(560.0, 450.0, 680.0, 610.0)
 const CITY_A := Vector2(200.0, 200.0)
 const FAR := Vector2(3000.0, 3000.0)
 ## Player spots (teleported to right after the scene starts, all groups at
-## home): A near group 1 only; B right by group 1 and in group 2's range, out
-## of group 3's whole loop; C within range of all three homes.
-const SPOT_A := Vector2(640.0, 600.0)
-const SPOT_B := Vector2(845.0, 645.0)
-const SPOT_C := Vector2(890.0, 715.0)
+## home): A west of group 1, out of reach of groups 2 and 3; B north between
+## groups 1 and 2 (group 1 clearly nearer, so it catches first), out of group
+## 3's whole itinerary; C the middle, within range of all three homes.
+const SPOT_A := Vector2(640.0, 700.0)
+const SPOT_B := Vector2(900.0, 600.0)
+const SPOT_C := Vector2(950.0, 780.0)
 ## The clock moves on this much the moment a trigger fires, so a reset timer
 ## would show.
 const ADVANCE_AT_TRIGGER_MS := 1200
@@ -39,8 +41,10 @@ func _initialize() -> void:
 	await _verify_case_c()
 	await _verify_world_exit()
 	await _verify_reload()
+	await _verify_patrol_fix()
+	await _verify_protection()
 	_delete(TEST_SAVE)
-	_check(_sections_done.size() == 7, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 9, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("E02 multi-group verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -82,7 +86,7 @@ func _verify_layout() -> void:
 	for monster in monsters:
 		runtime_ids.append(monster.monster_id)
 	_check(runtime_ids == IDS and main.find_children("*", "WorldMonster", true, false).size() == 3, "Three World Enemy Groups at runtime (%s)" % str(runtime_ids))
-	_check(WorldThreatZones.LOW_THREAT_ZONE_01 == ZONE, "low_threat_zone_01 grown to x 560–1240, y 450–1030")
+	_check(WorldThreatZones.LOW_THREAT_ZONE_01 == ZONE, "low_threat_zone_01 grown to x 560–1240, y 450–1060")
 	for index in range(3):
 		var group: Dictionary = WorldLayout.PROTOTYPE_GROUPS[index]
 		var home: Vector2 = group["home"]
@@ -101,10 +105,10 @@ func _verify_layout() -> void:
 		for spot in [PlayerLocation.DEFAULT_WORLD_SPAWN, WorldLayout.CITY_RETURN_POINTS["A"], WorldLayout.CITY_RETURN_POINTS["B"]]:
 			_check(_route_distance(route, spot) > WorldMonster.AGGRO_RADIUS, "Group %d never threatens %s" % [index + 1, spot])
 	# The three deliberate encounter spots.
-	var reach := func(spot: Vector2, index: int) -> bool: return HOMES[index].distance_to(spot) < WorldMonster.AGGRO_RADIUS - 20.0
+	var reach := func(spot: Vector2, index: int) -> bool: return HOMES[index].distance_to(spot) < WorldMonster.AGGRO_RADIUS - 10.0
 	var never := func(spot: Vector2, index: int) -> bool: return _route_distance(WorldLayout.PROTOTYPE_GROUPS[index]["patrol"], spot) > WorldMonster.AGGRO_RADIUS + 5.0
 	_check(reach.call(SPOT_A, 0) and never.call(SPOT_A, 1) and never.call(SPOT_A, 2), "Spot A: only group 1 can reach it")
-	_check(reach.call(SPOT_B, 0) and reach.call(SPOT_B, 1) and never.call(SPOT_B, 2) and HOMES[0].distance_to(SPOT_B) < 100.0, "Spot B: groups 1 and 2, never group 3")
+	_check(reach.call(SPOT_B, 0) and reach.call(SPOT_B, 1) and never.call(SPOT_B, 2) and HOMES[0].distance_to(SPOT_B) + 60.0 < HOMES[1].distance_to(SPOT_B), "Spot B: groups 1 and 2, never group 3")
 	_check(reach.call(SPOT_C, 0) and reach.call(SPOT_C, 1) and reach.call(SPOT_C, 2), "Spot C: all three groups")
 	for spot in [SPOT_A, SPOT_B, SPOT_C]:
 		_check(not _circle_hits_static(main, spot + Vector2(0, -24), 30.0) and not WorldThreatZones.is_in_city_safe_buffer(spot), "Spot %s is open ground outside safety" % spot)
@@ -223,7 +227,11 @@ func _verify_case_c() -> void:
 	for index in range(3):
 		patrolling = patrolling and monsters[index].global_position != HOMES[index] and monsters[index].get_state() == WorldMonster.State.IDLE
 	_check(patrolling, "All three patrol again")
-	# Another multi-group encounter afterwards.
+	# Another multi-group encounter afterwards (after the 5 s recovery
+	# protection that follows the prototype end).
+	main.time_source.advance_ms(EncounterSession.PROTECTION_MS)
+	await process_frame
+	await process_frame
 	await _frames(300)
 	for index in range(3):
 		monsters[index].reset_to_home()
@@ -295,6 +303,180 @@ func _verify_reload() -> void:
 	await _destroy(main)
 	_delete(TEST_SAVE)
 	_sections_done.append("reload")
+
+
+# --- E02 fix pass: controlled irregular patrol with pauses ------------------------------------------
+
+func _verify_patrol_fix() -> void:
+	_check(WorldMonster.AGGRO_RADIUS == 240.0, "Aggro radius 240 (was 200)")
+	var groups := WorldLayout.PROTOTYPE_GROUPS
+	var shapes := []
+	for index in range(3):
+		var group: Dictionary = groups[index]
+		var route: Array = group["patrol"]
+		var pauses: Array = group["pauses"]
+		var shape := []
+		for point in route:
+			shape.append((point as Vector2) - (group["home"] as Vector2))
+		shapes.append(shape)
+		_check(pauses.size() == route.size(), "Group %d: one pause entry per stop" % (index + 1))
+		var paused_stops := 0
+		var in_bounds := true
+		for pause in pauses:
+			if pause > 0.0:
+				paused_stops += 1
+				in_bounds = in_bounds and pause >= 0.5 and pause <= 2.0
+		_check(paused_stops >= 1 and paused_stops < route.size() and in_bounds, "Group %d pauses at some stops (not all), 0.5–2.0 s each" % (index + 1))
+		_check(_has_varied_order(route), "Group %d revisits a point with a different next stop (not one rigid loop)" % (index + 1))
+	_check(groups[0]["patrol"] != groups[1]["patrol"] and groups[1]["patrol"] != groups[2]["patrol"] and groups[0]["patrol"] != groups[2]["patrol"], "Three distinct itineraries")
+	_check(shapes[0] != shapes[1] and shapes[1] != shapes[2] and shapes[0] != shapes[2], "Different route shapes, not one shifted loop")
+	for pair in [[0, 1], [1, 2], [0, 2]]:
+		var gap := _routes_gap(groups[pair[0]]["patrol"], groups[pair[1]]["patrol"])
+		_check(gap > 50.0 and gap < WorldMonster.AGGRO_RADIUS * 2.0, "Groups %d and %d roam separately but their reach overlaps (%.0f px apart at closest)" % [pair[0] + 1, pair[1] + 1, gap])
+		_check(HOMES[pair[0]].distance_to(HOMES[pair[1]]) > 250.0, "Groups %d and %d do not stack together" % [pair[0] + 1, pair[1] + 1])
+	# Determinism: two fresh starts move all three groups identically.
+	var first := await _world_track(900)
+	var second := await _world_track(900)
+	_check(first["positions"] == second["positions"], "Patrol is deterministic across runs (900 frames, 3 groups)")
+	# Pauses: group 1's first pause is its 1.2 s stop at (900, 790).
+	var pause_frames: Array = first["pause_frames"][0]
+	_check(pause_frames.size() >= 1, "Group 1 pauses during its itinerary")
+	if pause_frames.size() >= 1:
+		var length: int = pause_frames[0][1]
+		_check(absi(length - 72) <= 2 and pause_frames[0][2] == Vector2(900.0, 790.0), "Pause of 1.2 s (%d frames) at its stop" % length)
+	_check(first["moved_after_pause"][0], "Patrol resumes after the pause")
+	for index in range(3):
+		_check((first["pause_frames"][index] as Array).size() >= 1, "Group %d pauses at some point" % (index + 1))
+	# A chase ends a pause at once.
+	var main := await _new_main("")
+	var monsters := _monsters(main)
+	var player := _player(main)
+	var frames := 0
+	while not monsters[0].is_patrol_paused() and frames < 900:
+		await physics_frame
+		frames += 1
+	_check(monsters[0].is_patrol_paused(), "Test setup: group 1 paused")
+	var paused_at: Vector2 = monsters[0].global_position
+	player.global_position = paused_at + Vector2(-140.0, -60.0)
+	await physics_frame
+	await physics_frame
+	await physics_frame
+	_check(monsters[0].get_state() == WorldMonster.State.CHASE and not monsters[0].is_patrol_paused() and monsters[0].global_position != paused_at, "A player in range ends the pause: CHASE at once")
+	monsters[0].reset_to_home()
+	_check(not monsters[0].is_patrol_paused() and monsters[0].get_patrol_index() == 0 and monsters[0].global_position == HOMES[0], "Reset: home, itinerary from its start, no pause left")
+	# A reset in the middle of a pause (e.g. leaving WORLD) clears the pause.
+	frames = 0
+	while not monsters[1].is_patrol_paused() and frames < 900:
+		await physics_frame
+		frames += 1
+	_check(monsters[1].is_patrol_paused(), "Test setup: group 2 paused")
+	monsters[1].reset_to_home()
+	var reset_at: Vector2 = monsters[1].global_position
+	await _frames(20)
+	_check(monsters[1].get_patrol_index() == 0 and monsters[1].global_position != reset_at, "Reset during a pause: no pause left, the itinerary restarts at once")
+	await _destroy(main)
+	_sections_done.append("patrol_fix")
+
+
+# --- E02 fix pass: 5 s recovery protection -------------------------------------------------------------
+
+func _verify_protection() -> void:
+	var main := await _new_main(TEST_SAVE, T0)
+	var monsters := _monsters(main)
+	var player := _player(main)
+	var session := _session(main)
+	var handoff := _handoff(main)
+	_listen(main)
+	_check(EncounterSession.PROTECTION_MS == 5000, "Recovery protection lasts 5000 ms")
+	# A monster chasing when protection starts turns back.
+	player.global_position = SPOT_A
+	var frames := 0
+	while monsters[0].get_state() != WorldMonster.State.CHASE and frames < 60:
+		await physics_frame
+		frames += 1
+	await _frames(15)
+	var chased_to: Vector2 = monsters[0].global_position
+	_check(monsters[0].get_state() == WorldMonster.State.CHASE and chased_to.distance_to(HOMES[0]) > 20.0, "Test setup: group 1 chasing, away from home")
+	handoff.set_protected(true)
+	await physics_frame
+	await physics_frame
+	_check(monsters[0].get_state() == WorldMonster.State.RETURNING and monsters[0].global_position.distance_to(HOMES[0]) < chased_to.distance_to(HOMES[0]) and _encounters.is_empty(), "Protection turns a chasing group back")
+	handoff.set_protected(false)
+	player.global_position = FAR
+	await _frames(300)
+	# Encounter -> LOCKED -> prototype end -> protection.
+	var context := await _caught_at(player, SPOT_A)
+	await _run_to_lock(main)
+	_check(context != null and session.get_phase() == EncounterSession.Phase.LOCKED, "Test setup: LOCKED")
+	_check(not session.is_protection_active() and not handoff.is_protected(), "No protection before the prototype end")
+	var money: int = main.wallet.get_balance()
+	_end_button(session).pressed.emit()
+	_check(session.is_protection_active() and handoff.is_protected() and session.get_protection_remaining_ms() == 5000, "Prototype end starts exactly 5000 ms of protection")
+	_check(_protection_label(session).visible and _protection_label(session).text == "遭遇保護 5.0...", "遭遇保護 5.0... shown")
+	var suppressed := true
+	for monster in monsters:
+		suppressed = suppressed and monster.is_aggro_suppressed() and not monster.is_held()
+	_check(suppressed, "Every group's aggro is suppressed; none held")
+	_check(not player.movement_locked, "The player is free")
+	var at := player.global_position
+	Input.action_press("move_left")
+	await _frames(10)
+	Input.action_release("move_left")
+	await physics_frame
+	_check(player.global_position != at, "The player moves during protection")
+	var before := []
+	for monster in monsters:
+		before.append(monster.global_position)
+	await _frames(60)
+	var patrolling := false
+	var calm := true
+	for index in range(3):
+		patrolling = patrolling or monsters[index].global_position != before[index]
+		calm = calm and monsters[index].get_state() != WorldMonster.State.CHASE
+	_check(patrolling and calm, "Groups keep patrolling, nobody chases")
+	# Right next to and even on top of group 1: no aggro, no encounter.
+	player.global_position = monsters[0].global_position + Vector2(120.0, 0.0)
+	await _frames(60)
+	_check(monsters[0].get_state() != WorldMonster.State.CHASE and _encounters.size() == 1, "In range during protection: no aggro")
+	player.global_position = monsters[0].global_position + Vector2(0.0, 20.0)
+	await _settle()
+	await _frames(30)
+	_check(_encounters.size() == 1 and not handoff.has_pending_encounter() and session.get_phase() == EncounterSession.Phase.NONE, "Touching a group during protection: no new encounter")
+	# Countdown on the fixed clock.
+	main.time_source.advance_ms(4999)
+	await process_frame
+	await process_frame
+	_check(session.is_protection_active() and session.get_protection_remaining_ms() == 1 and _protection_label(session).text == "遭遇保護 0.1...", "4999 ms: still protected (遭遇保護 0.1...)")
+	# Reload during protection restores none of it.
+	_check(main.save_world_position(), "Saved during protection")
+	var text := FileAccess.get_file_as_string(TEST_SAVE)
+	_check(int(JSON.parse_string(text)["version"]) == 8 and not text.to_lower().contains("protect"), "Save version 8; no protection saved")
+	main.time_source.advance_ms(1)
+	await process_frame
+	await process_frame
+	_check(not session.is_protection_active() and not handoff.is_protected() and not _protection_label(session).visible, "5000 ms: protection over, label gone")
+	var restored := true
+	for monster in monsters:
+		restored = restored and not monster.is_aggro_suppressed()
+	_check(restored, "Every group can aggro again")
+	player.global_position = FAR
+	await _settle()
+	await _frames(300)
+	var again := await _caught_at(player, SPOT_A)
+	_check(again != null and again.encounter_id == "encounter_2", "After protection, a new catch starts an encounter")
+	_check(main.wallet.get_balance() == money, "No reward at any point")
+	await _destroy(main)
+	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.save_path = TEST_SAVE
+	main.time_source = TimeSource.fixed(T0)
+	root.add_child(main)
+	var fresh := not _session(main).is_protection_active() and not _handoff(main).is_protected()
+	for monster in _monsters(main):
+		fresh = fresh and not monster.is_aggro_suppressed()
+	_check(fresh, "Reload: no protection restored")
+	await _destroy(main)
+	_delete(TEST_SAVE)
+	_sections_done.append("protection")
 
 
 # --- Helpers ------------------------------------------------------------------------------------
@@ -419,6 +601,66 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## Whether an itinerary revisits some point with a different next stop.
+func _has_varied_order(route: Array) -> bool:
+	var next_of := {}
+	for index in range(route.size()):
+		var point: Vector2 = route[index]
+		var next: Vector2 = route[(index + 1) % route.size()]
+		if next_of.has(point) and next_of[point] != next:
+			return true
+		next_of[point] = next
+	return false
+
+
+## Closest distance between two itineraries' straight legs.
+func _routes_gap(a: Array, b: Array) -> float:
+	var gap := INF
+	for i in range(a.size()):
+		for step in range(21):
+			var point := (a[i - 1] as Vector2).lerp(a[i], step / 20.0)
+			gap = minf(gap, _route_distance(b, point))
+	return gap
+
+
+## Every group's position per physics frame after a fresh start (player far),
+## plus each group's pauses as [start frame, length, position].
+func _world_track(frames: int) -> Dictionary:
+	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.save_path = ""
+	main.time_source = TimeSource.fixed(T0)
+	root.add_child(main)
+	var monsters := _monsters(main)
+	var positions := []
+	var pauses := [[], [], []]
+	var moved_after := [false, false, false]
+	var started := [-1, -1, -1]
+	for frame in range(frames):
+		await physics_frame
+		var row := []
+		for index in range(3):
+			var monster: WorldMonster = monsters[index]
+			row.append(monster.global_position)
+			if monster.is_patrol_paused() and started[index] < 0:
+				started[index] = frame
+			elif not monster.is_patrol_paused() and started[index] >= 0:
+				pauses[index].append([started[index], frame - started[index], positions.back()[index] if positions.size() > 0 else monster.global_position])
+				started[index] = -1
+			elif pauses[index].size() > 0 and started[index] < 0 and positions.size() > 0 and monster.global_position != positions.back()[index]:
+				moved_after[index] = true
+		positions.append(row)
+	await _destroy(main)
+	return {"positions": positions, "pause_frames": pauses, "moved_after_pause": moved_after}
+
+
+func _protection_label(session: EncounterSession) -> Label:
+	return session.get_node("EncounterOverlay").find_children("ProtectionLabel", "Label", true, false)[0] as Label
+
+
+func _end_button(session: EncounterSession) -> Button:
+	return session.get_node("EncounterOverlay").find_children("PrototypeEndButton", "Button", true, false)[0] as Button
 
 
 func _check(condition: bool, message: String) -> void:

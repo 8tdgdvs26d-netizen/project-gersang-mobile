@@ -7,13 +7,15 @@ extends SceneTree
 const TEST_SAVE := "user://wt05_patrol_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
-const HOME := Vector2(760.0, 650.0)
-const ROUTE := [Vector2(860.0, 610.0), Vector2(860.0, 720.0), Vector2(700.0, 720.0), Vector2(760.0, 650.0)]
+## E02 fix pass: home (800, 700) and a controlled irregular itinerary (four
+## points revisited in a varied order, with pauses) instead of the WT05 loop.
+const HOME := Vector2(800.0, 700.0)
+const ROUTE := [Vector2(900.0, 640.0), Vector2(900.0, 790.0), Vector2(800.0, 700.0), Vector2(740.0, 640.0), Vector2(760.0, 790.0), Vector2(900.0, 790.0), Vector2(900.0, 640.0), Vector2(800.0, 700.0)]
 const PATROL_SPEED := 60.0
 const CITY_A := Vector2(200.0, 200.0)
 const FAR := Vector2(3000.0, 3000.0)
-## Within aggro range of the first leg (home -> (860, 610)) but not of home.
-const WAIT_SPOT := Vector2(1000.0, 700.0)
+## Within aggro range of the first stop (900, 640) but not of home.
+const WAIT_SPOT := Vector2(1100.0, 560.0)
 const ZONE_MARGIN := 100.0
 
 var _checks := 0
@@ -110,7 +112,8 @@ func _verify_patrol() -> void:
 	var at_points := true
 	var farthest := 0.0
 	var index := monster.get_patrol_index()
-	for frame in range(1000):
+	# One full itinerary (8 stops, ~21 s with pauses) and the start of the next.
+	for frame in range(1400):
 		var before := monster.global_position
 		await physics_frame
 		smooth = smooth and before.distance_to(monster.global_position) <= max_step
@@ -125,7 +128,7 @@ func _verify_patrol() -> void:
 	_check(_states.is_empty() and _events.is_empty(), "No player nearby: patrols without aggro or contact")
 	_check(farthest > 80.0, "The monster visibly moves (up to %.0f px from home)" % farthest)
 	_check(smooth, "Patrol steps never exceed %.2f px (60 px/s, no teleport)" % max_step)
-	_check(reached.slice(0, 8) == [0, 1, 2, 3, 0, 1, 2, 3], "Deterministic order: two full loops (%s)" % str(reached))
+	_check(reached.slice(0, 9) == [0, 1, 2, 3, 4, 5, 6, 7, 0], "Deterministic order: the whole itinerary, then again (%s)" % str(reached))
 	_check(at_points, "Each patrol point is reached exactly")
 	_check(in_zone, "Patrol stays inside low_threat_zone_01")
 	_check(safe, "Patrol never enters a city safe buffer or leaves the world")

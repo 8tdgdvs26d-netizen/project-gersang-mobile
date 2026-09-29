@@ -8,7 +8,8 @@ extends SceneTree
 const TEST_SAVE := "user://e01_join_window_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
-const HOME := Vector2(760.0, 650.0)
+## E02 fix pass: group 1's home moved from (760, 650) to (800, 700).
+const HOME := Vector2(800.0, 700.0)
 const CITY_A := Vector2(200.0, 200.0)
 ## Inside the monster's aggro range, on open ground: the chase catches the
 ## player standing here.
@@ -133,8 +134,12 @@ func _verify_join_and_lock() -> void:
 	await _hold_action(player, "move_left", 10)
 	_check(player.global_position != caught_at, "The player moves again")
 	_check(main.wallet.get_balance() == money and main.inventory.get_used_capacity() == cargo, "Prototype end: nothing awarded")
-	# Another encounter afterwards, with its own id and a fresh window.
+	# Another encounter afterwards, with its own id and a fresh window (E02
+	# fix pass: after the 5 s recovery protection that follows the prototype end).
 	player.global_position = FAR
+	main.time_source.advance_ms(5000)
+	await process_frame
+	await process_frame
 	await _frames(300)
 	var second := await _get_caught(player, 2)
 	_check(second != null and second.encounter_id == "encounter_2" and session.get_context() == second and session.get_phase() == EncounterSession.Phase.JOINING and session.get_remaining_ms() == 5000, "A later catch starts a new 5 s window")

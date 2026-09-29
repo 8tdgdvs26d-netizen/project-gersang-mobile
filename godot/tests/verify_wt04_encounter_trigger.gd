@@ -8,7 +8,8 @@ const TEST_SAVE := "user://wt04_encounter_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
 const ZONE_ID := "low_threat_zone_01"
-const HOME := Vector2(760.0, 650.0)
+## E02 fix pass: group 1's home moved from (760, 650) to (800, 700).
+const HOME := Vector2(800.0, 700.0)
 const CITY_A := Vector2(200.0, 200.0)
 const FAR := Vector2(3000.0, 3000.0)
 const SAFE_SPOT := Vector2(560.0, 300.0)

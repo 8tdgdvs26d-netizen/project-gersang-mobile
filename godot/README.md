@@ -47,13 +47,33 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Encounter E02: multi-group join foundation.
+Encounter E02: multi-group join foundation (with the E02 fix pass).
+
+E02 fix pass (after Mac acceptance):
+
+- 5 s recovery protection after the prototype end (`EncounterSession.PROTECTION_MS`,
+  TimeSource, runtime only): the player moves freely, all groups keep patrolling but never
+  aggro (a chasing one turns back) and no contact becomes an encounter
+  (`EncounterHandoff.set_protected`, `WorldMonster.set_aggro_suppressed`). 「遭遇保護 X.X...」
+  counts it down; it ends by itself and is never saved
+- aggro radius 200 → 240 px
+- new three-group geometry: homes (800, 700), (1100, 700), (950, 930) (group 1 moved from
+  (760, 650) so its whole 240 px aggro circle stays inside the zone); the zone grew 30 px south
+  (x 560–1240, y 450–1060). Each group roams four points ~100 px around its home; the three
+  activity regions overlap near the middle without sharing a route. West of group 1 (e.g.
+  (640, 700)) only group 1 can reach; north between groups 1 and 2 (e.g. (900, 600)) groups 1
+  and 2 but never 3; the middle (e.g. (950, 780)) all three. Spawn and city exits stay out of
+  every group's reach
+- controlled irregular patrol: each group walks its own fixed itinerary that revisits its
+  points in a varied order (not one rigid loop) and pauses 0.5–2.0 s at some stops
+  (`patrol_pauses`, physics time, deterministic). Aggro works while paused; a chase ends the
+  pause; a reset / return restarts the itinerary with no pause left
 
 - three prototype World Enemy Groups (one monster each, same scene / AI / speeds / aggro):
-  `prototype_monster_01` home (760, 650) (the WT01–WT05 monster), `prototype_monster_02`
-  (1020, 650), `prototype_monster_03` (890, 860); each patrols the same loop shape, shifted
+  `prototype_monster_01` (the WT01–WT05 monster), `prototype_monster_02`,
+  `prototype_monster_03`; homes and itineraries as in the fix pass above
   (`WorldLayout.PROTOTYPE_GROUPS`, `WorldMonster.group_index`). No fourth group
-- low_threat_zone_01 grew east and south to hold them: x 560–1240, y 450–1030 (was x 560–1000,
+- low_threat_zone_01 grew east and south to hold them: x 560–1240, y 450–1060 (was x 560–1000,
   y 450–850; the corner nearest City A is unchanged). Every home and loop is outside all
   safe buffers, clear of the obstacles, and out of aggro range of the spawn and both city
   return points. Deliberate spots: west of group 1 → one group; north between groups 1 and 2

@@ -27,6 +27,12 @@ extends Area2D
 ## patrol_points at PATROL_SPEED, from the first point on, and aggroes as
 ## before. Reaching home after a chase, or any reset to home, restarts the
 ## loop from its first point. No patrol points: it stands at home (「待機」).
+## E02 fix pass: the patrol is a controlled irregular itinerary (points
+## revisited in a varied order) with deterministic pauses (patrol_pauses,
+## seconds, counted in physics time) at some stops; aggro still works while
+## paused and a chase ends the pause. set_aggro_suppressed() (recovery
+## protection) stops all aggro: an IDLE monster keeps patrolling but ignores
+## the player, a chasing one turns back.
 
 signal player_contacted(monster_id: String)
 signal state_changed(monster_id: String, state: int)
@@ -34,7 +40,7 @@ signal state_changed(monster_id: String, state: int)
 enum State { IDLE, CHASE, RETURNING }
 
 ## The player must come this close to the idle monster to be chased.
-const AGGRO_RADIUS := 200.0
+const AGGRO_RADIUS := 240.0
 ## The chase ends once the player is farther than this from the monster's home.
 const LEASH_RADIUS := 450.0
 ## Chase and return speed in px/s (the player walks at 220 px/s).
@@ -71,16 +77,21 @@ const HOLD_TEXT := "遭遇觸發"
 		monster_id = group["id"]
 		home_position = group["home"]
 		patrol_points = (group["patrol"] as Array).duplicate()
+		patrol_pauses = (group["pauses"] as Array).duplicate()
 var monster_id := WorldLayout.PROTOTYPE_MONSTER_ID
 var home_position := WorldLayout.PROTOTYPE_MONSTER_POSITION
 ## The patrol loop (world positions), walked in order while IDLE.
 var patrol_points: Array = WorldLayout.PROTOTYPE_MONSTER_PATROL.duplicate()
+## Pause (seconds) after reaching each patrol point; 0 or missing: none.
+var patrol_pauses: Array = WorldLayout.PROTOTYPE_MONSTER_PATROL_PAUSES.duplicate()
 var _active := true
 var _in_contact := false
 var _state := State.IDLE
 var _target: Node2D
 var _held := false
 var _patrol_index := 0
+var _pause_left := 0.0
+var _aggro_suppressed := false
 var _step_query := PhysicsShapeQueryParameters2D.new()
 
 @onready var _state_label := $StateLabel as Label
@@ -141,10 +152,24 @@ func get_patrol_index() -> int:
 	return _patrol_index
 
 
+func is_patrol_paused() -> bool:
+	return _pause_left > 0.0
+
+
+## Recovery protection: while true the monster never aggroes or keeps chasing.
+func set_aggro_suppressed(suppressed: bool) -> void:
+	_aggro_suppressed = suppressed
+
+
+func is_aggro_suppressed() -> bool:
+	return _aggro_suppressed
+
+
 ## Back to the deterministic start: at home, IDLE, patrol loop from its start.
 func reset_to_home() -> void:
 	global_position = home_position
 	_patrol_index = 0
+	_pause_left = 0.0
 	_set_state(State.IDLE)
 
 
@@ -153,13 +178,14 @@ func _physics_process(delta: float) -> void:
 		return
 	match _state:
 		State.IDLE:
-			if _target != null and global_position.distance_to(_target.global_position) <= AGGRO_RADIUS \
+			if not _aggro_suppressed and _target != null and global_position.distance_to(_target.global_position) <= AGGRO_RADIUS \
 					and not WorldThreatZones.is_in_city_safe_buffer(_target.global_position):
+				_pause_left = 0.0
 				_set_state(State.CHASE)
 			elif not patrol_points.is_empty():
 				_patrol(delta)
 		State.CHASE:
-			if _target == null or home_position.distance_to(_target.global_position) > LEASH_RADIUS \
+			if _aggro_suppressed or _target == null or home_position.distance_to(_target.global_position) > LEASH_RADIUS \
 					or WorldThreatZones.is_in_city_safe_buffer(_target.global_position) \
 					or WorldThreatZones.is_in_city_safe_buffer(global_position):
 				_set_state(State.RETURNING)
@@ -169,18 +195,29 @@ func _physics_process(delta: float) -> void:
 			if global_position.distance_to(home_position) <= HOME_SNAP_DISTANCE:
 				global_position = home_position
 				_patrol_index = 0
+				_pause_left = 0.0
 				_set_state(State.IDLE)
 			else:
 				_move_toward(home_position, 0.0, delta)
 
 
-## One patrol step; on reaching the current point, aim for the next one.
+## One patrol step; on reaching the current point, pause there if it has a
+## pause, then aim for the next point of the itinerary.
 func _patrol(delta: float) -> void:
+	if _pause_left > 0.0:
+		_pause_left = maxf(_pause_left - delta, 0.0)
+		if _pause_left == 0.0:
+			_patrol_index = (_patrol_index + 1) % patrol_points.size()
+		return
 	var point: Vector2 = patrol_points[_patrol_index]
 	_move_toward(point, 0.0, delta, PATROL_SPEED)
 	if global_position.distance_to(point) <= 0.01:
 		global_position = point
-		_patrol_index = (_patrol_index + 1) % patrol_points.size()
+		var pause: float = patrol_pauses[_patrol_index] if _patrol_index < patrol_pauses.size() else 0.0
+		if pause > 0.0:
+			_pause_left = pause
+		else:
+			_patrol_index = (_patrol_index + 1) % patrol_points.size()
 
 
 ## One physics step toward `point` at `speed`, never closer than
