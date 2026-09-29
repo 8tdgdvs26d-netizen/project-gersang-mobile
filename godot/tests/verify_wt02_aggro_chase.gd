@@ -55,7 +55,8 @@ func _verify_static() -> void:
 	_check(WorldMonster.CHASE_STOP_DISTANCE < 48.0, "The chase closes into contact range")
 	_check(WorldMonster.STATE_TEXT.size() == 3 and WorldMonster.STATE_TEXT.values() == ["待機", "追擊", "返回"], "Traditional Chinese state text for IDLE / CHASE / RETURNING")
 	var script := _code_only("res://scripts/world_monster.gd")
-	for word in ["randi", "randf", "RandomNumberGenerator", "randomize", "seed(", "Time.", "OS.", "Navigation", "AStar", "astar", "patrol", "encounter", "combat", "damage", "health", "respawn", "loot", "spawn"]:
+	# WT05 brought patrol into scope (verify_wt05_patrol).
+	for word in ["randi", "randf", "RandomNumberGenerator", "randomize", "seed(", "Time.", "OS.", "Navigation", "AStar", "astar", "encounter", "combat", "damage", "health", "respawn", "loot", "spawn"]:
 		_check(not script.contains(word), "Not in the monster: %s" % word)
 	for path in ["res://scripts/main.gd", "res://scripts/player.gd", "res://scripts/world_layout.gd"]:
 		var code := _code_only(path)
@@ -262,6 +263,7 @@ func _verify_bounds() -> void:
 	# sits outside the world: it stops at the edge. (WT03: the far corner, away
 	# from every city safe buffer; (60, 60) is inside City A's.)
 	var unit := (load("res://scenes/world_monster.tscn") as PackedScene).instantiate() as WorldMonster
+	unit.patrol_points = []  # WT05: stationary while idle, as this check assumes
 	unit.home_position = Vector2(39940.0, 39940.0)
 	var target := Node2D.new()
 	target.position = Vector2(40060.0, 40060.0)
@@ -345,6 +347,7 @@ func _verify_save() -> void:
 	_check(not lower.contains("monster") and not lower.contains("threat") and not lower.contains("chase") and not lower.contains("aggro"), "No monster state, position or timer is saved")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_no_patrol(main)
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
@@ -446,6 +449,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_no_patrol(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
@@ -475,6 +479,12 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## WT05: the monster stands at home while idle (no patrol loop), the
+## premise these checks were written for; verify_wt05_patrol covers patrol.
+func _no_patrol(main: Node) -> void:
+	(main.get_node("Actors/PrototypeMonster") as WorldMonster).patrol_points = []
 
 
 func _check(condition: bool, message: String) -> void:

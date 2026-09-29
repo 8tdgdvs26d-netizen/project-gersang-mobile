@@ -111,6 +111,7 @@ func _verify_unit_rules() -> void:
 	_check(WorldThreatZones.safe_buffer_city_at(UNIT_SAFE) == "A" and not WorldThreatZones.is_in_city_safe_buffer(UNIT_OPEN) and not WorldThreatZones.is_in_city_safe_buffer(UNIT_HOME), "Test setup: one spot inside City A's buffer, two outside")
 	_check(UNIT_HOME.distance_to(UNIT_SAFE) <= WorldMonster.AGGRO_RADIUS, "Test setup: the safe spot is within aggro range")
 	var unit := (load("res://scenes/world_monster.tscn") as PackedScene).instantiate() as WorldMonster
+	unit.patrol_points = []  # WT05: stationary while idle, as this check assumes
 	unit.home_position = UNIT_HOME
 	var target := Node2D.new()
 	target.position = UNIT_SAFE
@@ -269,6 +270,7 @@ func _verify_save() -> void:
 		_check(not lower.contains("zone") and not lower.contains("safe") and not lower.contains("threat") and not lower.contains("monster"), "No zone, safety or monster data is saved")
 		await _destroy(main)
 		main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+		_no_patrol(main)
 		main.save_path = TEST_SAVE
 		main.time_source = TimeSource.fixed(T0)
 		root.add_child(main)
@@ -345,6 +347,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_no_patrol(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
@@ -369,6 +372,12 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## WT05: the monster stands at home while idle (no patrol loop), the
+## premise these checks were written for; verify_wt05_patrol covers patrol.
+func _no_patrol(main: Node) -> void:
+	(main.get_node("Actors/PrototypeMonster") as WorldMonster).patrol_points = []
 
 
 func _check(condition: bool, message: String) -> void:

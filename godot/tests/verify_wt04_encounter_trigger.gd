@@ -310,6 +310,7 @@ func _verify_save() -> void:
 	_check(int(JSON.parse_string(text)["version"]) == 8 and not text.to_lower().contains("encounter") and not text.to_lower().contains("monster"), "Save version 8; no encounter or monster data saved")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_no_patrol(main)
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
@@ -384,6 +385,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_no_patrol(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
@@ -408,6 +410,12 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## WT05: the monster stands at home while idle (no patrol loop), the
+## premise these checks were written for; verify_wt05_patrol covers patrol.
+func _no_patrol(main: Node) -> void:
+	(main.get_node("Actors/PrototypeMonster") as WorldMonster).patrol_points = []
 
 
 func _check(condition: bool, message: String) -> void:

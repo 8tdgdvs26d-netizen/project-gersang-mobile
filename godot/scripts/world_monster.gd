@@ -23,6 +23,10 @@ extends Area2D
 ## WT04: while an encounter it triggered is pending (EncounterHandoff), the
 ## monster is held: its AI stands still in its current state, it shows
 ## 「遭遇觸發」, and it resumes only when the handoff releases it.
+## WT05: an IDLE monster patrols (「巡邏」): it walks its fixed loop of
+## patrol_points at PATROL_SPEED, from the first point on, and aggroes as
+## before. Reaching home after a chase, or any reset to home, restarts the
+## loop from its first point. No patrol points: it stands at home (「待機」).
 
 signal player_contacted(monster_id: String)
 signal state_changed(monster_id: String, state: int)
@@ -35,6 +39,8 @@ const AGGRO_RADIUS := 200.0
 const LEASH_RADIUS := 450.0
 ## Chase and return speed in px/s (the player walks at 220 px/s).
 const MOVE_SPEED := 160.0
+## Patrol speed in px/s: a slow walk, well under the chase speed.
+const PATROL_SPEED := 60.0
 ## The chase holds this far from the player (inside the 48 px contact area).
 const CHASE_STOP_DISTANCE := 24.0
 ## Within this distance of home the monster settles exactly on it.
@@ -50,16 +56,21 @@ const STATE_TEXT := {
 	State.CHASE: "追擊",
 	State.RETURNING: "返回",
 }
+## Shown while IDLE with a patrol loop.
+const PATROL_TEXT := "巡邏"
 ## Shown while held for a pending handoff (WT04).
 const HOLD_TEXT := "遭遇觸發"
 
 var monster_id := WorldLayout.PROTOTYPE_MONSTER_ID
 var home_position := WorldLayout.PROTOTYPE_MONSTER_POSITION
+## The patrol loop (world positions), walked in order while IDLE.
+var patrol_points: Array = WorldLayout.PROTOTYPE_MONSTER_PATROL.duplicate()
 var _active := true
 var _in_contact := false
 var _state := State.IDLE
 var _target: Node2D
 var _held := false
+var _patrol_index := 0
 var _step_query := PhysicsShapeQueryParameters2D.new()
 
 @onready var _state_label := $StateLabel as Label
@@ -115,9 +126,15 @@ func set_threat_active(active: bool) -> void:
 		reset_to_home()
 
 
-## Back to the deterministic start: at home, standing still, IDLE.
+## Index of the patrol point the monster is walking to.
+func get_patrol_index() -> int:
+	return _patrol_index
+
+
+## Back to the deterministic start: at home, IDLE, patrol loop from its start.
 func reset_to_home() -> void:
 	global_position = home_position
+	_patrol_index = 0
 	_set_state(State.IDLE)
 
 
@@ -129,6 +146,8 @@ func _physics_process(delta: float) -> void:
 			if _target != null and global_position.distance_to(_target.global_position) <= AGGRO_RADIUS \
 					and not WorldThreatZones.is_in_city_safe_buffer(_target.global_position):
 				_set_state(State.CHASE)
+			elif not patrol_points.is_empty():
+				_patrol(delta)
 		State.CHASE:
 			if _target == null or home_position.distance_to(_target.global_position) > LEASH_RADIUS \
 					or WorldThreatZones.is_in_city_safe_buffer(_target.global_position) \
@@ -139,19 +158,29 @@ func _physics_process(delta: float) -> void:
 		State.RETURNING:
 			if global_position.distance_to(home_position) <= HOME_SNAP_DISTANCE:
 				global_position = home_position
+				_patrol_index = 0
 				_set_state(State.IDLE)
 			else:
 				_move_toward(home_position, 0.0, delta)
 
 
-## One physics step toward `point`, never closer than `stop_distance`,
-## sliding along static obstacles and kept inside the world.
-func _move_toward(point: Vector2, stop_distance: float, delta: float) -> void:
+## One patrol step; on reaching the current point, aim for the next one.
+func _patrol(delta: float) -> void:
+	var point: Vector2 = patrol_points[_patrol_index]
+	_move_toward(point, 0.0, delta, PATROL_SPEED)
+	if global_position.distance_to(point) <= 0.01:
+		global_position = point
+		_patrol_index = (_patrol_index + 1) % patrol_points.size()
+
+
+## One physics step toward `point` at `speed`, never closer than
+## `stop_distance`, sliding along static obstacles and kept inside the world.
+func _move_toward(point: Vector2, stop_distance: float, delta: float, speed := MOVE_SPEED) -> void:
 	var offset := point - global_position
 	var distance := offset.length()
 	if distance <= stop_distance:
 		return
-	var motion := offset / distance * minf(MOVE_SPEED * delta, distance - stop_distance)
+	var motion := offset / distance * minf(speed * delta, distance - stop_distance)
 	_cast_step(Vector2(motion.x, 0.0))
 	_cast_step(Vector2(0.0, motion.y))
 	var margin := Vector2(BODY_RADIUS, BODY_RADIUS)
@@ -178,7 +207,12 @@ func _set_state(state: State) -> void:
 
 
 func _refresh_label() -> void:
-	_state_label.text = HOLD_TEXT if _held else STATE_TEXT[_state]
+	if _held:
+		_state_label.text = HOLD_TEXT
+	elif _state == State.IDLE and not patrol_points.is_empty():
+		_state_label.text = PATROL_TEXT
+	else:
+		_state_label.text = STATE_TEXT[_state]
 
 
 func _on_body_entered(body: Node2D) -> void:
