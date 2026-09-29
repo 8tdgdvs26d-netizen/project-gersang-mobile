@@ -44,7 +44,9 @@ func _verify_static() -> void:
 	for unrelated in ["trade_service", "warehouse_service", "warehouse_state", "market_state", "market_rules", "transport_service", "save_store", "city_hub", "trade_cost_ledger", "player_location"]:
 		var code := _code_only("res://scripts/%s.gd" % unrelated).to_lower()
 		_check(not code.contains("monster") and not code.contains("threat"), "No world-threat logic in %s" % unrelated)
-	for word in ["patrol", "aggro", "chase", "leash", "encounter", "combat", "damage", "health", "respawn", "loot"]:
+	# WT02 brought aggro / chase / leash into scope (verify_wt02_aggro_chase);
+	# everything else stays out.
+	for word in ["patrol", "encounter", "combat", "damage", "health", "respawn", "loot"]:
 		_check(not script.to_lower().contains(word), "No out-of-scope behaviour in the monster (%s)" % word)
 	_check(SaveStore.VERSION == 8, "No save schema change (still version 8)")
 	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
@@ -106,6 +108,9 @@ func _verify_position() -> void:
 		_check(MONSTER_POS.clamp(player_rect.position, player_rect.end).distance_to(MONSTER_POS) > CONTACT_RADIUS + 40.0, "A player at City %s's return point is well clear of the contact area" % city)
 	_check(MONSTER_POS.distance_to(PlayerLocation.DEFAULT_WORLD_SPAWN) < 600.0, "Close to the spawn for development testing")
 	# Reachable by normal movement: walk from the spawn with the move actions.
+	# WT02: without a chase target the monster stays at home, so this checks
+	# the static layout exactly as WT01 did (the chase is covered by WT02).
+	monster.set_chase_target(null)
 	_events.clear()
 	monster.player_contacted.connect(_on_contact)
 	var player := _player(main)
@@ -127,6 +132,9 @@ func _verify_contact_lifecycle() -> void:
 	var main := await _new_main("")
 	var monster := _monster(main)
 	var player := _player(main)
+	# WT02: contact geometry against a stationary monster (no chase target);
+	# contact while chasing is covered by WT02.
+	monster.set_chase_target(null)
 	_events.clear()
 	monster.player_contacted.connect(_on_contact)
 	player.global_position = FAR

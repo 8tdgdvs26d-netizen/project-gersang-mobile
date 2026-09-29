@@ -47,7 +47,29 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-World Threat WT01: visible prototype monster foundation.
+World Threat WT02: aggro, chase & disengage foundation.
+
+- the same single monster now runs IDLE → CHASE → RETURNING → IDLE, shown as
+  「待機」／「追擊」／「返回」 under its name. `state_changed(monster_id, state)` fires once per change
+- aggro: the player comes within 250 px of the idle monster. Leash: the chase ends once the
+  player is more than 450 px from home (720, 320); the gap between the two radii prevents
+  flicker. RETURNING ignores the player until it is home, then IDLE may aggro again
+- chase / return speed 160 px/s, slower than the player's 220 px/s, so walking away always
+  escapes. Straight line toward the target; each step is shape-cast (24 px circle) against
+  the static obstacles one axis at a time, so it stops at a wall and slides along it, never
+  passes through, and stays inside the world. No pathfinding: it can be held against an
+  obstacle while the player stands straight behind it. The last 4 px to home snap
+- the monster stays the WT01 `Area2D` (no physics body, so it never pushes or blocks the
+  player); WT01 contact keeps its once-per-overlap semantics, also while chasing
+- WORLD only: entering a city or travelling resets it to home / IDLE; returning to the world
+  starts from there. City A's return point (540, 200) is 216 px from home, inside the aggro
+  radius, so leaving City A starts one chase
+- no attack, damage, encounter or combat. Nothing about the monster is saved (save
+  version 8 unchanged); a load always rebuilds it at home, IDLE
+- tests: `tests/verify_wt02_aggro_chase.gd` (WT01's test keeps its static-contact checks
+  with no chase target)
+
+Previous: World Threat WT01: visible prototype monster foundation.
 
 - one prototype monster: stable id `prototype_monster_01`, fixed position (720, 320) as layout
   data in `WorldLayout` (inside the playable rect, clear of both obstacles, City A's entry
