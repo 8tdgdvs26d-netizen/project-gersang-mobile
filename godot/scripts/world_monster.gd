@@ -16,6 +16,10 @@ extends Area2D
 ## has no physics body, so it never pushes or blocks the player). Nothing here
 ## is saved: deactivating the threat (city, travel) puts the monster back at
 ## home in IDLE, and a load rebuilds it there.
+## WT03: city safe buffers are sanctuaries (WorldThreatZones). A player in one
+## is never aggroed and reports no contact; a chase ends (-> RETURNING) as soon
+## as the player, or the monster itself, is inside one. The home must lie
+## outside every safe buffer.
 
 signal player_contacted(monster_id: String)
 signal state_changed(monster_id: String, state: int)
@@ -56,6 +60,8 @@ var _step_query := PhysicsShapeQueryParameters2D.new()
 
 
 func _ready() -> void:
+	if WorldThreatZones.is_in_city_safe_buffer(home_position):
+		push_error("Myrial: world threat %s has its home inside a city safe buffer" % monster_id)
 	position = home_position
 	var body := CircleShape2D.new()
 	body.radius = BODY_RADIUS
@@ -103,10 +109,13 @@ func _physics_process(delta: float) -> void:
 		return
 	match _state:
 		State.IDLE:
-			if _target != null and global_position.distance_to(_target.global_position) <= AGGRO_RADIUS:
+			if _target != null and global_position.distance_to(_target.global_position) <= AGGRO_RADIUS \
+					and not WorldThreatZones.is_in_city_safe_buffer(_target.global_position):
 				_set_state(State.CHASE)
 		State.CHASE:
-			if _target == null or home_position.distance_to(_target.global_position) > LEASH_RADIUS:
+			if _target == null or home_position.distance_to(_target.global_position) > LEASH_RADIUS \
+					or WorldThreatZones.is_in_city_safe_buffer(_target.global_position) \
+					or WorldThreatZones.is_in_city_safe_buffer(global_position):
 				_set_state(State.RETURNING)
 			else:
 				_move_toward(_target.global_position, CHASE_STOP_DISTANCE, delta)
@@ -153,6 +162,8 @@ func _set_state(state: State) -> void:
 
 func _on_body_entered(body: Node2D) -> void:
 	if not body is Player or not _active or _in_contact:
+		return
+	if WorldThreatZones.is_in_city_safe_buffer(body.global_position):
 		return
 	_in_contact = true
 	print("Myrial: world threat contact ", monster_id)
