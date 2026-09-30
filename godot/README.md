@@ -47,7 +47,29 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Encounter E02: multi-group join foundation (with the E02 fix pass).
+Encounter E03: Aggressive / Passive threat dispositions and manual challenge foundation.
+
+- every World Enemy Group has a fixed disposition in `WorldLayout.PROTOTYPE_GROUPS`
+  (`WorldLayout.Disposition`, config only, never saved): `prototype_monster_01` and
+  `prototype_monster_02` are AGGRESSIVE, `prototype_monster_03` is PASSIVE
+- AGGRESSIVE groups keep the E02 behaviour: aggro (240 px), chase, catch, start an encounter,
+  auto-join during JOINING; safe buffers and recovery protection still stop them
+- PASSIVE groups patrol and pause as before but never aggro or chase, touching them starts no
+  encounter and they never auto-join (not even an AGGRESSIVE group's encounter)
+- 「挑戰」 shows only in WORLD with no encounter (not JOINING / LOCKED), outside every city safe
+  buffer, with an active PASSIVE group within 200 px (`EncounterHandoff.CHALLENGE_RANGE`).
+  Recovery protection does not hide it. Pressing it starts the same encounter pipeline as a
+  catch (`EncounterHandoff.challenge()` → one `encounter_id`, the PASSIVE group primary,
+  `triggered_at_ms` = the press, JOINING 5.0 s, player locked); AGGRESSIVE groups in range may
+  join (e.g. `[03, 01, 02]`, planned size 20) and never reset the window
+- a challenge during recovery protection ends the protection at once (countdown hidden, no
+  aggro suppression left)
+- no Combat, retreat, reward, cooldown, confirmation, target selection or save change
+  (save version stays 8)
+- tests: `tests/verify_e03_disposition_challenge.gd`. `tests/verify_e02_multi_group.gd` makes
+  group 3 AGGRESSIVE for its three-group join cases
+
+Previous: Encounter E02: multi-group join foundation (with the E02 fix pass).
 
 E02 fix pass (after Mac acceptance):
 

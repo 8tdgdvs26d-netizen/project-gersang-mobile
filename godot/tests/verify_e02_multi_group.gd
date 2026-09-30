@@ -71,7 +71,9 @@ func _verify_static() -> void:
 	_check(scene.count("instance=ExtResource(\"9_monster\")") == 3 and scene.count("group_index = 1") == 1 and scene.count("group_index = 2") == 1 and not scene.contains("group_index = 3"), "Exactly three monster instances (groups 1, 2, 3), no fourth")
 	for path in ["res://scripts/encounter_session.gd", "res://scripts/encounter_handoff.gd", "res://scripts/world_monster.gd"]:
 		var code := _code_only(path).to_lower()
-		for word in ["battle", "damage", "health", "reward", "loot", "retreat", "passive", "aggressive", "challenge", "randi", "randf", "navigation"]:
+		# E03 brought Aggressive / Passive and the manual challenge into scope
+		# (verify_e03_disposition_challenge).
+		for word in ["battle", "damage", "health", "reward", "loot", "retreat", "randi", "randf", "navigation"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_check(not _code_only("res://scripts/save_store.gd").to_lower().contains("group") and SaveStore.VERSION == 8, "Save version 8; the save knows nothing about groups")
 	_sections_done.append("static")
@@ -290,6 +292,7 @@ func _verify_reload() -> void:
 	_check(int(JSON.parse_string(text)["version"]) == 8 and not lower.contains("group") and not lower.contains("encounter") and not lower.contains("monster"), "Save version 8; no groups, encounter or monster saved")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_all_aggressive(main)
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0 + 10000)
 	root.add_child(main)
@@ -467,6 +470,7 @@ func _verify_protection() -> void:
 	_check(main.wallet.get_balance() == money, "No reward at any point")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_all_aggressive(main)
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
@@ -577,6 +581,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_all_aggressive(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
@@ -629,6 +634,7 @@ func _routes_gap(a: Array, b: Array) -> float:
 ## plus each group's pauses as [start frame, length, position].
 func _world_track(frames: int) -> Dictionary:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_all_aggressive(main)
 	main.save_path = ""
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
@@ -661,6 +667,13 @@ func _protection_label(session: EncounterSession) -> Label:
 
 func _end_button(session: EncounterSession) -> Button:
 	return session.get_node("EncounterOverlay").find_children("PrototypeEndButton", "Button", true, false)[0] as Button
+
+
+## E03: all three groups AGGRESSIVE (group 3 is PASSIVE by design): the
+## all-hostile world these E02 checks were written for;
+## verify_e03_disposition_challenge covers the real dispositions.
+func _all_aggressive(main: Node) -> void:
+	(main.get_node("Actors/PrototypeMonster3") as WorldMonster).disposition = WorldLayout.Disposition.AGGRESSIVE
 
 
 func _check(condition: bool, message: String) -> void:

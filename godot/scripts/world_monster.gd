@@ -33,6 +33,9 @@ extends Area2D
 ## paused and a chase ends the pause. set_aggro_suppressed() (recovery
 ## protection) stops all aggro: an IDLE monster keeps patrolling but ignores
 ## the player, a chasing one turns back.
+## E03: a PASSIVE monster (disposition) never aggroes or chases; it only
+## patrols and pauses. Contact is still reported, but only an AGGRESSIVE
+## monster's contact can start an encounter (EncounterHandoff).
 
 signal player_contacted(monster_id: String)
 signal state_changed(monster_id: String, state: int)
@@ -78,7 +81,10 @@ const HOLD_TEXT := "遭遇觸發"
 		home_position = group["home"]
 		patrol_points = (group["patrol"] as Array).duplicate()
 		patrol_pauses = (group["pauses"] as Array).duplicate()
+		disposition = group["disposition"]
 var monster_id := WorldLayout.PROTOTYPE_MONSTER_ID
+## E03: fixed design disposition (group 1: AGGRESSIVE).
+var disposition: WorldLayout.Disposition = WorldLayout.PROTOTYPE_GROUPS[0]["disposition"]
 var home_position := WorldLayout.PROTOTYPE_MONSTER_POSITION
 ## The patrol loop (world positions), walked in order while IDLE.
 var patrol_points: Array = WorldLayout.PROTOTYPE_MONSTER_PATROL.duplicate()
@@ -165,6 +171,10 @@ func is_aggro_suppressed() -> bool:
 	return _aggro_suppressed
 
 
+func is_passive() -> bool:
+	return disposition == WorldLayout.Disposition.PASSIVE
+
+
 ## Back to the deterministic start: at home, IDLE, patrol loop from its start.
 func reset_to_home() -> void:
 	global_position = home_position
@@ -178,7 +188,7 @@ func _physics_process(delta: float) -> void:
 		return
 	match _state:
 		State.IDLE:
-			if not _aggro_suppressed and _target != null and global_position.distance_to(_target.global_position) <= AGGRO_RADIUS \
+			if not _aggro_suppressed and not is_passive() and _target != null and global_position.distance_to(_target.global_position) <= AGGRO_RADIUS \
 					and not WorldThreatZones.is_in_city_safe_buffer(_target.global_position):
 				_pause_left = 0.0
 				_set_state(State.CHASE)
