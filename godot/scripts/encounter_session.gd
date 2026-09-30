@@ -16,6 +16,16 @@ extends Node
 ## and unlocks the player. Before Combat exists, a LOCKED encounter is ended by
 ## the temporary prototype_end_encounter() (button 「返回世界（原型）」). Nothing
 ## here is saved: a reload starts with no encounter and no lock.
+##
+## E02: while JOINING, other World Enemy Groups whose aggro radius holds the
+## player join through EncounterHandoff.join_groups_in_range() (up to 3; never
+## after LOCKED). Joining never resets or extends the window. From 2 groups on
+## the overlay adds 「敵軍加入 ×N」.
+##
+## E02 fix pass: the prototype end starts a 5 s recovery protection
+## (PROTECTION_MS, TimeSource, runtime only): the player moves freely, the
+## groups keep patrolling but never aggro, and no contact becomes an encounter
+## (EncounterHandoff.set_protected). 「遭遇保護 X.X...」 counts it down.
 
 signal phase_changed(phase: int)
 
@@ -24,6 +34,10 @@ enum Phase { NONE, JOINING, LOCKED }
 const JOIN_WINDOW_MS := 5000
 const JOINING_TEXT := "遭遇準備 %.1f..."
 const LOCKED_TEXT := "遭遇鎖定"
+const GROUPS_TEXT := "敵軍加入 ×%d"
+## Recovery protection after the prototype end.
+const PROTECTION_MS := 5000
+const PROTECTION_TEXT := "遭遇保護 %.1f..."
 ## TEMPORARY (pre-Combat) recovery button, shown only while LOCKED.
 const PROTOTYPE_END_TEXT := "返回世界（原型）"
 
@@ -39,6 +53,9 @@ var _context: EncounterContext
 var _layer: CanvasLayer
 var _status_label: Label
 var _end_button: Button
+var _groups_label: Label
+var _protection_label: Label
+var _protection_ends_ms := -1
 
 
 func _ready() -> void:
@@ -59,6 +76,18 @@ func _ready() -> void:
 	_status_label.add_theme_font_size_override("font_size", 34)
 	_status_label.add_theme_color_override("font_color", Color(0.95, 0.8, 0.45, 1.0))
 	box.add_child(_status_label)
+	_groups_label = Label.new()
+	_groups_label.name = "GroupsLabel"
+	_groups_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_groups_label.add_theme_font_size_override("font_size", 28)
+	_groups_label.add_theme_color_override("font_color", Color(0.95, 0.45, 0.35, 1.0))
+	box.add_child(_groups_label)
+	_protection_label = Label.new()
+	_protection_label.name = "ProtectionLabel"
+	_protection_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_protection_label.add_theme_font_size_override("font_size", 26)
+	_protection_label.add_theme_color_override("font_color", Color(0.55, 0.85, 0.6, 1.0))
+	box.add_child(_protection_label)
 	_end_button = Button.new()
 	_end_button.name = "PrototypeEndButton"
 	_end_button.text = PROTOTYPE_END_TEXT
@@ -113,14 +142,35 @@ func prototype_end_encounter() -> bool:
 	print("Myrial: prototype end of encounter ", _context.encounter_id)
 	_handoff.cancel_pending_encounter()
 	_clear()
+	_protection_ends_ms = _time_source.now_ms() + PROTECTION_MS
+	_handoff.set_protected(true)
+	_refresh_ui()
 	return true
 
 
+func is_protection_active() -> bool:
+	return _protection_ends_ms >= 0
+
+
+## Recovery protection time left (0 when none).
+func get_protection_remaining_ms() -> int:
+	if _protection_ends_ms < 0:
+		return 0
+	return clampi(_protection_ends_ms - _time_source.now_ms(), 0, PROTECTION_MS)
+
+
 func _process(_delta: float) -> void:
+	if _protection_ends_ms >= 0:
+		if get_protection_remaining_ms() == 0:
+			_protection_ends_ms = -1
+			_handoff.set_protected(false)
+			print("Myrial: recovery protection over")
+		_refresh_ui()
 	if _phase == Phase.JOINING:
 		if get_remaining_ms() == 0:
 			_set_phase(Phase.LOCKED)
 		else:
+			_handoff.join_groups_in_range()
 			_refresh_ui()
 
 
@@ -159,4 +209,10 @@ func _refresh_ui() -> void:
 		_:
 			_status_label.text = ""
 	_status_label.visible = _phase != Phase.NONE
+	var groups := _context.get_group_count() if _context != null else 0
+	_groups_label.text = GROUPS_TEXT % groups if groups >= 2 else ""
+	_groups_label.visible = _phase != Phase.NONE and groups >= 2
+	var protected := _protection_ends_ms >= 0
+	_protection_label.text = PROTECTION_TEXT % (ceili(get_protection_remaining_ms() / 100.0) / 10.0) if protected else ""
+	_protection_label.visible = protected
 	_end_button.visible = _phase == Phase.LOCKED

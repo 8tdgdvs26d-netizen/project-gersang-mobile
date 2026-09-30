@@ -8,14 +8,17 @@ const TEST_SAVE := "user://wt04_encounter_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
 const ZONE_ID := "low_threat_zone_01"
-const HOME := Vector2(760.0, 650.0)
+## E02 fix pass: group 1's home moved from (760, 650) to (800, 700).
+const HOME := Vector2(800.0, 700.0)
 const CITY_A := Vector2(200.0, 200.0)
 const FAR := Vector2(3000.0, 3000.0)
 const SAFE_SPOT := Vector2(560.0, 300.0)
 ## In the zone, inside aggro range: the chase catches a player standing here
 ## away from home, so a held monster is visibly off its home.
 const CATCH_SPOT := Vector2(900.0, 650.0)
-const CONTEXT_FIELDS := ["encounter_id", "monster_id", "player_world_position", "threat_zone_id", "trigger_world_position", "triggered_at_ms"]
+## E02 added group_monster_ids (all groups taking part; monster_id stays the
+## catching group).
+const CONTEXT_FIELDS := ["encounter_id", "group_monster_ids", "monster_id", "player_world_position", "threat_zone_id", "trigger_world_position", "triggered_at_ms"]
 
 var _checks := 0
 var _failures := 0
@@ -53,6 +56,10 @@ func _verify_static() -> void:
 	for path in ["res://scripts/encounter_handoff.gd", "res://scripts/encounter_context.gd"]:
 		var code := _code_only(path).to_lower()
 		for word in ["randi", "randf", "randomnumbergenerator", "time.", "os.", "combat", "battle", "damage", "hp", "health", "reward", "loot", "attack", "save_store", "change_scene"]:
+			# E02: the context carries the approved planned Combat enemy count
+			# (planning data only), so "combat" may appear there.
+			if word == "combat" and path.ends_with("encounter_context.gd"):
+				continue
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	var monster := _code_only("res://scripts/world_monster.gd")
 	_check(not monster.contains("EncounterContext") and not monster.contains("EncounterHandoff") and not monster.to_lower().contains("encounter"), "The monster knows nothing about encounters (only a hold)")
@@ -310,6 +317,7 @@ func _verify_save() -> void:
 	_check(int(JSON.parse_string(text)["version"]) == 8 and not text.to_lower().contains("encounter") and not text.to_lower().contains("monster"), "Save version 8; no encounter or monster data saved")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	_no_patrol(main)
 	_no_join_window(main)
 	main.save_path = TEST_SAVE
@@ -386,6 +394,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	_no_patrol(main)
 	_no_join_window(main)
 	main.save_path = path
@@ -424,6 +433,14 @@ func _no_patrol(main: Node) -> void:
 ## checks were written for; verify_e01_join_window covers the lock.
 func _no_join_window(main: Node) -> void:
 	(main.get_node("EncounterSession") as EncounterSession).enabled = false
+
+
+## E02: only World Enemy Group 1 (groups 2 and 3 removed before the scene
+## starts): the one-group world these checks were written for;
+## verify_e02_multi_group covers all three groups.
+func _single_group(main: Node) -> void:
+	for extra in ["Actors/PrototypeMonster2", "Actors/PrototypeMonster3"]:
+		main.get_node(extra).free()
 
 
 func _check(condition: bool, message: String) -> void:

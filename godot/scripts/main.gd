@@ -66,9 +66,10 @@ var _last_world_autosave_ms := 0
 @onready var _joystick := $TouchControls/Joystick as TouchJoystick
 @onready var _city_hub := $CityHub as CityHub
 @onready var _enter_city_button := $EnterControls/EnterCityButton as Button
-## World Threat: the one prototype monster (WT01 contact, WT02 aggro / chase /
-## disengage). Active in WORLD mode only; never saved.
-@onready var _prototype_monster := $Actors/PrototypeMonster as WorldMonster
+## World Threat: the prototype monsters (WT01 contact, WT02 aggro / chase /
+## disengage), one per World Enemy Group (E02: three, group 1 first). Active in
+## WORLD mode only; never saved.
+var _world_monsters: Array[WorldMonster] = []
 ## World Threat WT04: turns the monster's valid contact into one pending
 ## Encounter Trigger + context for the future Encounter System.
 @onready var _encounter_handoff := $EncounterHandoff as EncounterHandoff
@@ -91,8 +92,11 @@ func _ready() -> void:
 	_city_hub.warehouse_city_selected.connect(_on_warehouse_city_selected)
 	_city_hub.facility_changed.connect(_on_hub_facility_changed)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
-	_prototype_monster.set_chase_target(_player)
-	_encounter_handoff.watch(_prototype_monster, _player, func() -> bool: return location.is_in_world(), time_source)
+	for child in $Actors.get_children():
+		if child is WorldMonster:
+			_world_monsters.append(child)
+			child.set_chase_target(_player)
+	_encounter_handoff.watch(_world_monsters, _player, func() -> bool: return location.is_in_world(), time_source)
 	_encounter_session.watch(_encounter_handoff, _player, time_source)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
 	# save: the saved anchor + stock rebuild the same result on every reload.
@@ -483,4 +487,5 @@ func _set_world_active(active: bool) -> void:
 		# WT04 recovery: leaving WORLD (city or travel) cancels an encounter
 		# no Encounter System has taken yet (E01: its join window / lock too).
 		_encounter_session.cancel_for_world_exit()
-	_prototype_monster.set_threat_active(active)
+	for monster in _world_monsters:
+		monster.set_threat_active(active)

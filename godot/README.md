@@ -47,7 +47,56 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Encounter E01: join window & lock foundation.
+Encounter E02: multi-group join foundation (with the E02 fix pass).
+
+E02 fix pass (after Mac acceptance):
+
+- 5 s recovery protection after the prototype end (`EncounterSession.PROTECTION_MS`,
+  TimeSource, runtime only): the player moves freely, all groups keep patrolling but never
+  aggro (a chasing one turns back) and no contact becomes an encounter
+  (`EncounterHandoff.set_protected`, `WorldMonster.set_aggro_suppressed`). 「遭遇保護 X.X...」
+  counts it down; it ends by itself and is never saved
+- aggro radius 200 → 240 px
+- new three-group geometry: homes (800, 700), (1100, 700), (950, 930) (group 1 moved from
+  (760, 650) so its whole 240 px aggro circle stays inside the zone); the zone grew 30 px south
+  (x 560–1240, y 450–1060). Each group roams four points ~100 px around its home; the three
+  activity regions overlap near the middle without sharing a route. West of group 1 (e.g.
+  (640, 700)) only group 1 can reach; north between groups 1 and 2 (e.g. (900, 600)) groups 1
+  and 2 but never 3; the middle (e.g. (950, 780)) all three. Spawn and city exits stay out of
+  every group's reach
+- controlled irregular patrol: each group walks its own fixed itinerary that revisits its
+  points in a varied order (not one rigid loop) and pauses 0.5–2.0 s at some stops
+  (`patrol_pauses`, physics time, deterministic). Aggro works while paused; a chase ends the
+  pause; a reset / return restarts the itinerary with no pause left
+
+- three prototype World Enemy Groups (one monster each, same scene / AI / speeds / aggro):
+  `prototype_monster_01` (the WT01–WT05 monster), `prototype_monster_02`,
+  `prototype_monster_03`; homes and itineraries as in the fix pass above
+  (`WorldLayout.PROTOTYPE_GROUPS`, `WorldMonster.group_index`). No fourth group
+- low_threat_zone_01 grew east and south to hold them: x 560–1240, y 450–1060 (was x 560–1000,
+  y 450–850; the corner nearest City A is unchanged). Every home and loop is outside all
+  safe buffers, clear of the obstacles, and out of aggro range of the spawn and both city
+  return points. Deliberate spots: west of group 1 → one group; north between groups 1 and 2
+  → two; the middle of the three → three
+- the first group to physically catch the player starts the encounter (WT04, unchanged) and
+  is the context's `monster_id`. While JOINING, every other active group whose aggro radius
+  holds the player (in WORLD, outside safety) joins once, in the order it qualifies, up to 3
+  (`EncounterHandoff.join_groups_in_range()`, `MAX_GROUPS`); no contact needed. A join never
+  creates a trigger or a new `encounter_id` and never resets `triggered_at_ms` or the 5 s
+  window. No group joins after LOCKED. All groups are hostile for now (no Aggressive /
+  Passive yet)
+- `EncounterContext.group_monster_ids` lists every group in join order (catcher first);
+  `get_group_count()` / `get_planned_combat_enemy_count()`: 1 → 10, 2 → 15, 3 → 20 (planning data
+  only, no Combat enemies)
+- joined groups are held like the catcher; groups not taking part keep their normal world
+  behaviour. The overlay adds 「敵軍加入 ×2」 / 「敵軍加入 ×3」 under the unchanged countdown, and
+  keeps it at 「遭遇鎖定」
+- the prototype end, leaving WORLD and the WT04 cancel release and reset every participating
+  group (home, IDLE, patrol from the start). Nothing is saved (save version 8)
+- tests: `tests/verify_e02_multi_group.gd`. The WT01–WT05 and E01 tests remove groups 2 and 3
+  before the scene starts: the one-group world they were written for
+
+Previous: Encounter E01: join window & lock foundation.
 
 - `EncounterSession` (new node in the main scene) follows the WT04 `EncounterHandoff`: it does
   no contact detection and keeps the handoff's pending `EncounterContext` as the one active

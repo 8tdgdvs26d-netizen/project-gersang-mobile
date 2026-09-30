@@ -27,21 +27,58 @@ const CITY_RETURN_POINTS := {
 	"B": Vector2(39460.0, 200.0),
 }
 
-## World Threat: the single prototype monster. Fixed identity and fixed home
-## (layout data, never random). WT02 review: a stand-in low-level threat spot
-## away from City A's exit, a short walk from the default spawn (372 px),
-## between the two obstacles and never straight behind one (so returning home
-## can always slide around them). Every city return point stays far outside
-## its aggro radius (City A's: 501 px), so leaving a city never starts a chase.
+## World Threat: the single prototype monster (group 1). Fixed identity and
+## fixed home (layout data, never random): a stand-in low-level threat spot
+## away from City A's exit, never straight behind an obstacle (returning home
+## can always slide around them). E02 fix pass: moved from (760, 650) to
+## (800, 700) so its whole 240 px aggro circle lies inside low_threat_zone_01
+## (x 560–1040, y 460–940). Every city return point and the new-game spawn stay
+## far outside every group's aggro range.
 const PROTOTYPE_MONSTER_ID := "prototype_monster_01"
-const PROTOTYPE_MONSTER_POSITION := Vector2(760.0, 650.0)
-## World Threat WT05: the prototype monster's fixed patrol loop, visited in
-## this order and ending back at home. Every point and straight leg lies well
-## inside low_threat_zone_01 (130+ px from its edges), clear of both obstacles
-## and far from every city safe buffer.
+const PROTOTYPE_MONSTER_POSITION := Vector2(800.0, 700.0)
+## World Threat WT05 / E02 fix pass: group 1's patrol itinerary, walked in this
+## order and ending back at home. Controlled irregular patrol: four fixed
+## points around home visited in a varied, repeating order (not one rigid
+## loop), with a deterministic pause (seconds, 0 = none) at some stops.
+## Every point and straight leg lies well inside low_threat_zone_01, clear of
+## both obstacles and far from every city safe buffer.
 const PROTOTYPE_MONSTER_PATROL := [
-	Vector2(860.0, 610.0),
-	Vector2(860.0, 720.0),
-	Vector2(700.0, 720.0),
-	Vector2(760.0, 650.0),
+	Vector2(900.0, 640.0),
+	Vector2(900.0, 790.0),
+	Vector2(800.0, 700.0),
+	Vector2(740.0, 640.0),
+	Vector2(760.0, 790.0),
+	Vector2(900.0, 790.0),
+	Vector2(900.0, 640.0),
+	Vector2(800.0, 700.0),
+]
+const PROTOTYPE_MONSTER_PATROL_PAUSES := [0.0, 1.2, 0.0, 0.8, 0.0, 0.0, 1.5, 0.0]
+
+## Encounter E02: the three prototype World Enemy Groups (one monster each),
+## all in low_threat_zone_01. E02 fix pass (aggro 240 px): the homes form a
+## triangle (~300 px sides) and each group roams four points ~100 px around
+## its home in its own order with its own pauses, so the three activity
+## regions overlap near the middle without sharing a route. Deliberate
+## positions: west of group 1 → one group; north between groups 1 and 2 →
+## two (out of group 3's reach); the middle → three. No group's aggro reaches
+## the new-game spawn or a city return point.
+const PROTOTYPE_GROUPS := [
+	{
+		"id": PROTOTYPE_MONSTER_ID,
+		"home": PROTOTYPE_MONSTER_POSITION,
+		"patrol": PROTOTYPE_MONSTER_PATROL,
+		"pauses": PROTOTYPE_MONSTER_PATROL_PAUSES,
+	},
+	{
+		"id": "prototype_monster_02",
+		"home": Vector2(1100.0, 700.0),
+		"patrol": [Vector2(1020.0, 790.0), Vector2(1180.0, 640.0), Vector2(1100.0, 700.0), Vector2(1020.0, 640.0), Vector2(1180.0, 790.0), Vector2(1100.0, 700.0)],
+		"pauses": [1.0, 0.0, 0.6, 0.0, 1.8, 0.0],
+	},
+	{
+		"id": "prototype_monster_03",
+		"home": Vector2(950.0, 930.0),
+		"patrol": [Vector2(870.0, 870.0), Vector2(1030.0, 1000.0), Vector2(950.0, 930.0), Vector2(1030.0, 870.0), Vector2(870.0, 1000.0), Vector2(950.0, 930.0)],
+		"pauses": [0.0, 1.4, 0.0, 0.7, 0.0, 2.0],
+	},
 ]

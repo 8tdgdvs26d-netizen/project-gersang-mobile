@@ -7,7 +7,8 @@ extends SceneTree
 const TEST_SAVE := "user://wt01_visible_monster_test_save.json"
 const T0 := 1800000000000
 const MONSTER_ID := "prototype_monster_01"
-const MONSTER_POS := Vector2(760.0, 650.0)
+## E02 fix pass: group 1's home moved from (760, 650) to (800, 700).
+const MONSTER_POS := Vector2(800.0, 700.0)
 const CONTACT_RADIUS := 48.0
 const PLAYER_SIZE := Vector2(32, 48)
 const PLAYER_OFFSET := Vector2(0, -24)
@@ -258,6 +259,7 @@ func _verify_world_position_unchanged() -> void:
 	main.save_world_position()
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	_no_patrol(main)
 	_no_join_window(main)
 	main.save_path = TEST_SAVE
@@ -310,6 +312,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	_single_group(main)
 	_no_patrol(main)
 	_no_join_window(main)
 	main.save_path = path
@@ -354,6 +357,14 @@ func _no_patrol(main: Node) -> void:
 ## checks were written for; verify_e01_join_window covers the lock.
 func _no_join_window(main: Node) -> void:
 	(main.get_node("EncounterSession") as EncounterSession).enabled = false
+
+
+## E02: only World Enemy Group 1 (groups 2 and 3 removed before the scene
+## starts): the one-group world these checks were written for;
+## verify_e02_multi_group covers all three groups.
+func _single_group(main: Node) -> void:
+	for extra in ["Actors/PrototypeMonster2", "Actors/PrototypeMonster3"]:
+		main.get_node(extra).free()
 
 
 func _check(condition: bool, message: String) -> void:
