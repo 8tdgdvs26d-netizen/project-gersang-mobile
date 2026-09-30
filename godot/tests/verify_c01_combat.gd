@@ -57,7 +57,8 @@ func _verify_static() -> void:
 	_check(SaveStore.VERSION == 8 and not _code_only("res://scripts/save_store.gd").to_lower().contains("combat"), "Save version 8; the save knows nothing about Combat")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd"]:
 		var code := _code_only(path).to_lower()
-		for word in ["reward", "loot", "exp", "retreat", "skill", "mana", "crit", "dodge", "merc", "randf", "randi", "time.get_", "time_source", "save_store"]:
+		# C03 brought the fixed Prototype Mercenaries into scope ("merc" left the list).
+		for word in ["reward", "loot", "exp", "retreat", "skill", "mana", "crit", "dodge", "randf", "randi", "time.get_", "time_source", "save_store"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_check(main.combat_enabled == true, "Combat is enabled by default (the flag is a test seam only)")
@@ -85,7 +86,7 @@ func _verify_entry() -> void:
 		_check(valid and cells.size() == expected, "Enemies on distinct cells in columns 10–15 (%d)" % groups)
 	var empty := EncounterContext.new()
 	_check(CombatBattle.from_encounter(empty) == null and CombatBattle.from_encounter(null) == null, "No battle without a valid locked encounter")
-	var battle := CombatBattle.create(10)
+	var battle := CombatBattle.create(10, CombatBattle.PartyFixture.HERO_ONLY)
 	var hero := battle.get_hero()
 	_check(battle.get_friends().size() == 1 and hero.is_hero and hero.cell == HERO_CELL and hero.hp == 300, "Hero only, at (1, 2) with full HP")
 	_check(battle.get_selected() == hero, "The Hero starts selected")
@@ -444,7 +445,9 @@ func _verify_locked_to_combat() -> void:
 	await _process_frames(2)
 	battle = main.get_combat()
 	await _frames(200)
-	battle.resolve_damage(battle.get_enemies()[0], battle.get_hero(), 1000)
+	# C03: the game's party is Hero + 2 Mercenaries; DEFEAT needs a Full Party Wipe.
+	for friend in battle.get_friends():
+		battle.resolve_damage(battle.get_enemies()[0], friend, 1000)
 	await _process_frames(2)
 	_check(battle.get_phase() == CombatBattle.Phase.DEFEAT and (view.get_node("StatusLabel") as Label).text == "戰敗" and (view.get_node("ExitButton") as Button).visible, "DEFEAT: 戰敗 and the Prototype exit")
 	(view.get_node("ExitButton") as Button).pressed.emit()
@@ -511,7 +514,9 @@ func _battle(enemies: int) -> CombatBattle:
 	_phases.clear()
 	_hits.clear()
 	_deaths.clear()
-	var battle := CombatBattle.create(enemies)
+	# C03: the C01 rule tests keep their single-friendly setting through the
+	# HERO_ONLY test fixture (the game always builds Hero + Merc A + Merc B).
+	var battle := CombatBattle.create(enemies, CombatBattle.PartyFixture.HERO_ONLY)
 	battle.phase_changed.connect(func(phase: int) -> void: _phases.append(phase))
 	battle.damage_dealt.connect(func(attacker: CombatUnit, target: CombatUnit, amount: int) -> void: _hits.append([attacker, target, amount, battle.get_elapsed_ms()]))
 	battle.unit_died.connect(func(unit: CombatUnit) -> void: _deaths.append(unit))

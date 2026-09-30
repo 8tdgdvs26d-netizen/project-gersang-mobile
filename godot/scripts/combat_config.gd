@@ -18,6 +18,9 @@ const PREPARATION_COLUMNS := 3
 
 ## Where the Hero starts (inside the preparation area).
 const HERO_START_CELL := Vector2i(1, 2)
+## C03: the two fixed Prototype Mercenaries start above and below the Hero.
+const MERC_A_START_CELL := Vector2i(1, 1)
+const MERC_B_START_CELL := Vector2i(1, 3)
 ## Enemies are placed column by column (all rows) from this column on, so 10 /
 ## 15 / 20 enemies fill columns 10–11 / 10–12 / 10–13 (at most up to 15).
 const ENEMY_FIRST_COLUMN := 10
@@ -31,6 +34,22 @@ const HERO := {
 	"attack_damage": 20,
 	"attack_range": 1,
 	"attack_interval_ms": 1000,
+	"move_speed": 4.0,
+}
+## C03: fixed Prototype Mercenaries (test data only: not recruitable, not
+## saved, not balance). Merc A fights in melee, Merc B from 3 cells.
+const MERC_A := {
+	"max_hp": 200,
+	"attack_damage": 15,
+	"attack_range": 1,
+	"attack_interval_ms": 1000,
+	"move_speed": 4.0,
+}
+const MERC_B := {
+	"max_hp": 150,
+	"attack_damage": 12,
+	"attack_range": 3,
+	"attack_interval_ms": 1200,
 	"move_speed": 4.0,
 }
 ## The single C01 Prototype enemy archetype.
