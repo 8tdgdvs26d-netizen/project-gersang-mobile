@@ -52,7 +52,8 @@ func _verify_static() -> void:
 			_check(not code.contains(word), "%s knows nothing about %s" % [path.get_file(), word])
 	for path in ["res://scripts/battle_result.gd", "res://scripts/main.gd", "res://scripts/encounter_handoff.gd", "res://scripts/encounter_session.gd"]:
 		var code := _code_only(path).to_lower()
-		for word in ["reward", "loot", "exp ", "experience", "hospital", "revive", "penalty", "respawn", "retreat"]:
+		# C04 brought Retreat into scope ("retreat" left the list).
+		for word in ["reward", "loot", "exp ", "experience", "hospital", "revive", "penalty", "respawn"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_check(main.combat_enabled, "Combat is on in the game")

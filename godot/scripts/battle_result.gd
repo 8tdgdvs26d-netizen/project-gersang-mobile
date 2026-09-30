@@ -6,7 +6,8 @@ extends RefCounted
 ## world lifecycle (main.commit_battle_result). Runtime only, never saved.
 ## It carries no reward, EXP or loot.
 
-enum Outcome { VICTORY, DEFEAT }
+## C04: RETREAT — at least one friendly unit escaped through the Retreat Zone.
+enum Outcome { VICTORY, DEFEAT, RETREAT }
 
 ## The locked encounter the battle came from.
 var encounter_id := ""
@@ -26,6 +27,10 @@ static func create(from_encounter_id: String, result_outcome: Outcome, group_ids
 
 func is_victory() -> bool:
 	return outcome == Outcome.VICTORY
+
+
+func is_retreat() -> bool:
+	return outcome == Outcome.RETREAT
 
 
 func is_committed() -> bool:

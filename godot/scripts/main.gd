@@ -553,7 +553,8 @@ func _on_combat_exit_requested() -> void:
 ##   1. validate, 2. claim the single commit,
 ##   3. recovery protection on (before any group is released, so nothing can
 ##      re-aggro), 4. groups: VICTORY removes the participants from this
-##      session's world, DEFEAT resets them home (EncounterHandoff),
+##      session's world, DEFEAT and C04 RETREAT reset them home
+##      (EncounterHandoff),
 ##   5. end the encounter (player unlocked where the encounter caught the player),
 ##   6. close the battle, world input back, 7. save once.
 ## A failed save does not undo the committed result. No reward, EXP, loot,

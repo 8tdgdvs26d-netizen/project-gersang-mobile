@@ -56,7 +56,8 @@ func _verify_static() -> void:
 	_check(not save_code.contains("merc") and not save_code.contains("party") and not save_code.contains("combat"), "The save knows nothing about Mercenaries, party or Combat")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd", "res://scripts/battle_result.gd"]:
 		var code := _code_only(path).to_lower()
-		for word in ["recruit", "roster", "hire", "equipment", "level", "exp ", "reward", "loot", "revive", "heal", "retreat", "skill", "mana", "skill_cooldown", "formation", "select_all", "taunt", "threat"]:
+		# C04 brought Retreat into scope ("retreat" left the list).
+		for word in ["recruit", "roster", "hire", "equipment", "level", "exp ", "reward", "loot", "revive", "heal", "skill", "mana", "skill_cooldown", "formation", "select_all", "taunt", "threat"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_check(not _code_only("res://scripts/battle_result.gd").to_lower().contains("merc") and not _code_only("res://scripts/battle_result.gd").to_lower().contains("friend"), "BattleResult carries no party data")
 	_sections_done.append("static")
