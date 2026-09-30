@@ -12,12 +12,17 @@ extends RefCounted
 ## claimed.
 
 enum Team { FRIEND, ENEMY }
+## C03: who the unit is (the game's party is Hero + Merc A + Merc B).
+enum Role { HERO, MERC_A, MERC_B, ENEMY }
 
 const NO_CELL := Vector2i(-1, -1)
 
 var id := ""
 var team: Team = Team.ENEMY
-var is_hero := false
+var role: Role = Role.ENEMY
+var is_hero: bool:
+	get:
+		return role == Role.HERO
 var max_hp := 1
 var hp := 1
 var attack_damage := 0

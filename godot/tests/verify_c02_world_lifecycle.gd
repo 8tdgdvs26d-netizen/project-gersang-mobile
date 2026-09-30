@@ -75,7 +75,9 @@ func _verify_result() -> void:
 			for enemy in battle.get_enemies():
 				battle.resolve_damage(battle.get_hero(), enemy, 1000)
 		else:
-			battle.resolve_damage(battle.get_enemies()[0], battle.get_hero(), 1000)
+			# C03: DEFEAT needs a Full Party Wipe (Hero + 2 Mercenaries).
+			for friend in battle.get_friends():
+				battle.resolve_damage(battle.get_enemies()[0], friend, 1000)
 		var result := battle.get_result()
 		var label := "VICTORY" if victory else "DEFEAT"
 		_check(result != null and result.outcome == (BattleResult.Outcome.VICTORY if victory else BattleResult.Outcome.DEFEAT) and result.is_victory() == victory, "%s produces a %s result" % [label, label])
@@ -186,7 +188,9 @@ func _verify_defeat() -> void:
 	var groups := NODES.map(func(path: String) -> WorldMonster: return main.get_node(path) as WorldMonster)
 	(groups[2] as WorldMonster).global_position = HELD_SPOT
 	var group_2_position: Vector2 = (groups[1] as WorldMonster).global_position
-	battle.resolve_damage(battle.get_enemies()[0], battle.get_hero(), 1000)
+	# C03: DEFEAT needs a Full Party Wipe (Hero + 2 Mercenaries).
+	for friend in battle.get_friends():
+		battle.resolve_damage(battle.get_enemies()[0], friend, 1000)
 	var result := battle.get_result()
 	_check(result != null and not result.is_victory() and result.group_monster_ids == [IDS[2], IDS[0]], "DEFEAT result for groups 3 + 1")
 	_delete(TEST_SAVE)

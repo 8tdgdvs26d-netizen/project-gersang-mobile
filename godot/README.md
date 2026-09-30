@@ -47,7 +47,28 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C02: Combat ↔ World lifecycle (stacked on C01). A finished battle's result is consumed
+Combat C03: Party & Mercenary Combat. The battle party is the Hero + two fixed Prototype
+Mercenaries; runtime only, save version stays 8.
+
+- `CombatBattle.create()` / `from_encounter()` always build Hero (1, 2) + Merc A (1, 1) + Merc B
+  (1, 3) inside the preparation area (`CombatConfig.MERC_A` / `MERC_B`, `CombatUnit.role`).
+  Prototype test data, not balance: Merc A HP 200, ATK 15, range 1, 1.0 s, 4 cells/s; Merc B
+  HP 150, ATK 12, range 3, 1.2 s, 4 cells/s. Not recruitable, no roster, not saved.
+  `PartyFixture.HERO_ONLY` is a test fixture only (the C01 single-friendly rule tests); the game
+  never uses it and the player cannot choose it
+- one friendly unit selected at a time (tap it; the Hero starts selected). Move / target commands
+  go to the selected unit only; every other unit keeps its own order and target. A dead unit
+  cannot be selected or commanded; if the selected unit dies nothing stays selected
+- enemies attack the nearest alive friendly unit (ties: Hero, Merc A, Merc B) and retarget when
+  it dies. DEFEAT only on a Full Party Wipe — the Hero's death alone does not end the battle;
+  VICTORY is still every enemy dead, whoever survives. C02 `BattleResult` and lifecycle unchanged
+- occupancy fix: when every cell near its target is taken, a unit searches the whole grid for a
+  free cell instead of staying on a claimed one (seen with 3 friendly units vs 20 enemies)
+- `CombatView`: names 主角 / 傭兵A / 傭兵B, one colour each, HP of every unit (「陣亡」 when dead),
+  the camera follows the selected unit (else the first alive one)
+- tests: `tests/verify_c03_party_combat.gd`
+
+Previous: Combat C02: Combat ↔ World lifecycle (stacked on C01). A finished battle's result is consumed
 once by the world; runtime only, save version stays 8.
 
 - a battle that reaches VICTORY / DEFEAT produces one `BattleResult` (encounter id, outcome,

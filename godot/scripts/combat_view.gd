@@ -17,15 +17,20 @@ signal exit_requested
 
 const CELL_SIZE := Vector2(48.0, 100.0)
 const FIELD_TOP := 400.0
-## Where the Hero sits on screen while the grid scrolls.
-const HERO_SCREEN_X := 200.0
+## Where the followed unit sits on screen while the grid scrolls (C03: the
+## selected friendly unit, else the first alive one).
+const FOCUS_SCREEN_X := 200.0
 const PREPARATION_TEXT := "備戰 %d"
 const FIGHTING_TEXT := "戰鬥"
 const VICTORY_TEXT := "勝利"
 const DEFEAT_TEXT := "戰敗"
-const HERO_TEXT := "主角 HP %d / %d"
+## C03: friendly unit names and colours (Prototype presentation).
+const ROLE_NAMES := {CombatUnit.Role.HERO: "主角", CombatUnit.Role.MERC_A: "傭兵A", CombatUnit.Role.MERC_B: "傭兵B"}
+const ROLE_COLORS := {CombatUnit.Role.HERO: Color(0.95, 0.78, 0.3), CombatUnit.Role.MERC_A: Color(0.35, 0.65, 0.95), CombatUnit.Role.MERC_B: Color(0.55, 0.85, 0.5)}
+const FRIEND_TEXT := "%s %d / %d"
+const FRIEND_DEAD_TEXT := "%s 陣亡"
 const ENEMIES_TEXT := "敵人 %d / %d"
-const HINT_TEXT := "點主角選取　點空格移動　點敵人攻擊"
+const HINT_TEXT := "點隊員選取　點空格移動　點敵人攻擊"
 const EXIT_TEXT := "返回世界"
 
 var _battle: CombatBattle
@@ -52,7 +57,8 @@ func _ready() -> void:
 	_field.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(_field)
 	_status_label = _label("StatusLabel", 150.0, 56, Color(0.95, 0.8, 0.45))
-	_info_label = _label("InfoLabel", 260.0, 28, Color(0.9, 0.9, 0.9))
+	_info_label = _label("InfoLabel", 240.0, 24, Color(0.9, 0.9, 0.9))
+	_info_label.offset_bottom = _info_label.offset_top + 80.0
 	_hint_label = _label("HintLabel", FIELD_TOP + CombatConfig.ROWS * CELL_SIZE.y + 30.0, 24, Color(0.7, 0.7, 0.75))
 	_hint_label.text = HINT_TEXT
 	_exit_button = Button.new()
@@ -118,13 +124,27 @@ func _process(_delta: float) -> void:
 		_refresh()
 
 
-## Horizontal scroll (grid pixels) that keeps the Hero in view.
+## Horizontal scroll (grid pixels) that keeps the focus unit in view.
 func get_scroll_x() -> float:
-	if _battle == null or _battle.get_hero() == null:
+	var focus := get_focus_unit()
+	if focus == null:
 		return 0.0
 	var width := _field.size.x if _field.size.x > 0.0 else 720.0
 	var limit := maxf(CombatConfig.COLUMNS * CELL_SIZE.x - width, 0.0)
-	return clampf(_battle.get_hero().visual_cell().x * CELL_SIZE.x - HERO_SCREEN_X, 0.0, limit)
+	return clampf(focus.visual_cell().x * CELL_SIZE.x - FOCUS_SCREEN_X, 0.0, limit)
+
+
+## The unit the camera follows: the selected friendly unit, else the first
+## alive friendly unit, else the first friendly unit.
+func get_focus_unit() -> CombatUnit:
+	if _battle == null or _battle.get_friends().is_empty():
+		return null
+	if _battle.get_selected() != null:
+		return _battle.get_selected()
+	for unit in _battle.get_friends():
+		if unit.alive:
+			return unit
+	return _battle.get_friends()[0]
 
 
 ## Screen position -> grid cell (outside the grid: (-1, -1)).
@@ -164,8 +184,10 @@ func _refresh() -> void:
 			_status_label.text = VICTORY_TEXT
 		CombatBattle.Phase.DEFEAT:
 			_status_label.text = DEFEAT_TEXT
-	var hero := _battle.get_hero()
-	_info_label.text = (HERO_TEXT % [hero.hp, hero.max_hp]) + "　" + (ENEMIES_TEXT % [_battle.get_alive_enemy_count(), _battle.get_enemies().size()])
+	var friends := []
+	for unit in _battle.get_friends():
+		friends.append(FRIEND_TEXT % [ROLE_NAMES[unit.role], unit.hp, unit.max_hp] if unit.alive else FRIEND_DEAD_TEXT % ROLE_NAMES[unit.role])
+	_info_label.text = "　".join(friends) + "\n" + (ENEMIES_TEXT % [_battle.get_alive_enemy_count(), _battle.get_enemies().size()])
 	_hint_label.visible = not _battle.is_over()
 	_field.queue_redraw()
 
@@ -202,7 +224,8 @@ class Field extends Control:
 		for unit in battle.get_enemies():
 			_draw_unit(unit, Color(0.85, 0.25, 0.2))
 		for unit in battle.get_friends():
-			_draw_unit(unit, Color(0.95, 0.78, 0.3))
+			_draw_unit(unit, CombatView.ROLE_COLORS[unit.role])
+			_draw_name(unit)
 		var selected := battle.get_selected()
 		if selected != null:
 			draw_arc(view.cell_center(selected.visual_cell()), 22.0, 0.0, TAU, 32, Color.WHITE, 3.0)
@@ -211,6 +234,11 @@ class Field extends Control:
 			elif selected.has_goal:
 				var goal := view.cell_center(Vector2(selected.goal))
 				draw_rect(Rect2(goal - Vector2(10, 10), Vector2(20, 20)), Color(1, 1, 1, 0.6), false, 2.0)
+
+	func _draw_name(unit: CombatUnit) -> void:
+		var center := view.cell_center(unit.visual_cell())
+		var color := Color(0.9, 0.9, 0.9) if unit.alive else Color(0.5, 0.5, 0.5)
+		draw_string(get_theme_default_font(), center + Vector2(-30.0, 36.0), CombatView.ROLE_NAMES[unit.role], HORIZONTAL_ALIGNMENT_CENTER, 60.0, 16, color)
 
 	func _draw_unit(unit: CombatUnit, color: Color) -> void:
 		var center := view.cell_center(unit.visual_cell())

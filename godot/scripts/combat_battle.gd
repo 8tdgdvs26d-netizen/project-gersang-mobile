@@ -9,11 +9,17 @@ extends RefCounted
 ##   PREPARATION  the first CombatConfig.PREPARATION_MS: enemies stand still
 ##                (no movement, attack or damage); friendly units may move
 ##                only inside the first PREPARATION_COLUMNS columns
-##   FIGHTING     real time: the Hero follows player commands (move / target,
-##                automatic approach + Basic Attack); every enemy pursues and
-##                attacks the nearest friendly unit
+##   FIGHTING     real time: each friendly unit follows its own player
+##                commands (move / target, automatic approach + Basic
+##                Attack); every enemy pursues and attacks the nearest alive
+##                friendly unit
+##
+## C03: the friendly party is the Hero + two fixed Prototype Mercenaries.
+## One friendly unit is selected at a time; commands go to it only and every
+## other unit keeps its own move / target.
 ##   VICTORY      every enemy is dead
-##   DEFEAT       every friendly unit is dead (C01 has the Hero only)
+##   DEFEAT       every friendly unit is dead (C03: Full Party Wipe; the
+##                Hero's death alone does not end the battle)
 ## VICTORY / DEFEAT are final: nothing moves, attacks or takes damage after.
 ##
 ## Every HP change goes through resolve_damage() (Basic Attacks now, later
@@ -40,12 +46,28 @@ var _selected: CombatUnit
 var _result: BattleResult
 
 
-## A battle with the Hero and `enemy_count` Prototype enemies.
-static func create(enemy_count: int) -> CombatBattle:
+## C03: which friendly party a battle gets. PROTOTYPE is the game's party
+## (Hero + Merc A + Merc B; the only one the game ever builds). HERO_ONLY is
+## a test fixture for the C01 single-friendly rule tests: never used by the
+## game, never saved, not a player option.
+enum PartyFixture { PROTOTYPE, HERO_ONLY }
+
+
+## A battle with the friendly party and `enemy_count` Prototype enemies. The
+## friendly order (Hero, Merc A, Merc B) also breaks enemy target ties. The
+## Hero starts selected.
+static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYPE) -> CombatBattle:
 	var battle := CombatBattle.new()
 	var hero := CombatUnit.create("hero", CombatUnit.Team.FRIEND, CombatConfig.HERO, CombatConfig.HERO_START_CELL)
-	hero.is_hero = true
+	hero.role = CombatUnit.Role.HERO
 	battle._friends.append(hero)
+	if party == PartyFixture.PROTOTYPE:
+		var merc_a := CombatUnit.create("merc_a", CombatUnit.Team.FRIEND, CombatConfig.MERC_A, CombatConfig.MERC_A_START_CELL)
+		merc_a.role = CombatUnit.Role.MERC_A
+		battle._friends.append(merc_a)
+		var merc_b := CombatUnit.create("merc_b", CombatUnit.Team.FRIEND, CombatConfig.MERC_B, CombatConfig.MERC_B_START_CELL)
+		merc_b.role = CombatUnit.Role.MERC_B
+		battle._friends.append(merc_b)
 	var cells := enemy_spawn_cells(enemy_count)
 	for index in range(cells.size()):
 		battle._enemies.append(CombatUnit.create("enemy_%02d" % (index + 1), CombatUnit.Team.ENEMY, CombatConfig.ENEMY, cells[index]))
@@ -307,14 +329,24 @@ func _is_free_for(unit: CombatUnit, cell: Vector2i) -> bool:
 
 
 ## The free allowed cell closest to within `reach` of `center`, then closest
-## to the unit, then top-left first (deterministic). The unit's own cell when
-## nothing better exists.
+## to the unit, then top-left first (deterministic). The unit's own cell only
+## when no free allowed cell exists at all.
 func _best_free_cell(unit: CombatUnit, center: Vector2i, reach: int) -> Vector2i:
-	var best := unit.cell
-	var best_score := Vector3i(1 << 20, 1 << 20, 1 << 20)
-	# The best cell is never farther from `center` than the unit itself.
+	# A free cell is never farther from `center` than the unit itself when the
+	# unit's own cell is free, so a window around `center` usually suffices.
 	var radius := CombatUnit.grid_distance(unit.cell, center) + 1
-	for column in range(maxi(center.x - radius, 0), mini(center.x + radius, CombatConfig.COLUMNS - 1) + 1):
+	var best: Variant = _best_free_cell_in(unit, center, reach, maxi(center.x - radius, 0), mini(center.x + radius, CombatConfig.COLUMNS - 1))
+	if best == null:
+		# C03: a crowded window (its own cell taken too): search the whole
+		# grid rather than stay on a cell another unit claimed.
+		best = _best_free_cell_in(unit, center, reach, 0, CombatConfig.COLUMNS - 1)
+	return best if best != null else unit.cell
+
+
+func _best_free_cell_in(unit: CombatUnit, center: Vector2i, reach: int, first_column: int, last_column: int) -> Variant:
+	var best: Variant = null
+	var best_score := Vector3i(1 << 20, 1 << 20, 1 << 20)
+	for column in range(first_column, last_column + 1):
 		for row in range(CombatConfig.ROWS):
 			var cell := Vector2i(column, row)
 			if not _is_free_for(unit, cell):
