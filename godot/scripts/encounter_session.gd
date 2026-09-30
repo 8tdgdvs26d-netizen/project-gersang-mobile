@@ -26,6 +26,12 @@ extends Node
 ## (PROTECTION_MS, TimeSource, runtime only): the player moves freely, the
 ## groups keep patrolling but never aggro, and no contact becomes an encounter
 ## (EncounterHandoff.set_protected). 「遭遇保護 X.X...」 counts it down.
+##
+## E03: 「挑戰」 shows while a PASSIVE group can be challenged
+## (EncounterHandoff.get_challengeable_group(); only with no encounter).
+## Pressing it (challenge()) ends any recovery protection at once — protection
+## blocks only automatic aggro — and starts the normal encounter: JOINING,
+## player locked, the same 5 s window, AGGRESSIVE groups may join.
 
 signal phase_changed(phase: int)
 
@@ -40,6 +46,8 @@ const PROTECTION_MS := 5000
 const PROTECTION_TEXT := "遭遇保護 %.1f..."
 ## TEMPORARY (pre-Combat) recovery button, shown only while LOCKED.
 const PROTOTYPE_END_TEXT := "返回世界（原型）"
+## E03: manual challenge of a PASSIVE group.
+const CHALLENGE_TEXT := "挑戰"
 
 ## Off: triggers are ignored (the WT01–WT05 tests, written before the join
 ## window existed, run with it off).
@@ -56,6 +64,7 @@ var _end_button: Button
 var _groups_label: Label
 var _protection_label: Label
 var _protection_ends_ms := -1
+var _challenge_button: Button
 
 
 func _ready() -> void:
@@ -96,6 +105,15 @@ func _ready() -> void:
 	_end_button.add_theme_font_size_override("font_size", 26)
 	_end_button.pressed.connect(prototype_end_encounter)
 	box.add_child(_end_button)
+	_challenge_button = Button.new()
+	_challenge_button.name = "ChallengeButton"
+	_challenge_button.text = CHALLENGE_TEXT
+	_challenge_button.focus_mode = Control.FOCUS_NONE
+	_challenge_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_challenge_button.custom_minimum_size = Vector2(200.0, 72.0)
+	_challenge_button.add_theme_font_size_override("font_size", 30)
+	_challenge_button.pressed.connect(challenge)
+	box.add_child(_challenge_button)
 	_refresh_ui()
 
 
@@ -159,12 +177,32 @@ func get_protection_remaining_ms() -> int:
 	return clampi(_protection_ends_ms - _time_source.now_ms(), 0, PROTECTION_MS)
 
 
+## E03: challenges the PASSIVE group in range, if any: ends recovery
+## protection and starts a normal encounter. Returns whether one started.
+func challenge() -> bool:
+	if not enabled or _phase != Phase.NONE or _handoff == null:
+		return false
+	var target := _handoff.get_challengeable_group()
+	if target == null:
+		return false
+	_end_protection()
+	return _handoff.challenge(target.monster_id) != null
+
+
+func _end_protection() -> void:
+	if _protection_ends_ms < 0:
+		return
+	_protection_ends_ms = -1
+	_handoff.set_protected(false)
+	print("Myrial: recovery protection over")
+	_refresh_ui()
+
+
 func _process(_delta: float) -> void:
+	_refresh_challenge()
 	if _protection_ends_ms >= 0:
 		if get_protection_remaining_ms() == 0:
-			_protection_ends_ms = -1
-			_handoff.set_protected(false)
-			print("Myrial: recovery protection over")
+			_end_protection()
 		_refresh_ui()
 	if _phase == Phase.JOINING:
 		if get_remaining_ms() == 0:
@@ -216,3 +254,11 @@ func _refresh_ui() -> void:
 	_protection_label.text = PROTECTION_TEXT % (ceili(get_protection_remaining_ms() / 100.0) / 10.0) if protected else ""
 	_protection_label.visible = protected
 	_end_button.visible = _phase == Phase.LOCKED
+	_refresh_challenge()
+
+
+func _refresh_challenge() -> void:
+	if _challenge_button == null:
+		return
+	_challenge_button.visible = enabled and _phase == Phase.NONE and _handoff != null \
+			and _handoff.get_challengeable_group() != null

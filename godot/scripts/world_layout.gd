@@ -34,6 +34,12 @@ const CITY_RETURN_POINTS := {
 ## (800, 700) so its whole 240 px aggro circle lies inside low_threat_zone_01
 ## (x 560–1040, y 460–940). Every city return point and the new-game spawn stay
 ## far outside every group's aggro range.
+## Encounter E03: a World Enemy Group's fixed disposition (design data, never
+## saved or changed at runtime). AGGRESSIVE groups aggro, chase, catch and
+## auto-join encounters; PASSIVE groups only patrol and are challenged by the
+## player (「挑戰」). Passive does not mean harmless in future Combat.
+enum Disposition { AGGRESSIVE, PASSIVE }
+
 const PROTOTYPE_MONSTER_ID := "prototype_monster_01"
 const PROTOTYPE_MONSTER_POSITION := Vector2(800.0, 700.0)
 ## World Threat WT05 / E02 fix pass: group 1's patrol itinerary, walked in this
@@ -68,17 +74,20 @@ const PROTOTYPE_GROUPS := [
 		"home": PROTOTYPE_MONSTER_POSITION,
 		"patrol": PROTOTYPE_MONSTER_PATROL,
 		"pauses": PROTOTYPE_MONSTER_PATROL_PAUSES,
+		"disposition": Disposition.AGGRESSIVE,
 	},
 	{
 		"id": "prototype_monster_02",
 		"home": Vector2(1100.0, 700.0),
 		"patrol": [Vector2(1020.0, 790.0), Vector2(1180.0, 640.0), Vector2(1100.0, 700.0), Vector2(1020.0, 640.0), Vector2(1180.0, 790.0), Vector2(1100.0, 700.0)],
 		"pauses": [1.0, 0.0, 0.6, 0.0, 1.8, 0.0],
+		"disposition": Disposition.AGGRESSIVE,
 	},
 	{
 		"id": "prototype_monster_03",
 		"home": Vector2(950.0, 930.0),
 		"patrol": [Vector2(870.0, 870.0), Vector2(1030.0, 1000.0), Vector2(950.0, 930.0), Vector2(1030.0, 870.0), Vector2(870.0, 1000.0), Vector2(950.0, 930.0)],
 		"pauses": [0.0, 1.4, 0.0, 0.7, 0.0, 2.0],
+		"disposition": Disposition.PASSIVE,
 	},
 ]

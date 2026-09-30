@@ -31,11 +31,20 @@ extends Node
 ## every group stops aggroing (they keep patrolling, a chase turns back) and no
 ## contact becomes an encounter until set_protected(false).
 
+## E03: dispositions. Only an AGGRESSIVE group's contact starts an encounter
+## and only AGGRESSIVE groups auto-join. A PASSIVE group starts one only when
+## the player challenges it (challenge(): in WORLD, outside safety, within
+## CHALLENGE_RANGE, nothing pending); it then is the primary group of a normal
+## encounter (same context, id, timestamp and join window). Protection never
+## blocks a challenge (the EncounterSession ends it first).
+
 signal encounter_triggered(context: EncounterContext)
 signal group_joined(context: EncounterContext, monster_id: String)
 
 ## At most this many World Enemy Groups take part in one encounter.
 const MAX_GROUPS := 3
+## E03: how close the player must be to challenge a PASSIVE group.
+const CHALLENGE_RANGE := 200.0
 
 var _monsters := {}
 var _player: Node2D
@@ -120,7 +129,7 @@ func join_groups_in_range() -> int:
 		if not is_instance_valid(_monsters[monster_id]):
 			continue
 		var monster := _monsters[monster_id] as WorldMonster
-		if monster_id in _pending.group_monster_ids or not monster.is_threat_active():
+		if monster_id in _pending.group_monster_ids or not monster.is_threat_active() or monster.is_passive():
 			continue
 		if monster.global_position.distance_to(_player.global_position) > WorldMonster.AGGRO_RADIUS:
 			continue
@@ -140,18 +149,54 @@ func _participants(context: EncounterContext) -> Array:
 	return monsters
 
 
+## E03: the PASSIVE group the player may challenge now (null when none):
+## nothing pending, player in WORLD and outside every safe buffer, the group
+## active and within CHALLENGE_RANGE. Recovery protection does not matter.
+func get_challengeable_group() -> WorldMonster:
+	if _pending != null or not _is_world.call():
+		return null
+	if WorldThreatZones.is_in_city_safe_buffer(_player.global_position):
+		return null
+	for monster_id in _monsters:
+		if not is_instance_valid(_monsters[monster_id]):
+			continue
+		var monster := _monsters[monster_id] as WorldMonster
+		if monster.is_passive() and monster.is_threat_active() \
+				and monster.global_position.distance_to(_player.global_position) <= CHALLENGE_RANGE:
+			return monster
+	return null
+
+
+## E03: the player challenges `monster_id` (a PASSIVE group): starts a normal
+## encounter with it as the primary group. Returns the context, or null when
+## the challenge is not allowed right now.
+func challenge(monster_id: String) -> EncounterContext:
+	var target := get_challengeable_group()
+	if target == null or target.monster_id != monster_id:
+		return null
+	print("Myrial: challenge ", monster_id)
+	return _start_encounter(target)
+
+
 func _on_player_contacted(monster_id: String) -> void:
 	if _pending != null or _protected:
 		return
 	if monster_id == "" or not _monsters.has(monster_id):
 		return
 	var monster := _monsters[monster_id] as WorldMonster
-	if not monster.is_threat_active() or not _is_world.call():
+	if not monster.is_threat_active() or not _is_world.call() or monster.is_passive():
 		return
 	if WorldThreatZones.is_in_city_safe_buffer(_player.global_position):
 		return
 	if not (_player is PhysicsBody2D and monster.overlaps_body(_player)):
 		return
+	_start_encounter(monster)
+
+
+## The one way an encounter starts (catch or challenge): builds the context
+## with `monster` as the primary group, holds it and announces the trigger.
+func _start_encounter(monster: WorldMonster) -> EncounterContext:
+	var monster_id := monster.monster_id
 	_sequence += 1
 	var context := EncounterContext.new()
 	context.encounter_id = "encounter_%d" % _sequence
@@ -165,3 +210,4 @@ func _on_player_contacted(monster_id: String) -> void:
 	monster.set_hold(true)
 	print("Myrial: encounter triggered ", context.encounter_id, " by ", monster_id, " in '", context.threat_zone_id, "'")
 	encounter_triggered.emit(context)
+	return context
