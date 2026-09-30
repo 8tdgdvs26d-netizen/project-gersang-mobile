@@ -40,6 +40,8 @@ extends Node
 
 signal encounter_triggered(context: EncounterContext)
 signal group_joined(context: EncounterContext, monster_id: String)
+## C02: a defeated group left the current world instance (session only).
+signal group_removed(monster: WorldMonster)
 
 ## At most this many World Enemy Groups take part in one encounter.
 const MAX_GROUPS := 3
@@ -112,6 +114,43 @@ func cancel_pending_encounter() -> bool:
 		monster.set_hold(false)
 		monster.reset_to_home()
 	return true
+
+
+## C02: the world side of a finished encounter, called by the world
+## lifecycle once its outcome is committed. Only for the pending encounter
+## (`encounter_id`; otherwise nothing changes and it returns false). The
+## pending encounter is cleared, then:
+##   groups_defeated  every participating group leaves the current world
+##                    instance (unwatched, removed from the tree, freed; never
+##                    reset home). A relaunch rebuilds the fixed Prototype
+##                    groups from main.tscn (session only)
+##   otherwise        every participating group is released and reset home
+## Groups that did not take part are untouched.
+func resolve_encounter(encounter_id: String, groups_defeated: bool) -> bool:
+	if _pending == null or _pending.encounter_id != encounter_id:
+		return false
+	var participants := _participants(_pending)
+	_pending = null
+	for monster in participants:
+		monster.set_hold(false)
+		if groups_defeated:
+			_remove_group(monster)
+		else:
+			monster.reset_to_home()
+	print("Myrial: encounter ", encounter_id, " resolved (groups defeated: ", groups_defeated, ")")
+	return true
+
+
+func _remove_group(monster: WorldMonster) -> void:
+	_monsters.erase(monster.monster_id)
+	if monster.player_contacted.is_connected(_on_player_contacted):
+		monster.player_contacted.disconnect(_on_player_contacted)
+	# Out of the tree it stops processing at once; it is never reset home.
+	if monster.get_parent() != null:
+		monster.get_parent().remove_child(monster)
+	print("Myrial: group ", monster.monster_id, " removed from the world (this session)")
+	group_removed.emit(monster)
+	monster.queue_free()
 
 
 ## E02: adds every other group whose aggro radius holds the player (active,

@@ -17,6 +17,9 @@ const WORLD_AUTOSAVE_INTERVAL_MS := 5000
 
 ## Emitted once per journey, after its arrival has been saved.
 signal journey_arrived(journey_id: String, city_id: String)
+## C02: emitted once per committed battle result, after its save attempt
+## (`saved`: whether that save succeeded; a failed save never undoes it).
+signal battle_result_committed(result: BattleResult, saved: bool)
 
 ## World / city / journey state of the main character (saved from M2-09).
 var location := PlayerLocation.new()
@@ -105,6 +108,9 @@ func _ready() -> void:
 	_encounter_handoff.watch(_world_monsters, _player, func() -> bool: return location.is_in_world(), time_source)
 	_encounter_session.watch(_encounter_handoff, _player, time_source)
 	_encounter_session.phase_changed.connect(_on_encounter_phase_changed)
+	# C02: with Combat on, a LOCKED encounter ends only through its battle result.
+	_encounter_session.prototype_end_enabled = not combat_enabled
+	_encounter_handoff.group_removed.connect(_on_group_removed)
 	_combat_view = CombatView.new()
 	_combat_view.name = "CombatView"
 	add_child(_combat_view)
@@ -531,12 +537,49 @@ func _close_combat() -> void:
 	_joystick.set_process_input(location.is_in_world())
 
 
-## TEMPORARY C01 bridge (result screen only): the E02 prototype end of the
-## encounter — groups home, 5 s recovery protection; no reward, EXP, loot or
-## world consequence. C02 replaces it.
+## The result screen's 「返回世界」: asks the world lifecycle to commit the
+## running battle's result. The button is never the source of the outcome.
 func _on_combat_exit_requested() -> void:
 	var battle := get_combat()
-	if battle == null or not battle.is_over():
-		return
+	if battle != null:
+		commit_battle_result(battle.get_result())
+
+
+## C02: the single world lifecycle of a battle result (the only way a Combat
+## encounter ends). Commits `result` exactly once, only for the running
+## battle's own result of the current LOCKED encounter; anything else (a
+## repeat, a stale or foreign result, no battle) is refused and changes
+## nothing. Order:
+##   1. validate, 2. claim the single commit,
+##   3. recovery protection on (before any group is released, so nothing can
+##      re-aggro), 4. groups: VICTORY removes the participants from this
+##      session's world, DEFEAT resets them home (EncounterHandoff),
+##   5. end the encounter (player unlocked where the encounter caught the player),
+##   6. close the battle, world input back, 7. save once.
+## A failed save does not undo the committed result. No reward, EXP, loot,
+## penalty, hospital or respawn happens here.
+func commit_battle_result(result: BattleResult) -> bool:
+	var battle := get_combat()
+	if result == null or battle == null or battle.get_result() != result or result.is_committed():
+		return false
+	var context := _encounter_session.get_context()
+	var pending := _encounter_handoff.get_pending_encounter()
+	if _encounter_session.get_phase() != EncounterSession.Phase.LOCKED or context == null or pending != context \
+			or context.encounter_id != result.encounter_id:
+		return false
+	if not result.claim_commit():
+		return false
+	_encounter_session.start_recovery_protection()
+	_encounter_handoff.resolve_encounter(result.encounter_id, result.is_victory())
+	_encounter_session.end_resolved_encounter(result.encounter_id)
 	_close_combat()
-	_encounter_session.prototype_end_encounter()
+	var saved := save_world_position()
+	print("Myrial: battle result ", BattleResult.Outcome.keys()[result.outcome], " of ", result.encounter_id, " committed (saved: ", saved, ")")
+	battle_result_committed.emit(result, saved)
+	return true
+
+
+## C02: a group removed by a VICTORY leaves the world list (session only), so
+## no world transition reactivates it.
+func _on_group_removed(monster: WorldMonster) -> void:
+	_world_monsters.erase(monster)

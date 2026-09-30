@@ -47,7 +47,30 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C01: minimum playable battle (Encounter LOCKED → battlefield → 3 s preparation →
+Combat C02: Combat ↔ World lifecycle (stacked on C01). A finished battle's result is consumed
+once by the world; runtime only, save version stays 8.
+
+- a battle that reaches VICTORY / DEFEAT produces one `BattleResult` (encounter id, outcome,
+  participating group ids, single-commit claim). The result screen's 「返回世界」 only asks
+  `main.commit_battle_result()` to consume it; the button never decides the outcome
+- `commit_battle_result()` is the only way a Combat encounter ends. It refuses (and changes
+  nothing) for a repeat, a result that is not the running battle's own, or an encounter that is
+  no longer LOCKED / pending. Order: claim the commit → 5 s recovery protection on → groups
+  (`EncounterHandoff.resolve_encounter`) → encounter ended, player unlocked where the encounter
+  caught them (`EncounterSession.end_resolved_encounter`) → battle closed, world input back →
+  one save. A failed save never undoes the committed result
+- VICTORY: the participating World Enemy Groups leave the current world instance (never reset
+  home); other groups are untouched; city visits and other world transitions never bring them
+  back. **Approved Known Limitation:** removal is session only — a relaunch rebuilds the fixed
+  Prototype groups from `main.tscn` (no group persistence, no respawn system, save v8)
+- DEFEAT: the participating groups are released and reset home; the player stays at the
+  encounter position (no city, hospital, revive or penalty)
+- no reward, EXP, loot, penalty or retreat. The old bare-LOCKED 「返回世界（原型）」 /
+  `prototype_end_encounter()` is off in the game (`prototype_end_enabled`); only the E01–E03
+  tests (Combat off) still use it
+- tests: `tests/verify_c02_world_lifecycle.gd`
+
+Previous: Combat C01: minimum playable battle (Encounter LOCKED → battlefield → 3 s preparation →
 real-time combat → Victory / Defeat). Runtime only; save version stays 8.
 
 - a LOCKED encounter opens the battle at once (`main.gd`, `CombatView`); the world stays as
@@ -68,9 +91,8 @@ real-time combat → Victory / Defeat). Runtime only; save version stays 8.
   friendly unit and Basic Attack in range. Every HP change goes through
   `CombatBattle.resolve_damage()`; HP 0 = dead (no movement, attack, AI or targeting)
 - VICTORY when every enemy is dead; DEFEAT when every friendly unit is dead (C01: the Hero).
-  Both are final (nothing moves, attacks or takes damage). The result screen's
-  「返回世界（原型）」 is a TEMPORARY C01 bridge: the E02 prototype end (groups home, 5 s
-  recovery protection), no reward, EXP, loot or world consequence; C02 replaces it
+  Both are final (nothing moves, attacks or takes damage). C01's temporary result exit is
+  replaced by the C02 lifecycle above
 - Prototype stats (`CombatConfig`, not balance): Hero HP 300, ATK 20, range 1, interval
   1.0 s, 4 cells/s; enemy HP 40, ATK 4, range 1, interval 1.5 s, 2 cells/s
 - portrait app kept: the grid scrolls horizontally with the Hero (final Combat orientation not

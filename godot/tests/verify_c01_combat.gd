@@ -418,13 +418,15 @@ func _verify_locked_to_combat() -> void:
 	for unit in battle.get_enemies():
 		battle.resolve_damage(hero, unit, 1000)
 	await _process_frames(2)
-	_check(battle.get_phase() == CombatBattle.Phase.VICTORY and status.text == "勝利" and exit.visible and exit.text == "返回世界（原型）", "VICTORY: 勝利 and the Prototype exit")
+	_check(battle.get_phase() == CombatBattle.Phase.VICTORY and status.text == "勝利" and exit.visible and exit.text == "返回世界", "VICTORY: 勝利 and 返回世界 (C02 lifecycle)")
 	_check(main.save_world_position() and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("combat") and int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 8, "Saving during Combat: version 8, nothing about Combat")
 	exit.pressed.emit()
+	# C02 replaced the C01 bridge: VICTORY removes the participating group 3
+	# (verify_c02_world_lifecycle covers the lifecycle); groups 1 and 2 stay.
 	var monsters := []
-	for name in ["Actors/PrototypeMonster", "Actors/PrototypeMonster2", "Actors/PrototypeMonster3"]:
+	for name in ["Actors/PrototypeMonster", "Actors/PrototypeMonster2"]:
 		monsters.append(main.get_node(name) as WorldMonster)
-	_check(monsters.size() == 3 and monsters.all(func(m: WorldMonster) -> bool: return is_instance_valid(m) and m.is_threat_active() and not m.is_held()) and monsters[2].global_position == HOMES[2], "No C02 world cleanup: every group still in the world (group 3 reset home)")
+	_check(not main.has_node("Actors/PrototypeMonster3") and monsters.all(func(m: WorldMonster) -> bool: return is_instance_valid(m) and m.is_threat_active() and not m.is_held()), "VICTORY: participating group 3 left the world, groups 1 and 2 untouched")
 	await _settle()
 	_check(main.get_combat() == null and not view.visible and session.get_phase() == EncounterSession.Phase.NONE, "Exit closes the battle and ends the encounter")
 	_check(not player.movement_locked and not handoff.has_pending_encounter() and session.is_protection_active(), "Player free, E02 recovery protection on")
