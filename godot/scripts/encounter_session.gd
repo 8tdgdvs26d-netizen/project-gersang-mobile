@@ -52,6 +52,11 @@ const CHALLENGE_TEXT := "挑戰"
 ## Off: triggers are ignored (the WT01–WT05 tests, written before the join
 ## window existed, run with it off).
 var enabled := true
+## The bare-LOCKED prototype exit (「返回世界（原型）」 / prototype_end_encounter).
+## C02: main turns it off in the game, so a LOCKED encounter ends only
+## through the world lifecycle (end_resolved_encounter); the E01–E03 tests,
+## which observe the bare LOCKED phase, keep it.
+var prototype_end_enabled := true
 
 var _handoff: EncounterHandoff
 var _player: Player
@@ -155,15 +160,32 @@ func cancel_for_world_exit() -> void:
 ## recovery and the player can move again. Refused while JOINING (no escape
 ## during the window). Returns whether an encounter was ended.
 func prototype_end_encounter() -> bool:
-	if _phase != Phase.LOCKED:
+	if _phase != Phase.LOCKED or not prototype_end_enabled:
 		return false
 	print("Myrial: prototype end of encounter ", _context.encounter_id)
 	_handoff.cancel_pending_encounter()
 	_clear()
+	start_recovery_protection()
+	return true
+
+
+## C02: ends the LOCKED encounter `encounter_id` once the world lifecycle
+## has resolved it (its groups already handled): no encounter, player
+## unlocked. Returns false (nothing changes) for any other state / id.
+func end_resolved_encounter(encounter_id: String) -> bool:
+	if _phase != Phase.LOCKED or _context == null or _context.encounter_id != encounter_id:
+		return false
+	print("Myrial: encounter ", encounter_id, " resolved and ended")
+	_clear()
+	return true
+
+
+## The 5 s recovery protection (PROTECTION_MS) from now: no group aggroes and
+## no contact becomes an encounter until it runs out.
+func start_recovery_protection() -> void:
 	_protection_ends_ms = _time_source.now_ms() + PROTECTION_MS
 	_handoff.set_protected(true)
 	_refresh_ui()
-	return true
 
 
 func is_protection_active() -> bool:
@@ -253,7 +275,7 @@ func _refresh_ui() -> void:
 	var protected := _protection_ends_ms >= 0
 	_protection_label.text = PROTECTION_TEXT % (ceili(get_protection_remaining_ms() / 100.0) / 10.0) if protected else ""
 	_protection_label.visible = protected
-	_end_button.visible = _phase == Phase.LOCKED
+	_end_button.visible = _phase == Phase.LOCKED and prototype_end_enabled
 	_refresh_challenge()
 
 

@@ -17,7 +17,9 @@ extends RefCounted
 ## VICTORY / DEFEAT are final: nothing moves, attacks or takes damage after.
 ##
 ## Every HP change goes through resolve_damage() (Basic Attacks now, later
-## Skills). No reward, EXP, loot, retreat or world consequence exists here.
+## Skills). No reward, EXP, loot, retreat or world consequence exists here:
+## a finished battle only produces its BattleResult (get_result()), which the
+## world lifecycle consumes (C02).
 
 signal phase_changed(phase: int)
 signal damage_dealt(attacker: CombatUnit, target: CombatUnit, amount: int)
@@ -34,6 +36,8 @@ var _elapsed_ms := 0
 var _friends: Array[CombatUnit] = []
 var _enemies: Array[CombatUnit] = []
 var _selected: CombatUnit
+## C02: the battle's single result, set once on VICTORY / DEFEAT.
+var _result: BattleResult
 
 
 ## A battle with the Hero and `enemy_count` Prototype enemies.
@@ -109,6 +113,12 @@ func get_alive_enemy_count() -> int:
 		if unit.alive:
 			count += 1
 	return count
+
+
+## C02: the result of a finished battle (null until VICTORY / DEFEAT). Always
+## the same object: the world lifecycle commits it once.
+func get_result() -> BattleResult:
+	return _result
 
 
 func get_selected() -> CombatUnit:
@@ -360,5 +370,7 @@ func _set_phase(phase: Phase) -> void:
 	if phase == _phase:
 		return
 	_phase = phase
+	if is_over():
+		_result = BattleResult.create(encounter_id, BattleResult.Outcome.VICTORY if phase == Phase.VICTORY else BattleResult.Outcome.DEFEAT, group_monster_ids)
 	print("Myrial: combat phase ", Phase.keys()[phase], " at ", _elapsed_ms, " ms")
 	phase_changed.emit(phase)

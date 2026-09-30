@@ -9,11 +9,10 @@ extends CanvasLayer
 ## final Combat orientation is not decided here). One tap / click = one
 ## command, no right click, modifier keys or hotkeys.
 ##
-## The result screen's 「返回世界（原型）」 is a TEMPORARY C01 bridge: main.gd
-## ends the encounter through the E02 prototype end (no reward, EXP, loot or
-## world consequence). C02 replaces it.
+## The result screen's 「返回世界」 only asks main.gd to commit the battle's
+## BattleResult (C02 world lifecycle); it never decides the outcome.
 
-## Pressed 「返回世界（原型）」 on the result screen.
+## Pressed 「返回世界」 on the result screen.
 signal exit_requested
 
 const CELL_SIZE := Vector2(48.0, 100.0)
@@ -27,7 +26,7 @@ const DEFEAT_TEXT := "戰敗"
 const HERO_TEXT := "主角 HP %d / %d"
 const ENEMIES_TEXT := "敵人 %d / %d"
 const HINT_TEXT := "點主角選取　點空格移動　點敵人攻擊"
-const EXIT_TEXT := "返回世界（原型）"
+const EXIT_TEXT := "返回世界"
 
 var _battle: CombatBattle
 var _field: Field
