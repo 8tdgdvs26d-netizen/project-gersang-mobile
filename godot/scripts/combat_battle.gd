@@ -18,8 +18,9 @@ extends RefCounted
 ## unit toward column 0 — targets and move orders dropped, no Basic Attack,
 ## no Move / Target commands (selection still works) — while enemies keep
 ## chasing and attacking. cancel_retreat() leaves the units where they are
-## with no orders. The first alive friendly unit standing in column 0 (one
-## already there counts) ends the battle as RETREAT. Friendly units act
+## with no orders. The first alive friendly unit standing on a column 0 cell
+## no other unit holds (one already there counts; walking through a taken
+## zone cell does not) ends the battle as RETREAT. Friendly units act
 ## before enemies in every tick, so an escape resolves before that tick's
 ## enemy attacks; a finished battle never changes its result.
 ##
@@ -304,7 +305,7 @@ func _update_unit(unit: CombatUnit, ms: int) -> void:
 			budget = unit.step_progress_ms - unit.step_ms()
 			unit.cell = unit.next_cell
 			unit.step_progress_ms = 0
-		if _retreating and unit.team == CombatUnit.Team.FRIEND and unit.cell.x == 0:
+		if _retreating and unit.team == CombatUnit.Team.FRIEND and unit.cell.x == 0 and _is_free_for(unit, unit.cell):
 			_set_phase(Phase.RETREAT)
 			return
 		var destination := _destination(unit)
@@ -340,12 +341,14 @@ func _destination(unit: CombatUnit) -> Vector2i:
 	return _best_free_cell(unit, unit.cell, 0)
 
 
-## C04: the Retreat Zone cell a retreating unit heads for: the nearest free
-## column 0 cell (same row first), else straight left (walking into column 0
-## ends the battle before anyone could share that cell).
+## C04: where a retreating unit heads: the nearest free column 0 cell (same
+## row first). With every zone cell taken it waits on the free cell nearest
+## to column 1 of its own row (re-checked every step) — never on a taken cell.
 func _retreat_cell(unit: CombatUnit) -> Vector2i:
 	var cell: Variant = _best_free_cell_in(unit, Vector2i(0, unit.cell.y), 0, 0, 0)
-	return cell if cell != null else Vector2i(0, unit.cell.y)
+	if cell == null:
+		cell = _best_free_cell_in(unit, Vector2i(1, unit.cell.y), 0, 1, CombatConfig.COLUMNS - 1)
+	return cell if cell != null else unit.cell
 
 
 ## Standing still: Basic Attack the target when it is in range and ready.

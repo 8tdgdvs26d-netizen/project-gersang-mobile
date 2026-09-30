@@ -169,19 +169,59 @@ func _verify_movement() -> void:
 	_check(_phases == [CombatBattle.Phase.FIGHTING, CombatBattle.Phase.RETREAT] and battle.get_result().outcome == BattleResult.Outcome.RETREAT, "One RETREAT result")
 	var in_grid := friends.all(func(u: CombatUnit) -> bool: return CombatBattle.is_in_grid(u.cell) and CombatBattle.is_in_grid(u.next_cell))
 	_check(in_grid, "Everyone stayed on the grid")
-	# A crowded zone: the retreating unit still heads for column 0.
+	# A full zone: every column 0 cell held by an alive enemy (they stand and
+	# "attack" from range 5 for 0 damage, so they never step away).
 	var crowded := _battle(5)
 	var cf := crowded.get_friends()
+	var ce := crowded.get_enemies()
 	crowded.advance(3000)
 	for index in range(5):
-		_place(crowded.get_enemies()[index], Vector2i(0, index))
-		crowded.get_enemies()[index].attack_damage = 0
+		_place(ce[index], Vector2i(0, index))
+		ce[index].attack_damage = 0
+		ce[index].attack_range = 5
 	_place(cf[0], Vector2i(4, 2))
-	crowded.resolve_damage(crowded.get_enemies()[0], cf[1], 1000)
-	crowded.resolve_damage(crowded.get_enemies()[0], cf[2], 1000)
+	crowded.resolve_damage(ce[0], cf[1], 1000)
+	crowded.resolve_damage(ce[0], cf[2], 1000)
 	crowded.start_retreat()
-	crowded.advance(1000)
-	_check(crowded.get_phase() == CombatBattle.Phase.RETREAT and cf[0].cell.x == 0, "Every zone cell taken by enemies: the Hero still walks into column 0 and escapes")
+	var blocked_ok := true
+	for step in range(40):
+		crowded.advance(50)
+		blocked_ok = blocked_ok and not _shares_cell(crowded) and _all_on_grid(crowded) and cf[0].cell.x >= 1 and cf[0].next_cell.x >= 1
+	_check(blocked_ok, "Full zone: the Hero never steps onto a taken zone cell, shares no cell, stays on the grid")
+	_check(crowded.get_phase() == CombatBattle.Phase.FIGHTING and crowded.get_result() == null and crowded.is_retreating(), "Full zone: no RETREAT, still retreating (2 s)")
+	_check(cf[0].cell == Vector2i(1, 2) and not cf[0].is_moving(), "It waits on the nearest free cell outside the zone (%s)" % str(cf[0].cell))
+	crowded.resolve_damage(cf[0], ce[3], 1000)
+	var freed_ok := true
+	for step in range(20):
+		if crowded.is_over():
+			break
+		crowded.advance(50)
+		freed_ok = freed_ok and not _shares_cell(crowded) and _all_on_grid(crowded)
+	_check(crowded.get_phase() == CombatBattle.Phase.RETREAT and cf[0].cell == Vector2i(0, 3) and _phases == [CombatBattle.Phase.FIGHTING, CombatBattle.Phase.RETREAT], "Zone cell (0, 3) freed: the Hero enters it -> RETREAT, once")
+	_check(freed_ok and not _shares_cell(crowded), "No shared standing cell, including the RETREAT frame")
+	# Walking diagonally through a taken zone cell does not count; the free one does.
+	var through := _battle(4)
+	var tf := through.get_friends()
+	var te := through.get_enemies()
+	through.advance(3000)
+	for index in range(4):
+		_place(te[index], Vector2i(0, index))
+		te[index].attack_damage = 0
+		te[index].attack_range = 5
+	_place(tf[0], Vector2i(1, 1))
+	through.resolve_damage(te[0], tf[1], 1000)
+	through.resolve_damage(te[0], tf[2], 1000)
+	through.start_retreat()
+	var through_ok := true
+	var entered_taken := false
+	for step in range(40):
+		if through.is_over():
+			break
+		through.advance(50)
+		through_ok = through_ok and not _shares_cell(through)
+		entered_taken = entered_taken or (tf[0].cell.x == 0 and tf[0].cell.y < 4 and through.get_phase() == CombatBattle.Phase.RETREAT)
+	_check(through.get_phase() == CombatBattle.Phase.RETREAT and tf[0].cell == Vector2i(0, 4) and not entered_taken, "Only the free zone cell (0, 4) counts: RETREAT there, not on a taken cell passed on the way")
+	_check(through_ok, "No shared standing cell on the way or in the RETREAT frame")
 	_sections_done.append("movement")
 
 
@@ -402,13 +442,9 @@ func _verify_stress() -> void:
 				battle.advance(16)
 				_ticks_us.append(Time.get_ticks_usec() - start)
 				tick += 1
-				if not battle.is_over():
-					var taken := {}
-					for unit in friends + battle.get_enemies():
-						outside = outside or not CombatBattle.is_in_grid(unit.cell) or not CombatBattle.is_in_grid(unit.next_cell)
-						if unit.alive and not unit.is_moving():
-							shared = shared or taken.has(unit.cell)
-							taken[unit.cell] = true
+				# Every tick, the final result frame included.
+				shared = shared or _shares_cell(battle)
+				outside = outside or not _all_on_grid(battle)
 			var outcome: String = CombatBattle.Phase.keys()[battle.get_phase()]
 			outcomes[scenario + str(round)] = outcome
 			all_ok = all_ok and battle.is_over() and _results == 1 and battle.get_result() != null
@@ -506,6 +542,24 @@ func _battle(enemies: int) -> CombatBattle:
 func _count_result(phase: int) -> void:
 	if phase >= CombatBattle.Phase.VICTORY:
 		_results += 1
+
+
+## Whether two alive, standing units share a cell.
+func _shares_cell(battle: CombatBattle) -> bool:
+	var taken := {}
+	for unit in battle.get_friends() + battle.get_enemies():
+		if unit.alive and not unit.is_moving():
+			if taken.has(unit.cell):
+				return true
+			taken[unit.cell] = true
+	return false
+
+
+func _all_on_grid(battle: CombatBattle) -> bool:
+	for unit in battle.get_friends() + battle.get_enemies():
+		if not CombatBattle.is_in_grid(unit.cell) or not CombatBattle.is_in_grid(unit.next_cell):
+			return false
+	return true
 
 
 func _friend_hits() -> int:
