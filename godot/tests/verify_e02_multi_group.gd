@@ -292,6 +292,7 @@ func _verify_reload() -> void:
 	_check(int(JSON.parse_string(text)["version"]) == 8 and not lower.contains("group") and not lower.contains("encounter") and not lower.contains("monster"), "Save version 8; no groups, encounter or monster saved")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
 	_all_aggressive(main)
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0 + 10000)
@@ -470,6 +471,7 @@ func _verify_protection() -> void:
 	_check(main.wallet.get_balance() == money, "No reward at any point")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
 	_all_aggressive(main)
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0)
@@ -581,6 +583,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
 	_all_aggressive(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
@@ -634,6 +637,7 @@ func _routes_gap(a: Array, b: Array) -> float:
 ## plus each group's pauses as [start frame, length, position].
 func _world_track(frames: int) -> Dictionary:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
 	_all_aggressive(main)
 	main.save_path = ""
 	main.time_source = TimeSource.fixed(T0)

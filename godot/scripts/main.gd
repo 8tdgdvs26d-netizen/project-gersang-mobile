@@ -76,6 +76,12 @@ var _world_monsters: Array[WorldMonster] = []
 ## Encounter E01: the 5 s join window (player locked) and LOCKED phase that
 ## follow each trigger.
 @onready var _encounter_session := $EncounterSession as EncounterSession
+## Combat C01: a LOCKED encounter starts its battle here (runtime only).
+var _combat_view: CombatView
+## Combat C01 TEST SEAM ONLY (never saved, no player setting, no gameplay
+## path): the E01–E03 encounter tests, written before Combat existed, turn it
+## off to keep observing the bare LOCKED phase. Always true in the game.
+var combat_enabled := true
 
 
 func _ready() -> void:
@@ -98,6 +104,11 @@ func _ready() -> void:
 			child.set_chase_target(_player)
 	_encounter_handoff.watch(_world_monsters, _player, func() -> bool: return location.is_in_world(), time_source)
 	_encounter_session.watch(_encounter_handoff, _player, time_source)
+	_encounter_session.phase_changed.connect(_on_encounter_phase_changed)
+	_combat_view = CombatView.new()
+	_combat_view.name = "CombatView"
+	add_child(_combat_view)
+	_combat_view.exit_requested.connect(_on_combat_exit_requested)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
 	# save: the saved anchor + stock rebuild the same result on every reload.
 	update_market_recovery(false)
@@ -489,3 +500,43 @@ func _set_world_active(active: bool) -> void:
 		_encounter_session.cancel_for_world_exit()
 	for monster in _world_monsters:
 		monster.set_threat_active(active)
+
+
+## The running battle (null when none).
+func get_combat() -> CombatBattle:
+	return _combat_view.get_battle() if _combat_view != null else null
+
+
+func _on_encounter_phase_changed(phase: int) -> void:
+	if phase == EncounterSession.Phase.LOCKED and combat_enabled:
+		_start_combat()
+	elif phase == EncounterSession.Phase.NONE and _combat_view.is_open():
+		_close_combat()
+
+
+## Combat C01: LOCKED -> battlefield. The world stays exactly as LOCKED left
+## it (player locked, groups held, nothing new can trigger) under the battle.
+func _start_combat() -> void:
+	var battle := CombatBattle.from_encounter(_encounter_session.get_context())
+	if battle == null or _combat_view.is_open():
+		return
+	print("Myrial: combat started for ", battle.encounter_id, " with ", battle.get_enemies().size(), " enemies")
+	_joystick.release()
+	_joystick.set_process_input(false)
+	_combat_view.open(battle)
+
+
+func _close_combat() -> void:
+	_combat_view.close()
+	_joystick.set_process_input(location.is_in_world())
+
+
+## TEMPORARY C01 bridge (result screen only): the E02 prototype end of the
+## encounter — groups home, 5 s recovery protection; no reward, EXP, loot or
+## world consequence. C02 replaces it.
+func _on_combat_exit_requested() -> void:
+	var battle := get_combat()
+	if battle == null or not battle.is_over():
+		return
+	_close_combat()
+	_encounter_session.prototype_end_encounter()

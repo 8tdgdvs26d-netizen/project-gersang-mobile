@@ -210,6 +210,7 @@ func _verify_reload() -> void:
 		_check(int(JSON.parse_string(text)["version"]) == 8 and not lower.contains("encounter") and not lower.contains("joining") and not lower.contains("locked") and not lower.contains("monster"), "Save version 8; no encounter state saved")
 		await _destroy(main)
 		main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+		main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
 		_single_group(main)
 		main.save_path = TEST_SAVE
 		main.time_source = TimeSource.fixed(T0 + 10000)
@@ -310,6 +311,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
 	_single_group(main)
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
