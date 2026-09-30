@@ -47,7 +47,39 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Encounter E03: Aggressive / Passive threat dispositions and manual challenge foundation.
+Combat C01: minimum playable battle (Encounter LOCKED → battlefield → 3 s preparation →
+real-time combat → Victory / Defeat). Runtime only; save version stays 8.
+
+- a LOCKED encounter opens the battle at once (`main.gd`, `CombatView`); the world stays as
+  LOCKED left it underneath (player locked, groups held, nothing new triggers). The battle keeps
+  the encounter id and groups; 1 / 2 / 3 World Enemy Groups → 10 / 15 / 20 enemies of one
+  Prototype archetype, placed from column 10 on
+- `CombatBattle` (rules, no rendering / input / clock) + `CombatUnit` + `CombatConfig`
+  (Prototype data): 5 rows × 60 columns (Prototype decision), discrete 8-direction cell steps;
+  units may pass through each other but never stop on a cell another unit stands on or has
+  claimed; no pathfinding. Time only moves through `advance(ms)` (physics delta in the game,
+  exact ms in tests)
+- PREPARATION 3000 ms (「備戰 3 / 2 / 1」): enemies do not move, target, attack or take / deal
+  damage; the Hero may move only inside the first 3 columns (5 × 3 = 15 cells), no targeting.
+  Exactly at 3000 ms FIGHTING starts (once); a step in progress simply continues
+- FIGHTING: tap the Hero = select (starts selected), tap a cell = move, tap an enemy = target:
+  the Hero approaches, stops in range and Basic Attacks every attack interval (100% hit); a dead
+  target is dropped and the Hero waits (no automatic retarget). Enemies pursue the nearest alive
+  friendly unit and Basic Attack in range. Every HP change goes through
+  `CombatBattle.resolve_damage()`; HP 0 = dead (no movement, attack, AI or targeting)
+- VICTORY when every enemy is dead; DEFEAT when every friendly unit is dead (C01: the Hero).
+  Both are final (nothing moves, attacks or takes damage). The result screen's
+  「返回世界（原型）」 is a TEMPORARY C01 bridge: the E02 prototype end (groups home, 5 s
+  recovery protection), no reward, EXP, loot or world consequence; C02 replaces it
+- Prototype stats (`CombatConfig`, not balance): Hero HP 300, ATK 20, range 1, interval
+  1.0 s, 4 cells/s; enemy HP 40, ATK 4, range 1, interval 1.5 s, 2 cells/s
+- portrait app kept: the grid scrolls horizontally with the Hero (final Combat orientation not
+  decided here)
+- `main.combat_enabled` is a test seam only (default true, never saved, no player setting): the
+  E01–E03 tests switch it off to keep observing the bare LOCKED phase
+- tests: `tests/verify_c01_combat.gd`
+
+Previous: Encounter E03: Aggressive / Passive threat dispositions and manual challenge foundation.
 
 - every World Enemy Group has a fixed disposition in `WorldLayout.PROTOTYPE_GROUPS`
   (`WorldLayout.Disposition`, config only, never saved): `prototype_monster_01` and

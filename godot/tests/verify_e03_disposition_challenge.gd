@@ -367,6 +367,7 @@ func _verify_world_exit_and_reload() -> void:
 	file.store_string(saved)
 	file.close()
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
@@ -470,6 +471,7 @@ func _code_only(path: String) -> String:
 
 func _new_main(path: String, now: int = T0) -> Node2D:
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
+	main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
 	main.save_path = path
 	main.time_source = TimeSource.fixed(now)
 	root.add_child(main)
