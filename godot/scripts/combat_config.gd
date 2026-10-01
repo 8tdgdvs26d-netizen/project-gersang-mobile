@@ -66,3 +66,26 @@ const ENEMY := {
 	"attack_interval_ms": 1500,
 	"move_speed": 2.0,
 }
+
+## C06 Normal Skills (Prototype values approved for C06, not final balance).
+## Every friendly unit has one Normal Skill and MAX_MP MP (full at the start of
+## every battle, no regeneration). A Skill costs SKILL_MP_COST when its cast
+## begins, casts for SKILL_CAST_MS (no movement, no Basic Attack) and starts
+## SKILL_COOLDOWN_MS of cooldown when it resolves. Buff / Debuff effects last
+## SKILL_EFFECT_MS; re-applying one refreshes it (never stacks).
+const MAX_MP := 100
+const SKILL_MP_COST := 25
+const SKILL_CAST_MS := 1000
+const SKILL_COOLDOWN_MS := 8000
+const SKILL_EFFECT_MS := 5000
+## Slow: step time and new Basic Attack intervals x SLOW_FACTOR.
+const SLOW_FACTOR := 2
+## Guard: incoming damage floor(damage / GUARD_DIVISOR) (= floor(x 0.5)).
+const GUARD_DIVISOR := 2
+## AoE: the target cell and its four orthogonal neighbours, enemies only.
+const AOE_DAMAGE := 40
+## kind: "slow" (one enemy), "guard" (self), "aoe" (one enemy's cell + 4).
+## range in cells (8-direction distance, like attack_range; 0 = self).
+const HERO_SKILL := {"kind": "slow", "range": 3}
+const MERC_A_SKILL := {"kind": "guard", "range": 0}
+const MERC_B_SKILL := {"kind": "aoe", "range": 5}

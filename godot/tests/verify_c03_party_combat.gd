@@ -58,7 +58,8 @@ func _verify_static() -> void:
 		var code := _code_only(path).to_lower()
 		# C04 brought Retreat into scope ("retreat" left the list).
 		# C05 brought Level / EXP rewards into scope ("level" and "reward" left the list).
-		for word in ["recruit", "roster", "hire", "equipment", "exp ", "loot", "revive", "heal", "skill", "mana", "skill_cooldown", "formation", "select_all", "taunt", "threat"]:
+		# C06 brought Normal Skills into scope ("skill" and "skill_cooldown" left the list).
+		for word in ["recruit", "roster", "hire", "equipment", "exp ", "loot", "revive", "heal", "mana", "formation", "select_all", "taunt", "threat"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_check(not _code_only("res://scripts/battle_result.gd").to_lower().contains("merc") and not _code_only("res://scripts/battle_result.gd").to_lower().contains("friend"), "BattleResult carries no party data")
 	_sections_done.append("static")

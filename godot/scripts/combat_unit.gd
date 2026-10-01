@@ -49,6 +49,32 @@ var target: CombatUnit
 ## Time left before the next Basic Attack may land (0: ready).
 var attack_cooldown_ms := 0
 
+## C06 Normal Skill (friendly units; enemies have none). CombatBattle owns
+## every rule; times are absolute battle milliseconds.
+enum SkillState { NONE, PENDING, CASTING }
+## {"kind", "range"} (CombatConfig.*_SKILL); empty: no Skill.
+var skill := {}
+var max_mp := 0
+var mp := 0
+## PENDING: approaching skill_target until in range; CASTING: until cast_end_ms.
+var skill_state: SkillState = SkillState.NONE
+var skill_target: CombatUnit
+## The target's cell locked when the cast began (AoE centre).
+var skill_cell := NO_CELL
+var cast_end_ms := 0
+## The Skill may be used again from this battle time on.
+var skill_ready_at_ms := 0
+## Slow / Guard are active while the battle time is below these.
+var slow_until_ms := 0
+var guard_until_ms := 0
+## Whether Slow applies to this unit's steps / new Basic Attack intervals
+## (kept current by CombatBattle).
+var slowed := false
+## The move / target order the Skill command replaced, resumed afterwards.
+var resume_target: CombatUnit
+var resume_has_goal := false
+var resume_goal := Vector2i.ZERO
+
 
 static func create(unit_id: String, unit_team: Team, stats: Dictionary, start_cell: Vector2i) -> CombatUnit:
 	var unit := CombatUnit.new()
@@ -70,9 +96,11 @@ func is_moving() -> bool:
 	return next_cell != cell
 
 
-## Time one cell step takes.
+## Time one cell step takes (C06: x SLOW_FACTOR while slowed; a step in
+## progress keeps its progress).
 func step_ms() -> int:
-	return maxi(1, roundi(1000.0 / move_speed))
+	var ms := maxi(1, roundi(1000.0 / move_speed))
+	return ms * CombatConfig.SLOW_FACTOR if slowed else ms
 
 
 ## Grid position for drawing: between cell and next_cell while stepping.

@@ -47,7 +47,41 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C05: Reward & Progression Bridge. Save version 9.
+Combat C06: Normal Skill. Runtime only; save version stays 9 (MP and Skill state are never saved).
+
+- every friendly unit has one Normal Skill and 100 MP (full at the start of every battle, no
+  regeneration). Prototype values: 25 MP, 1 s cast, 8 s cooldown, effects 5 s
+  (`CombatConfig.SKILL_*`, `HERO_SKILL` / `MERC_A_SKILL` / `MERC_B_SKILL`)
+  - 主角 (Hero, 勇者 role) 緩速 Slow: one enemy within 3 cells; 5 s of step time x2 and Basic
+    Attack intervals started while slowed x2 (an interval already running is not stretched)
+  - 傭兵A (Merc A, 戰士 role) 守護 Guard: self; 5 s of incoming damage floor(x 0.5)
+  - 傭兵B (Merc B, 法師 role) 範圍攻擊 AoE: one enemy within 5 cells; 40 damage to every alive
+    enemy on the target's cell and its 4 orthogonal neighbours (clipped at the grid edge, no
+    Friendly Fire)
+  - the same effect re-applied refreshes to 5 s, never stacks
+- FIGHTING only (not in PREPARATION, while retreating or after the result). The Skill command
+  replaces the selected unit's move / target order; Slow / AoE approach the enemy (existing grid
+  movement) until it is within the Skill range — no MP and no cooldown while approaching
+- standing in range the cast begins: 25 MP paid, the target (AoE: its cell) locked — range is not
+  checked again. During the 1 s cast the unit neither moves nor Basic Attacks and ordinary Move /
+  Target commands are refused. Then the Skill resolves, the 8 s cooldown starts and the replaced
+  order resumes (a dead target is not replaced by another)
+- cancellation: before the cast a new Move / Target command or the target's death cancels it for
+  free (no new target is picked); a target dying after the cast began does not stop it (Slow
+  lands on nobody, the AoE hits its locked cell); a retreat cancels pending and casting Skills
+  (MP spent on a cast is not refunded, no cooldown)
+- every Skill hit goes through `resolve_damage`, so Skill kills count in the C05 EXP pool and the
+  normal VICTORY / DEFEAT settlement
+- UI (functional Prototype): 「技能」 button under 撤退 for the selected unit — 「緩速（魔力 25）」,
+  「選擇目標」 (then tap an enemy; any other tap cancels), 「接近目標」, 「施法中…」,
+  「冷卻 N 秒」, 「魔力不足」; Guard casts at once. A status line shows every unit's 魔力 (MP),
+  施法中 / 接近中 / 守護 N 秒 and how many enemies are slowed; slowed enemies are purple with 「緩」,
+  Guard draws a ring, a cast draws its progress, the AoE cells flash with 「範圍 -40」
+- with an 8 s cooldown and 5 s effects a unit cannot refresh its own Slow / Guard in normal play;
+  refresh is tested by forcing the cooldown
+- tests: `tests/verify_c06_normal_skill.gd`
+
+Previous: Combat C05: Reward & Progression Bridge. Save version 9.
 
 - battlefield 5 x 61 (columns 0-60): column 0 is the Retreat Zone, PREPARATION allows columns 1-3
   only (15 cells, column 0 excluded), enemies start at the right edge column by column: 10 / 15 /
