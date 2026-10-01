@@ -41,6 +41,24 @@ const FRIEND_TEXT := "%s %d / %d"
 const FRIEND_DEAD_TEXT := "%s 陣亡"
 const ENEMIES_TEXT := "敵人 %d / %d"
 const HINT_TEXT := "點隊員選取　點空格移動　點敵人攻擊"
+## C06 Normal Skill (functional Prototype presentation; MP is shown as 魔力).
+const SKILL_NAMES := {"slow": "緩速", "guard": "守護", "aoe": "範圍攻擊"}
+const SKILL_READY_TEXT := "%s（魔力 %d）"
+const SKILL_AIM_TEXT := "%s：選擇目標"
+const SKILL_PENDING_TEXT := "%s：接近目標"
+const SKILL_CASTING_TEXT := "%s：施法中…"
+const SKILL_COOLDOWN_TEXT := "%s：冷卻 %.1f 秒"
+const SKILL_NO_MP_TEXT := "%s：魔力不足"
+const AIM_HINT_TEXT := "點敵人施放技能　點其他地方取消"
+const UNIT_MP_TEXT := "%s 魔力 %d / %d"
+const CASTING_STATUS_TEXT := "施法中"
+const PENDING_STATUS_TEXT := "接近中"
+const GUARD_STATUS_TEXT := "守護 %.1f 秒"
+const SLOWED_ENEMIES_TEXT := "緩速中敵人 %d"
+const SLOW_MARK_TEXT := "緩"
+const AOE_TEXT := "範圍 -%d"
+## How long the AoE cells stay marked (battle time).
+const AOE_MARK_MS := 600
 const EXIT_TEXT := "返回世界"
 
 var _battle: CombatBattle
@@ -54,6 +72,8 @@ var _reward_label: Label
 var progression: ProgressionState
 var _exit_button: Button
 var _retreat_button: Button
+var _skill_button: Button
+var _skill_label: Label
 var _carry_ms := 0.0
 
 
@@ -103,6 +123,20 @@ func _ready() -> void:
 	_retreat_button.offset_bottom = _exit_button.offset_bottom
 	_retreat_button.pressed.connect(toggle_retreat)
 	add_child(_retreat_button)
+	# C06: the selected unit's Normal Skill (FIGHTING only, below 撤退).
+	_skill_button = Button.new()
+	_skill_button.name = "SkillButton"
+	_skill_button.focus_mode = Control.FOCUS_NONE
+	_skill_button.add_theme_font_size_override("font_size", 30)
+	_skill_button.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_skill_button.offset_left = -220.0
+	_skill_button.offset_right = 220.0
+	_skill_button.offset_top = _exit_button.offset_bottom + 20.0
+	_skill_button.offset_bottom = _skill_button.offset_top + 80.0
+	_skill_button.pressed.connect(press_skill)
+	add_child(_skill_button)
+	_skill_label = _label("SkillLabel", 330.0, 20, Color(0.7, 0.85, 1.0))
+	_skill_label.offset_bottom = _skill_label.offset_top + 64.0
 	_refresh()
 
 
@@ -217,6 +251,64 @@ func get_reward_text() -> String:
 	return "　".join(gains) + ("\n" + "　".join(levels) if not levels.is_empty() else "")
 
 
+## C06: the Skill button: Guard at once, Slow / AoE start aiming (the next
+## tap on an enemy); pressed while aiming it cancels the aim.
+func press_skill() -> bool:
+	if _battle == null:
+		return false
+	var done := true
+	if _battle.is_aiming():
+		_battle.cancel_skill_aim()
+	else:
+		done = _battle.start_skill_aim()
+	_refresh()
+	return done
+
+
+## C06: the Skill button text for the selected unit ("" when it has none).
+func get_skill_button_text() -> String:
+	var unit := _battle.get_selected() if _battle != null else null
+	if unit == null or unit.skill.is_empty():
+		return ""
+	var skill_name: String = SKILL_NAMES[unit.skill["kind"]]
+	if _battle.is_aiming():
+		return SKILL_AIM_TEXT % skill_name
+	if unit.skill_state == CombatUnit.SkillState.PENDING:
+		return SKILL_PENDING_TEXT % skill_name
+	match _battle.get_skill_readiness(unit):
+		CombatBattle.SkillReadiness.CASTING:
+			return SKILL_CASTING_TEXT % skill_name
+		CombatBattle.SkillReadiness.COOLDOWN:
+			return SKILL_COOLDOWN_TEXT % [skill_name, _battle.get_skill_cooldown_remaining(unit) / 1000.0]
+		CombatBattle.SkillReadiness.NO_MP:
+			return SKILL_NO_MP_TEXT % skill_name
+	return SKILL_READY_TEXT % [skill_name, CombatConfig.SKILL_MP_COST]
+
+
+## C06: every friendly unit's MP and Skill / Guard state, and how many
+## enemies are slowed.
+func get_skill_status_text() -> String:
+	if _battle == null:
+		return ""
+	var parts := []
+	for unit in _battle.get_friends():
+		if not unit.alive or unit.skill.is_empty():
+			continue
+		var text: String = UNIT_MP_TEXT % [ROLE_NAMES[unit.role], unit.mp, unit.max_mp]
+		if unit.skill_state == CombatUnit.SkillState.CASTING:
+			text += " " + CASTING_STATUS_TEXT
+		elif unit.skill_state == CombatUnit.SkillState.PENDING:
+			text += " " + PENDING_STATUS_TEXT
+		if _battle.get_guard_remaining(unit) > 0:
+			text += " " + GUARD_STATUS_TEXT % (_battle.get_guard_remaining(unit) / 1000.0)
+		parts.append(text)
+	var slowed := 0
+	for enemy in _battle.get_enemies():
+		if _battle.get_slow_remaining(enemy) > 0:
+			slowed += 1
+	return "　".join(parts) + "\n" + (SLOWED_ENEMIES_TEXT % slowed)
+
+
 ## C04: the 撤退 / 取消撤退 button: starts or cancels the party retreat.
 func toggle_retreat() -> bool:
 	if _battle == null:
@@ -231,8 +323,14 @@ func _refresh() -> void:
 		return
 	_exit_button.visible = _battle != null and _battle.is_over()
 	_retreat_button.visible = _battle != null and _battle.get_phase() == CombatBattle.Phase.FIGHTING
+	_skill_label.visible = _battle != null and _battle.get_phase() == CombatBattle.Phase.FIGHTING
+	_skill_button.visible = _skill_label.visible and not _battle.is_retreating() and get_skill_button_text() != ""
 	if _battle == null:
 		return
+	if _skill_button.visible:
+		_skill_button.text = get_skill_button_text()
+		_skill_button.disabled = not _battle.is_aiming() and _battle.get_skill_readiness(_battle.get_selected()) != CombatBattle.SkillReadiness.READY
+	_skill_label.text = get_skill_status_text() if _skill_label.visible else ""
 	_retreat_button.text = CANCEL_RETREAT_TEXT if _battle.is_retreating() else RETREAT_BUTTON_TEXT
 	match _battle.get_phase():
 		CombatBattle.Phase.PREPARATION:
@@ -250,6 +348,7 @@ func _refresh() -> void:
 		friends.append(FRIEND_TEXT % [ROLE_NAMES[unit.role], unit.hp, unit.max_hp] if unit.alive else FRIEND_DEAD_TEXT % ROLE_NAMES[unit.role])
 	_info_label.text = "　".join(friends) + "\n" + (ENEMIES_TEXT % [_battle.get_alive_enemy_count(), _battle.get_enemies().size()])
 	_hint_label.visible = not _battle.is_over()
+	_hint_label.text = AIM_HINT_TEXT if _battle.is_aiming() else HINT_TEXT
 	_reward_label.visible = _battle.is_over()
 	_reward_label.text = get_reward_text() if _battle.is_over() else ""
 	_field.queue_redraw()
@@ -290,11 +389,28 @@ class Field extends Control:
 		for row in range(CombatConfig.ROWS + 1):
 			var y := CombatView.FIELD_TOP + row * cell_size.y
 			draw_line(Vector2(left, y), Vector2(left + CombatConfig.COLUMNS * cell_size.x, y), Color(1, 1, 1, 0.08), 1.0)
+		# C06: the last AoE's cells, briefly.
+		var aoe := battle.get_last_aoe()
+		if not aoe.is_empty() and battle.get_elapsed_ms() - int(aoe["at_ms"]) < CombatView.AOE_MARK_MS:
+			for cell: Vector2i in aoe["cells"]:
+				draw_rect(Rect2(left + cell.x * cell_size.x, CombatView.FIELD_TOP + cell.y * cell_size.y, cell_size.x, cell_size.y), Color(1.0, 0.55, 0.15, 0.5))
+			var center: Vector2i = aoe["cells"][0]
+			draw_string(get_theme_default_font(), view.cell_center(Vector2(center)) + Vector2(-40.0, -40.0), CombatView.AOE_TEXT % CombatConfig.AOE_DAMAGE, HORIZONTAL_ALIGNMENT_CENTER, 80.0, 18, Color(1.0, 0.85, 0.4))
 		for unit in battle.get_enemies():
-			_draw_unit(unit, Color(0.85, 0.25, 0.2))
+			_draw_unit(unit, Color(0.55, 0.3, 0.85) if battle.get_slow_remaining(unit) > 0 else Color(0.85, 0.25, 0.2))
+			if battle.get_slow_remaining(unit) > 0:
+				draw_string(get_theme_default_font(), view.cell_center(unit.visual_cell()) + Vector2(-10.0, 8.0), CombatView.SLOW_MARK_TEXT, HORIZONTAL_ALIGNMENT_CENTER, 20.0, 18, Color.WHITE)
 		for unit in battle.get_friends():
 			_draw_unit(unit, CombatView.ROLE_COLORS[unit.role])
 			_draw_name(unit)
+			# C06: Guard ring, cast progress, the pending Skill's target.
+			if battle.get_guard_remaining(unit) > 0:
+				draw_arc(view.cell_center(unit.visual_cell()), 27.0, 0.0, TAU, 32, Color(0.4, 0.75, 1.0), 4.0)
+			if unit.skill_state == CombatUnit.SkillState.CASTING:
+				var done := 1.0 - float(battle.get_cast_remaining(unit)) / CombatConfig.SKILL_CAST_MS
+				draw_arc(view.cell_center(unit.visual_cell()), 31.0, -PI / 2.0, -PI / 2.0 + TAU * done, 32, Color(1.0, 0.95, 0.5), 4.0)
+			elif unit.skill_state == CombatUnit.SkillState.PENDING and unit.skill_target != unit:
+				draw_arc(view.cell_center(unit.skill_target.visual_cell()), 26.0, 0.0, TAU, 32, Color(0.75, 0.45, 1.0), 3.0)
 		var selected := battle.get_selected()
 		if selected != null:
 			draw_arc(view.cell_center(selected.visual_cell()), 22.0, 0.0, TAU, 32, Color.WHITE, 3.0)

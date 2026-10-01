@@ -60,7 +60,8 @@ func _verify_static() -> void:
 		# C03 brought the fixed Prototype Mercenaries into scope ("merc" left the list).
 		# C04 brought Retreat into scope ("retreat" left the list).
 		# C05 brought EXP rewards into scope ("reward" and "exp" left the list).
-		for word in ["loot", "skill", "mana", "crit", "dodge", "randf", "randi", "time.get_", "time_source", "save_store"]:
+		# C06 brought Normal Skills into scope ("skill" left the list).
+		for word in ["loot", "mana", "crit", "dodge", "randf", "randi", "time.get_", "time_source", "save_store"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_check(main.combat_enabled == true, "Combat is enabled by default (the flag is a test seam only)")

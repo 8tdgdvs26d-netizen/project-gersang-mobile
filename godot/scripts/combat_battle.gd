@@ -34,16 +34,34 @@ extends RefCounted
 ##                stood in the Retreat Zone (column 0, every row)
 ## VICTORY / DEFEAT are final: nothing moves, attacks or takes damage after.
 ##
-## Every HP change goes through resolve_damage() (Basic Attacks now, later
-## Skills). No reward, EXP, loot, retreat or world consequence exists here:
+## C06 Normal Skills (FIGHTING only, not while retreating): command_skill()
+## replaces the selected unit's move / target order with its Skill. Slow /
+## AoE approach the enemy until it is within the Skill range (no MP, no
+## cooldown yet), Guard targets the unit itself. Standing in range, the cast
+## begins: SKILL_MP_COST is paid and the target (AoE: its cell) is locked —
+## range is not checked again. For SKILL_CAST_MS the unit neither moves nor
+## Basic Attacks and ordinary commands are refused; then the Skill resolves,
+## the cooldown starts and the replaced order resumes (a dead target is not
+## replaced). Before the cast a new move / target command cancels the Skill
+## for free, and the Skill target's death cancels it (no new target); a
+## retreat cancels pending and casting Skills (MP spent on a cast is not
+## refunded, no cooldown).
+##
+## Every HP change goes through resolve_damage() (Basic Attacks and Skills;
+## C06 Guard halves it). No reward, EXP, loot, retreat or world consequence exists here:
 ## a finished battle only produces its BattleResult (get_result()), which the
 ## world lifecycle consumes (C02).
 
 signal phase_changed(phase: int)
 signal damage_dealt(attacker: CombatUnit, target: CombatUnit, amount: int)
 signal unit_died(unit: CombatUnit)
+## C06: a Normal Skill resolved.
+signal skill_resolved(unit: CombatUnit)
 
 enum Phase { PREPARATION, FIGHTING, VICTORY, DEFEAT, RETREAT }
+## C06: whether a unit could be given its Skill now (PENDING counts as READY:
+## a new Skill command replaces its target).
+enum SkillReadiness { READY, UNAVAILABLE, CASTING, COOLDOWN, NO_MP }
 
 ## The locked encounter this battle came from ("" when built directly).
 var encounter_id := ""
@@ -60,6 +78,13 @@ var _result: BattleResult
 var _retreating := false
 ## C05: EXP earned by enemies actually killed in this battle.
 var _exp_pool := 0
+## C06: the end of the tick being run (what happens in a tick happens at its
+## end: cast start / resolution, effect start).
+var _tick_end_ms := 0
+## C06: the next tap picks the selected unit's Skill target.
+var _aiming := false
+## C06: the last AoE {"cells", "at_ms"} (presentation only).
+var _last_aoe := {}
 
 
 ## C03: which friendly party a battle gets. PROTOTYPE is the game's party
@@ -76,19 +101,30 @@ static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYP
 	var battle := CombatBattle.new()
 	var hero := CombatUnit.create("hero", CombatUnit.Team.FRIEND, CombatConfig.HERO, CombatConfig.HERO_START_CELL)
 	hero.role = CombatUnit.Role.HERO
+	_give_skill(hero, CombatConfig.HERO_SKILL)
 	battle._friends.append(hero)
 	if party == PartyFixture.PROTOTYPE:
 		var merc_a := CombatUnit.create("merc_a", CombatUnit.Team.FRIEND, CombatConfig.MERC_A, CombatConfig.MERC_A_START_CELL)
 		merc_a.role = CombatUnit.Role.MERC_A
+		_give_skill(merc_a, CombatConfig.MERC_A_SKILL)
 		battle._friends.append(merc_a)
 		var merc_b := CombatUnit.create("merc_b", CombatUnit.Team.FRIEND, CombatConfig.MERC_B, CombatConfig.MERC_B_START_CELL)
 		merc_b.role = CombatUnit.Role.MERC_B
+		_give_skill(merc_b, CombatConfig.MERC_B_SKILL)
 		battle._friends.append(merc_b)
 	var cells := enemy_spawn_cells(enemy_count)
 	for index in range(cells.size()):
 		battle._enemies.append(CombatUnit.create("enemy_%02d" % (index + 1), CombatUnit.Team.ENEMY, CombatConfig.ENEMY, cells[index]))
 	battle._selected = hero
 	return battle
+
+
+## C06: a friendly unit's Normal Skill and full MP (every battle starts at
+## MAX_MP; nothing carries over).
+static func _give_skill(unit: CombatUnit, skill: Dictionary) -> void:
+	unit.skill = skill
+	unit.max_mp = CombatConfig.MAX_MP
+	unit.mp = CombatConfig.MAX_MP
 
 
 ## The battle for a LOCKED encounter: 1 / 2 / 3 World Enemy Groups -> 10 / 15
@@ -134,7 +170,12 @@ func start_retreat() -> bool:
 	if _phase != Phase.FIGHTING or _retreating:
 		return false
 	_retreating = true
+	_aiming = false
 	for unit in _friends:
+		# C06: a pending or casting Skill is cancelled (no refund, no cooldown).
+		if unit.skill_state != CombatUnit.SkillState.NONE:
+			print("Myrial: combat skill of ", unit.id, " cancelled by the retreat")
+			_end_skill(unit, false)
 		if unit.alive:
 			unit.target = null
 			unit.has_goal = false
@@ -201,6 +242,53 @@ func get_selected() -> CombatUnit:
 	return _selected
 
 
+## C06: whether `unit` could be given its Skill now.
+func get_skill_readiness(unit: CombatUnit) -> SkillReadiness:
+	if unit == null or unit.skill.is_empty() or not unit.alive or _phase != Phase.FIGHTING or _retreating:
+		return SkillReadiness.UNAVAILABLE
+	if unit.skill_state == CombatUnit.SkillState.CASTING:
+		return SkillReadiness.CASTING
+	if unit.skill_ready_at_ms > _elapsed_ms:
+		return SkillReadiness.COOLDOWN
+	if unit.mp < CombatConfig.SKILL_MP_COST:
+		return SkillReadiness.NO_MP
+	return SkillReadiness.READY
+
+
+## C06: milliseconds until `unit` may use its Skill again (0: no cooldown).
+func get_skill_cooldown_remaining(unit: CombatUnit) -> int:
+	return maxi(unit.skill_ready_at_ms - _elapsed_ms, 0)
+
+
+## C06: milliseconds left of the running cast (0: not casting).
+func get_cast_remaining(unit: CombatUnit) -> int:
+	return maxi(unit.cast_end_ms - _elapsed_ms, 0) if unit.skill_state == CombatUnit.SkillState.CASTING else 0
+
+
+## C06: milliseconds of Slow / Guard left on `unit` (0: none).
+func get_slow_remaining(unit: CombatUnit) -> int:
+	return maxi(unit.slow_until_ms - _elapsed_ms, 0) if unit.alive else 0
+
+
+func get_guard_remaining(unit: CombatUnit) -> int:
+	return maxi(unit.guard_until_ms - _elapsed_ms, 0) if unit.alive else 0
+
+
+## C06: the last AoE ({"cells": Array[Vector2i], "at_ms": int}; empty: none).
+func get_last_aoe() -> Dictionary:
+	return _last_aoe
+
+
+## C06: the cells an AoE centred on `center` hits: the cell and its four
+## orthogonal neighbours inside the grid.
+static func aoe_cells(center: Vector2i) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for offset in [Vector2i.ZERO, Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		if is_in_grid(center + offset):
+			cells.append(center + offset)
+	return cells
+
+
 static func is_in_grid(cell: Vector2i) -> bool:
 	return cell.x >= 0 and cell.x < CombatConfig.COLUMNS and cell.y >= 0 and cell.y < CombatConfig.ROWS
 
@@ -230,6 +318,7 @@ func select_unit(unit: CombatUnit) -> bool:
 	if is_over() or unit == null or not unit.alive or unit.team != CombatUnit.Team.FRIEND:
 		return false
 	_selected = unit
+	_aiming = false
 	return true
 
 
@@ -237,6 +326,8 @@ func select_unit(unit: CombatUnit) -> bool:
 ## grid, outside the preparation area during PREPARATION, or once over.
 func command_move(cell: Vector2i) -> bool:
 	if is_over() or is_retreating() or _selected == null or not _selected.alive or not is_cell_allowed(_selected, cell):
+		return false
+	if not _ordinary_command_allowed(_selected):
 		return false
 	_selected.target = null
 	_selected.has_goal = true
@@ -251,15 +342,75 @@ func command_target(enemy: CombatUnit) -> bool:
 		return false
 	if enemy == null or not enemy.alive or enemy.team != CombatUnit.Team.ENEMY:
 		return false
+	if not _ordinary_command_allowed(_selected):
+		return false
 	_selected.has_goal = false
 	_selected.target = enemy
 	return true
+
+
+## C06: an ordinary move / target command is refused while the unit casts;
+## before the cast it cancels the pending Skill (no MP, no cooldown).
+func _ordinary_command_allowed(unit: CombatUnit) -> bool:
+	if unit.skill_state == CombatUnit.SkillState.CASTING:
+		return false
+	if unit.skill_state == CombatUnit.SkillState.PENDING:
+		print("Myrial: combat skill of ", unit.id, " replaced by a new command")
+		_end_skill(unit, false)
+	return true
+
+
+## C06: gives the selected unit its Skill (FIGHTING, not retreating, ready).
+## Slow / AoE need an alive enemy; Guard ignores `enemy` (self). The unit's
+## move / target order is set aside and resumes after the Skill.
+func command_skill(enemy: CombatUnit = null) -> bool:
+	_aiming = false
+	var unit := _selected
+	if get_skill_readiness(unit) != SkillReadiness.READY:
+		return false
+	var on_self: bool = unit.skill["range"] == 0
+	if not on_self and (enemy == null or not enemy.alive or enemy.team != CombatUnit.Team.ENEMY):
+		return false
+	if unit.skill_state == CombatUnit.SkillState.NONE:
+		unit.resume_target = unit.target
+		unit.resume_has_goal = unit.has_goal
+		unit.resume_goal = unit.goal
+	unit.target = null
+	unit.has_goal = false
+	unit.skill_state = CombatUnit.SkillState.PENDING
+	unit.skill_target = unit if on_self else enemy
+	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " ordered on ", unit.skill_target.id)
+	return true
+
+
+## C06: the Skill button. Guard is ordered at once; Slow / AoE wait for the
+## next tap on an enemy (is_aiming()). Returns whether anything happened.
+func start_skill_aim() -> bool:
+	if get_skill_readiness(_selected) != SkillReadiness.READY:
+		return false
+	if _selected.skill["range"] == 0:
+		return command_skill()
+	_aiming = true
+	return true
+
+
+func cancel_skill_aim() -> void:
+	_aiming = false
+
+
+func is_aiming() -> bool:
+	return _aiming and get_skill_readiness(_selected) == SkillReadiness.READY
 
 
 ## One tap on `cell`: a friendly unit there is selected, an enemy there is
 ## targeted, any other cell is a move destination.
 func tap(cell: Vector2i) -> bool:
 	var unit := unit_at(cell)
+	# C06: while aiming, an enemy is the Skill target; any other tap cancels.
+	if is_aiming():
+		_aiming = false
+		return unit != null and unit.team == CombatUnit.Team.ENEMY and command_skill(unit)
+	_aiming = false
 	if unit != null and unit.team == CombatUnit.Team.FRIEND:
 		return select_unit(unit)
 	if unit != null:
@@ -287,6 +438,9 @@ func advance(ms: int) -> void:
 
 
 func _tick(ms: int) -> void:
+	_tick_end_ms = _elapsed_ms + ms
+	for unit in _friends + _enemies:
+		unit.slowed = unit.slow_until_ms > _elapsed_ms
 	for unit in _friends:
 		_update_unit(unit, ms)
 	if _phase != Phase.FIGHTING:
@@ -302,6 +456,11 @@ func _update_unit(unit: CombatUnit, ms: int) -> void:
 		return
 	if _phase == Phase.FIGHTING:
 		unit.attack_cooldown_ms = maxi(unit.attack_cooldown_ms - ms, 0)
+	# C06: a casting unit stays where it is until the cast resolves.
+	if unit.skill_state == CombatUnit.SkillState.CASTING:
+		if _tick_end_ms >= unit.cast_end_ms:
+			_resolve_skill(unit)
+		return
 	var budget := ms
 	# A few decisions per tick at most (a large `ms` may cover several steps).
 	for guard in range(64):
@@ -331,6 +490,12 @@ func _update_unit(unit: CombatUnit, ms: int) -> void:
 func _destination(unit: CombatUnit) -> Vector2i:
 	if _retreating and unit.team == CombatUnit.Team.FRIEND:
 		return _retreat_cell(unit)
+	# C06: a pending Skill approaches its target until within the Skill range.
+	if unit.skill_state == CombatUnit.SkillState.PENDING:
+		var reach: int = unit.skill["range"]
+		if CombatUnit.grid_distance(unit.cell, unit.skill_target.cell) <= reach and _is_free_for(unit, unit.cell):
+			return unit.cell
+		return _best_free_cell(unit, unit.skill_target.cell, reach)
 	var target := _target_of(unit)
 	if target != null:
 		if CombatUnit.grid_distance(unit.cell, target.cell) <= unit.attack_range and _is_free_for(unit, unit.cell):
@@ -363,13 +528,74 @@ func _retreat_cell(unit: CombatUnit) -> Vector2i:
 func _act(unit: CombatUnit) -> void:
 	if _phase != Phase.FIGHTING or (_retreating and unit.team == CombatUnit.Team.FRIEND):
 		return
+	if unit.skill_state == CombatUnit.SkillState.PENDING:
+		_begin_cast(unit)
+		return
 	var target := _target_of(unit)
 	if target == null or unit.attack_cooldown_ms > 0:
 		return
 	if CombatUnit.grid_distance(unit.cell, target.cell) > unit.attack_range:
 		return
-	unit.attack_cooldown_ms = unit.attack_interval_ms
+	# C06: an interval started while slowed is SLOW_FACTOR times longer.
+	unit.attack_cooldown_ms = unit.attack_interval_ms * (CombatConfig.SLOW_FACTOR if unit.slowed else 1)
 	resolve_damage(unit, target, unit.attack_damage)
+
+
+# --- Skills (C06) -----------------------------------------------------------------------------
+
+## Standing in range: pays the MP, locks the target (AoE: its cell) and
+## starts the cast. Not in range yet (no free cell closer): keeps waiting.
+func _begin_cast(unit: CombatUnit) -> void:
+	if CombatUnit.grid_distance(unit.cell, unit.skill_target.cell) > unit.skill["range"] or unit.mp < CombatConfig.SKILL_MP_COST:
+		return
+	unit.mp -= CombatConfig.SKILL_MP_COST
+	unit.skill_state = CombatUnit.SkillState.CASTING
+	unit.skill_cell = unit.skill_target.cell
+	unit.cast_end_ms = _tick_end_ms + CombatConfig.SKILL_CAST_MS
+	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " cast at ", _tick_end_ms, " ms")
+
+
+## The cast is over: the effect happens (a dead Slow target gets nothing; the
+## AoE hits its locked cells), the cooldown starts, the replaced order resumes.
+func _resolve_skill(unit: CombatUnit) -> void:
+	var target := unit.skill_target
+	var center := unit.skill_cell
+	unit.skill_ready_at_ms = _tick_end_ms + CombatConfig.SKILL_COOLDOWN_MS
+	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " resolved at ", _tick_end_ms, " ms")
+	match unit.skill["kind"]:
+		"slow":
+			if target.alive:
+				target.slow_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
+				target.slowed = true
+		"guard":
+			unit.guard_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
+		"aoe":
+			var cells := aoe_cells(center)
+			_last_aoe = {"cells": cells, "at_ms": _tick_end_ms}
+			var hits: Array[CombatUnit] = []
+			for enemy in _enemies:
+				if enemy.alive and cells.has(enemy.cell):
+					hits.append(enemy)
+			for enemy in hits:
+				resolve_damage(unit, enemy, CombatConfig.AOE_DAMAGE)
+	_end_skill(unit, true)
+	skill_resolved.emit(unit)
+
+
+## Clears the unit's Skill; `resume` gives back the order the Skill replaced
+## when it still makes sense (a dead target is not replaced by another).
+func _end_skill(unit: CombatUnit, resume: bool) -> void:
+	unit.skill_state = CombatUnit.SkillState.NONE
+	unit.skill_target = null
+	unit.skill_cell = CombatUnit.NO_CELL
+	if resume and unit.alive:
+		if unit.resume_target != null and unit.resume_target.alive:
+			unit.target = unit.resume_target
+		elif unit.resume_target == null and unit.resume_has_goal:
+			unit.has_goal = true
+			unit.goal = unit.resume_goal
+	unit.resume_target = null
+	unit.resume_has_goal = false
 
 
 ## The unit's current valid target: the player's choice for friendly units,
@@ -449,6 +675,11 @@ func _best_free_cell_in(unit: CombatUnit, center: Vector2i, reach: int, first_co
 func resolve_damage(attacker: CombatUnit, target: CombatUnit, amount: int) -> int:
 	if _phase != Phase.FIGHTING or attacker == null or target == null or not attacker.alive or not target.alive or amount <= 0:
 		return 0
+	# C06 Guard: floor(damage x 0.5).
+	if target.guard_until_ms > _elapsed_ms:
+		amount /= CombatConfig.GUARD_DIVISOR
+		if amount <= 0:
+			return 0
 	var dealt := mini(amount, target.hp)
 	target.hp -= dealt
 	damage_dealt.emit(attacker, target, dealt)
@@ -470,6 +701,16 @@ func _kill(unit: CombatUnit) -> void:
 	for friend in _friends:
 		if friend.target == unit:
 			friend.target = null
+		if friend.resume_target == unit:
+			friend.resume_target = null
+		# C06: a Skill whose target dies before the cast is cancelled (no MP,
+		# no cooldown, no new target); once cast it still resolves.
+		if friend.skill_state == CombatUnit.SkillState.PENDING and friend.skill_target == unit and friend != unit:
+			print("Myrial: combat skill of ", friend.id, " cancelled: its target died")
+			_end_skill(friend, true)
+	# C06: a dying unit's own Skill ends with it.
+	if unit.skill_state != CombatUnit.SkillState.NONE:
+		_end_skill(unit, false)
 	if unit.team == CombatUnit.Team.ENEMY:
 		_exp_pool += CombatConfig.EXP_PER_KILL
 	print("Myrial: combat unit died ", unit.id)
@@ -488,6 +729,7 @@ func _set_phase(phase: Phase) -> void:
 		return
 	_phase = phase
 	if is_over():
+		_aiming = false
 		var outcome := {Phase.VICTORY: BattleResult.Outcome.VICTORY, Phase.DEFEAT: BattleResult.Outcome.DEFEAT, Phase.RETREAT: BattleResult.Outcome.RETREAT}[phase] as BattleResult.Outcome
 		_result = BattleResult.create(encounter_id, outcome, group_monster_ids)
 		# C05: the reward facts at settlement — the EXP pool and the friendly
