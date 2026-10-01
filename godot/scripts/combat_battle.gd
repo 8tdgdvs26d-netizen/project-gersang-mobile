@@ -14,12 +14,24 @@ extends RefCounted
 ##                Attack); every enemy pursues and attacks the nearest alive
 ##                friendly unit
 ##
+## C04 Retreat (FIGHTING only): start_retreat() sends every alive friendly
+## unit toward column 0 — targets and move orders dropped, no Basic Attack,
+## no Move / Target commands (selection still works) — while enemies keep
+## chasing and attacking. cancel_retreat() leaves the units where they are
+## with no orders. The first alive friendly unit standing on a column 0 cell
+## no other unit holds (one already there counts; walking through a taken
+## zone cell does not) ends the battle as RETREAT. Friendly units act
+## before enemies in every tick, so an escape resolves before that tick's
+## enemy attacks; a finished battle never changes its result.
+##
 ## C03: the friendly party is the Hero + two fixed Prototype Mercenaries.
 ## One friendly unit is selected at a time; commands go to it only and every
 ## other unit keeps its own move / target.
 ##   VICTORY      every enemy is dead
 ##   DEFEAT       every friendly unit is dead (C03: Full Party Wipe; the
 ##                Hero's death alone does not end the battle)
+##   RETREAT      C04: during a whole-party retreat, an alive friendly unit
+##                stood in the Retreat Zone (column 0, every row)
 ## VICTORY / DEFEAT are final: nothing moves, attacks or takes damage after.
 ##
 ## Every HP change goes through resolve_damage() (Basic Attacks now, later
@@ -31,7 +43,7 @@ signal phase_changed(phase: int)
 signal damage_dealt(attacker: CombatUnit, target: CombatUnit, amount: int)
 signal unit_died(unit: CombatUnit)
 
-enum Phase { PREPARATION, FIGHTING, VICTORY, DEFEAT }
+enum Phase { PREPARATION, FIGHTING, VICTORY, DEFEAT, RETREAT }
 
 ## The locked encounter this battle came from ("" when built directly).
 var encounter_id := ""
@@ -44,6 +56,8 @@ var _enemies: Array[CombatUnit] = []
 var _selected: CombatUnit
 ## C02: the battle's single result, set once on VICTORY / DEFEAT.
 var _result: BattleResult
+## C04: the whole-party retreat is running.
+var _retreating := false
 
 
 ## C03: which friendly party a battle gets. PROTOTYPE is the game's party
@@ -103,7 +117,39 @@ func get_phase() -> int:
 
 
 func is_over() -> bool:
-	return _phase == Phase.VICTORY or _phase == Phase.DEFEAT
+	return _phase == Phase.VICTORY or _phase == Phase.DEFEAT or _phase == Phase.RETREAT
+
+
+## C04: whether the whole-party retreat is running.
+func is_retreating() -> bool:
+	return _retreating and _phase == Phase.FIGHTING
+
+
+## C04: starts the whole-party retreat (FIGHTING only; not while already
+## retreating). Every alive friendly unit drops its target and move order.
+func start_retreat() -> bool:
+	if _phase != Phase.FIGHTING or _retreating:
+		return false
+	_retreating = true
+	for unit in _friends:
+		if unit.alive:
+			unit.target = null
+			unit.has_goal = false
+	print("Myrial: party retreat started at ", _elapsed_ms, " ms")
+	return true
+
+
+## C04: cancels the retreat. The units stay where they are with no orders
+## (nothing from before the retreat comes back).
+func cancel_retreat() -> bool:
+	if not is_retreating():
+		return false
+	_retreating = false
+	for unit in _friends:
+		unit.target = null
+		unit.has_goal = false
+	print("Myrial: party retreat cancelled at ", _elapsed_ms, " ms")
+	return true
 
 
 func get_elapsed_ms() -> int:
@@ -182,7 +228,7 @@ func select_unit(unit: CombatUnit) -> bool:
 ## Moves the selected unit to `cell` (drops its target). Refused outside the
 ## grid, outside the preparation area during PREPARATION, or once over.
 func command_move(cell: Vector2i) -> bool:
-	if is_over() or _selected == null or not _selected.alive or not is_cell_allowed(_selected, cell):
+	if is_over() or is_retreating() or _selected == null or not _selected.alive or not is_cell_allowed(_selected, cell):
 		return false
 	_selected.target = null
 	_selected.has_goal = true
@@ -193,7 +239,7 @@ func command_move(cell: Vector2i) -> bool:
 ## The selected unit attacks `enemy` (approaching it first when out of range;
 ## drops any move command). Only while FIGHTING, only an alive enemy.
 func command_target(enemy: CombatUnit) -> bool:
-	if _phase != Phase.FIGHTING or _selected == null or not _selected.alive:
+	if _phase != Phase.FIGHTING or is_retreating() or _selected == null or not _selected.alive:
 		return false
 	if enemy == null or not enemy.alive or enemy.team != CombatUnit.Team.ENEMY:
 		return false
@@ -259,6 +305,9 @@ func _update_unit(unit: CombatUnit, ms: int) -> void:
 			budget = unit.step_progress_ms - unit.step_ms()
 			unit.cell = unit.next_cell
 			unit.step_progress_ms = 0
+		if _retreating and unit.team == CombatUnit.Team.FRIEND and unit.cell.x == 0 and _is_free_for(unit, unit.cell):
+			_set_phase(Phase.RETREAT)
+			return
 		var destination := _destination(unit)
 		unit.claim = destination
 		if destination == unit.cell:
@@ -272,6 +321,8 @@ func _update_unit(unit: CombatUnit, ms: int) -> void:
 
 ## Where the unit wants to stand now (its own cell: stay).
 func _destination(unit: CombatUnit) -> Vector2i:
+	if _retreating and unit.team == CombatUnit.Team.FRIEND:
+		return _retreat_cell(unit)
 	var target := _target_of(unit)
 	if target != null:
 		if CombatUnit.grid_distance(unit.cell, target.cell) <= unit.attack_range and _is_free_for(unit, unit.cell):
@@ -290,9 +341,19 @@ func _destination(unit: CombatUnit) -> Vector2i:
 	return _best_free_cell(unit, unit.cell, 0)
 
 
+## C04: where a retreating unit heads: the nearest free column 0 cell (same
+## row first). With every zone cell taken it waits on the free cell nearest
+## to column 1 of its own row (re-checked every step) — never on a taken cell.
+func _retreat_cell(unit: CombatUnit) -> Vector2i:
+	var cell: Variant = _best_free_cell_in(unit, Vector2i(0, unit.cell.y), 0, 0, 0)
+	if cell == null:
+		cell = _best_free_cell_in(unit, Vector2i(1, unit.cell.y), 0, 1, CombatConfig.COLUMNS - 1)
+	return cell if cell != null else unit.cell
+
+
 ## Standing still: Basic Attack the target when it is in range and ready.
 func _act(unit: CombatUnit) -> void:
-	if _phase != Phase.FIGHTING:
+	if _phase != Phase.FIGHTING or (_retreating and unit.team == CombatUnit.Team.FRIEND):
 		return
 	var target := _target_of(unit)
 	if target == null or unit.attack_cooldown_ms > 0:
@@ -403,6 +464,7 @@ func _set_phase(phase: Phase) -> void:
 		return
 	_phase = phase
 	if is_over():
-		_result = BattleResult.create(encounter_id, BattleResult.Outcome.VICTORY if phase == Phase.VICTORY else BattleResult.Outcome.DEFEAT, group_monster_ids)
+		var outcome := {Phase.VICTORY: BattleResult.Outcome.VICTORY, Phase.DEFEAT: BattleResult.Outcome.DEFEAT, Phase.RETREAT: BattleResult.Outcome.RETREAT}[phase] as BattleResult.Outcome
+		_result = BattleResult.create(encounter_id, outcome, group_monster_ids)
 	print("Myrial: combat phase ", Phase.keys()[phase], " at ", _elapsed_ms, " ms")
 	phase_changed.emit(phase)

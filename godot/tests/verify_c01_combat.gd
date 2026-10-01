@@ -58,7 +58,8 @@ func _verify_static() -> void:
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd"]:
 		var code := _code_only(path).to_lower()
 		# C03 brought the fixed Prototype Mercenaries into scope ("merc" left the list).
-		for word in ["reward", "loot", "exp", "retreat", "skill", "mana", "crit", "dodge", "randf", "randi", "time.get_", "time_source", "save_store"]:
+		# C04 brought Retreat into scope ("retreat" left the list).
+		for word in ["reward", "loot", "exp", "skill", "mana", "crit", "dodge", "randf", "randi", "time.get_", "time_source", "save_store"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_check(main.combat_enabled == true, "Combat is enabled by default (the flag is a test seam only)")

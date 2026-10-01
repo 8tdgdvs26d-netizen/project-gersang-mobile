@@ -24,6 +24,12 @@ const PREPARATION_TEXT := "備戰 %d"
 const FIGHTING_TEXT := "戰鬥"
 const VICTORY_TEXT := "勝利"
 const DEFEAT_TEXT := "戰敗"
+## C04 Retreat (Prototype presentation).
+const RETREATING_TEXT := "撤退中"
+const RETREAT_TEXT := "撤退成功"
+const RETREAT_BUTTON_TEXT := "撤退"
+const CANCEL_RETREAT_TEXT := "取消撤退"
+const RETREAT_ZONE_TEXT := "撤退區"
 ## C03: friendly unit names and colours (Prototype presentation).
 const ROLE_NAMES := {CombatUnit.Role.HERO: "主角", CombatUnit.Role.MERC_A: "傭兵A", CombatUnit.Role.MERC_B: "傭兵B"}
 const ROLE_COLORS := {CombatUnit.Role.HERO: Color(0.95, 0.78, 0.3), CombatUnit.Role.MERC_A: Color(0.35, 0.65, 0.95), CombatUnit.Role.MERC_B: Color(0.55, 0.85, 0.5)}
@@ -39,6 +45,7 @@ var _status_label: Label
 var _info_label: Label
 var _hint_label: Label
 var _exit_button: Button
+var _retreat_button: Button
 var _carry_ms := 0.0
 
 
@@ -73,6 +80,19 @@ func _ready() -> void:
 	_exit_button.offset_bottom = _exit_button.offset_top + 80.0
 	_exit_button.pressed.connect(func() -> void: exit_requested.emit())
 	add_child(_exit_button)
+	# C04: 撤退 / 取消撤退, FIGHTING only (same spot; the exit only shows after a result).
+	_retreat_button = Button.new()
+	_retreat_button.name = "RetreatButton"
+	_retreat_button.text = RETREAT_BUTTON_TEXT
+	_retreat_button.focus_mode = Control.FOCUS_NONE
+	_retreat_button.add_theme_font_size_override("font_size", 30)
+	_retreat_button.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_retreat_button.offset_left = -150.0
+	_retreat_button.offset_right = 150.0
+	_retreat_button.offset_top = _exit_button.offset_top
+	_retreat_button.offset_bottom = _exit_button.offset_bottom
+	_retreat_button.pressed.connect(toggle_retreat)
+	add_child(_retreat_button)
 	_refresh()
 
 
@@ -169,21 +189,34 @@ func tap_at(screen_position: Vector2) -> bool:
 	return cell != Vector2i(-1, -1) and _battle.tap(cell)
 
 
+## C04: the 撤退 / 取消撤退 button: starts or cancels the party retreat.
+func toggle_retreat() -> bool:
+	if _battle == null:
+		return false
+	var done := _battle.cancel_retreat() if _battle.is_retreating() else _battle.start_retreat()
+	_refresh()
+	return done
+
+
 func _refresh() -> void:
 	if _status_label == null:
 		return
 	_exit_button.visible = _battle != null and _battle.is_over()
+	_retreat_button.visible = _battle != null and _battle.get_phase() == CombatBattle.Phase.FIGHTING
 	if _battle == null:
 		return
+	_retreat_button.text = CANCEL_RETREAT_TEXT if _battle.is_retreating() else RETREAT_BUTTON_TEXT
 	match _battle.get_phase():
 		CombatBattle.Phase.PREPARATION:
 			_status_label.text = PREPARATION_TEXT % ceili(_battle.get_preparation_remaining_ms() / 1000.0)
 		CombatBattle.Phase.FIGHTING:
-			_status_label.text = FIGHTING_TEXT
+			_status_label.text = RETREATING_TEXT if _battle.is_retreating() else FIGHTING_TEXT
 		CombatBattle.Phase.VICTORY:
 			_status_label.text = VICTORY_TEXT
 		CombatBattle.Phase.DEFEAT:
 			_status_label.text = DEFEAT_TEXT
+		CombatBattle.Phase.RETREAT:
+			_status_label.text = RETREAT_TEXT
 	var friends := []
 	for unit in _battle.get_friends():
 		friends.append(FRIEND_TEXT % [ROLE_NAMES[unit.role], unit.hp, unit.max_hp] if unit.alive else FRIEND_DEAD_TEXT % ROLE_NAMES[unit.role])
@@ -215,6 +248,10 @@ class Field extends Control:
 			draw_rect(Rect2(left, CombatView.FIELD_TOP, CombatConfig.PREPARATION_COLUMNS * cell_size.x, height), Color(0.3, 0.7, 0.4, 0.35))
 			var edge := left + CombatConfig.PREPARATION_COLUMNS * cell_size.x
 			draw_line(Vector2(edge, CombatView.FIELD_TOP), Vector2(edge, CombatView.FIELD_TOP + height), Color(0.5, 1.0, 0.6), 4.0)
+		elif battle.get_phase() == CombatBattle.Phase.FIGHTING:
+			# C04: the Retreat Zone (column 0), brighter while retreating.
+			draw_rect(Rect2(left, CombatView.FIELD_TOP, cell_size.x, height), Color(0.95, 0.6, 0.2, 0.45 if battle.is_retreating() else 0.2))
+			draw_string(get_theme_default_font(), Vector2(left, CombatView.FIELD_TOP - 8.0), CombatView.RETREAT_ZONE_TEXT, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, Color(0.95, 0.7, 0.35))
 		for column in range(CombatConfig.COLUMNS + 1):
 			var x := left + column * cell_size.x
 			draw_line(Vector2(x, CombatView.FIELD_TOP), Vector2(x, CombatView.FIELD_TOP + height), Color(1, 1, 1, 0.08), 1.0)

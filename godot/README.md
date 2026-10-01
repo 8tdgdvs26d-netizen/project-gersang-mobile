@@ -47,7 +47,31 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C03: Party & Mercenary Combat. The battle party is the Hero + two fixed Prototype
+Combat C04: Retreat. Runtime only; save version stays 8.
+
+- during FIGHTING only, 「撤退」 sends the whole party toward the Retreat Zone (column 0, every
+  row, shaded 「撤退區」): every alive friendly unit drops its target and move order, stops Basic
+  Attacks and walks left (nearest free column 0 cell, existing grid movement, no pathfinding;
+  with every zone cell taken it waits on the nearest free cell of column 1 in its row and never
+  steps onto a taken cell).
+  Selection still works; Move / Target commands are refused. Enemies keep chasing and attacking;
+  retreating units can take damage and die, which does not stop the retreat
+- 「取消撤退」 ends it: the party stays where it is with no orders (nothing from before comes
+  back); normal Select / Move / Target, and a new retreat, work again
+- the first alive friendly unit standing on a column 0 cell no other unit holds (walking through
+  a taken zone cell does not count) ends the battle as RETREAT (C04-D04: one already
+  standing there counts, on the next tick). Friendly units act before enemies in every tick, so
+  an escape resolves before that tick's enemy attacks. Full Party Wipe first → DEFEAT; every
+  enemy dead first → VICTORY. Exactly one result, never overwritten
+- `BattleResult.Outcome.RETREAT` (VICTORY / DEFEAT values unchanged). The C02 lifecycle commits it
+  once like DEFEAT: participating groups reset home, 5 s recovery protection, encounter ended,
+  battle closed, one save; no loot, EXP, reward or penalty
+- **Gameplay risk (observation, not changed):** the party starts one cell from the Retreat Zone,
+  so an immediate retreat when FIGHTING starts is very safe (~0.25 s). To be judged in Mac /
+  iPhone acceptance
+- tests: `tests/verify_c04_retreat.gd`
+
+Previous: Combat C03: Party & Mercenary Combat. The battle party is the Hero + two fixed Prototype
 Mercenaries; runtime only, save version stays 8.
 
 - `CombatBattle.create()` / `from_encounter()` always build Hero (1, 2) + Merc A (1, 1) + Merc B
