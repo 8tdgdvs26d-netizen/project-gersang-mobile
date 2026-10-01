@@ -37,8 +37,10 @@ extends RefCounted
 ## C06 Normal Skills (FIGHTING only, not while retreating): command_skill()
 ## replaces the selected unit's move / target order with its Skill. Slow /
 ## AoE approach the enemy until it is within the Skill range (no MP, no
-## cooldown yet), Guard targets the unit itself. Standing in range, the cast
-## begins: SKILL_MP_COST is paid and the target (AoE: its cell) is locked —
+## cooldown yet), Guard targets the unit itself and begins its cast at once
+## (a unit in the middle of a step freezes there: it keeps its step progress
+## and its claimed destination and finishes the step after the cast).
+## Slow / AoE standing in range begin the cast: SKILL_MP_COST is paid and the target (AoE: its cell) is locked —
 ## range is not checked again. For SKILL_CAST_MS the unit neither moves nor
 ## Basic Attacks and ordinary commands are refused; then the Skill resolves,
 ## the cooldown starts and the replaced order resumes (a dead target is not
@@ -380,6 +382,9 @@ func command_skill(enemy: CombatUnit = null) -> bool:
 	unit.skill_state = CombatUnit.SkillState.PENDING
 	unit.skill_target = unit if on_self else enemy
 	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " ordered on ", unit.skill_target.id)
+	# C06 fix: Guard needs no approach, so its cast begins now (mid-step too).
+	if on_self:
+		_begin_cast(unit, _elapsed_ms)
 	return true
 
 
@@ -529,7 +534,7 @@ func _act(unit: CombatUnit) -> void:
 	if _phase != Phase.FIGHTING or (_retreating and unit.team == CombatUnit.Team.FRIEND):
 		return
 	if unit.skill_state == CombatUnit.SkillState.PENDING:
-		_begin_cast(unit)
+		_begin_cast(unit, _tick_end_ms)
 		return
 	var target := _target_of(unit)
 	if target == null or unit.attack_cooldown_ms > 0:
@@ -543,16 +548,18 @@ func _act(unit: CombatUnit) -> void:
 
 # --- Skills (C06) -----------------------------------------------------------------------------
 
-## Standing in range: pays the MP, locks the target (AoE: its cell) and
-## starts the cast. Not in range yet (no free cell closer): keeps waiting.
-func _begin_cast(unit: CombatUnit) -> void:
+## In range: pays the MP, locks the target (AoE: its cell) and starts the
+## cast at `at_ms`. Not in range yet (no free cell closer): keeps waiting.
+## A casting unit does not move (_update_unit); one caught mid-step keeps its
+## step progress and claim and finishes the step after the cast.
+func _begin_cast(unit: CombatUnit, at_ms: int) -> void:
 	if CombatUnit.grid_distance(unit.cell, unit.skill_target.cell) > unit.skill["range"] or unit.mp < CombatConfig.SKILL_MP_COST:
 		return
 	unit.mp -= CombatConfig.SKILL_MP_COST
 	unit.skill_state = CombatUnit.SkillState.CASTING
 	unit.skill_cell = unit.skill_target.cell
-	unit.cast_end_ms = _tick_end_ms + CombatConfig.SKILL_CAST_MS
-	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " cast at ", _tick_end_ms, " ms")
+	unit.cast_end_ms = at_ms + CombatConfig.SKILL_CAST_MS
+	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " cast at ", at_ms, " ms")
 
 
 ## The cast is over: the effect happens (a dead Slow target gets nothing; the
