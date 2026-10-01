@@ -47,7 +47,17 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C06: Normal Skill. Runtime only; save version stays 9 (MP and Skill state are never saved).
+Combat C06 corrective: Normal Skill approved-behaviour alignment. Runtime only; save version stays 9.
+
+- PREPARATION shows the selected unit's Normal Skill (「緩速：戰鬥開始後可用」 etc.) and the 魔力 /
+  status line; the button stays disabled and a press changes nothing (no aim, pending, cast, MP or
+  cooldown). FIGHTING / retreat / result presentation unchanged
+- Guard (Merc A) begins its cast at the command, with no wait for the current step. A unit caught
+  mid-step freezes where it is — step progress, next cell and claimed destination kept, no teleport,
+  no new cell taken — and after the cast finishes that step and resumes its move order
+- tests: `tests/verify_c06_normal_skill.gd` (Preparation UI, Guard while moving)
+
+Previous: Combat C06: Normal Skill. Runtime only; save version stays 9 (MP and Skill state are never saved).
 
 - every friendly unit has one Normal Skill and 100 MP (full at the start of every battle, no
   regeneration). Prototype values: 25 MP, 1 s cast, 8 s cooldown, effects 5 s
@@ -74,7 +84,7 @@ Combat C06: Normal Skill. Runtime only; save version stays 9 (MP and Skill state
   normal VICTORY / DEFEAT settlement
 - UI (functional Prototype): 「技能」 button under 撤退 for the selected unit — 「緩速（魔力 25）」,
   「選擇目標」 (then tap an enemy; any other tap cancels), 「接近目標」, 「施法中…」,
-  「冷卻 N 秒」, 「魔力不足」; Guard casts at once. A status line shows every unit's 魔力 (MP),
+  「冷卻 N 秒」, 「魔力不足」; Guard casts at once (C06 corrective: also mid-step). A status line shows every unit's 魔力 (MP),
   施法中 / 接近中 / 守護 N 秒 and how many enemies are slowed; slowed enemies are purple with 「緩」,
   Guard draws a ring, a cast draws its progress, the AoE cells flash with 「範圍 -40」
 - with an 8 s cooldown and 5 s effects a unit cannot refresh its own Slow / Guard in normal play;

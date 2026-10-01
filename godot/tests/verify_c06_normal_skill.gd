@@ -25,6 +25,7 @@ func _initialize() -> void:
 	_verify_static()
 	_verify_availability()
 	_verify_guard_cast_cooldown_mp()
+	_verify_guard_while_moving()
 	_verify_slow()
 	_verify_approach()
 	_verify_target_death()
@@ -34,7 +35,7 @@ func _initialize() -> void:
 	_verify_settlement()
 	_verify_stress()
 	await _verify_in_game()
-	_check(_sections_done.size() == 12, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 13, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("C06 normal skill verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -97,15 +98,13 @@ func _verify_guard_cast_cooldown_mp() -> void:
 	var enemy := battle.get_enemies()[0]
 	var cell := warrior.cell
 	battle.select_unit(warrior)
-	_check(battle.command_skill() and warrior.skill_state == CombatUnit.SkillState.PENDING and warrior.skill_target == warrior and warrior.mp == 100, "Guard ordered on self; no MP before the cast")
-	battle.advance(10)
 	var cast_at := battle.get_elapsed_ms()
-	_check(warrior.skill_state == CombatUnit.SkillState.CASTING and warrior.mp == 75 and warrior.cast_end_ms == cast_at + 1000 and warrior.cell == cell, "No approach for Guard: cast begins in place, 25 MP paid")
+	_check(battle.command_skill() and warrior.skill_state == CombatUnit.SkillState.CASTING and warrior.skill_target == warrior and warrior.mp == 75 and warrior.cast_end_ms == cast_at + 1000 and warrior.cell == cell, "Guard on self: the cast begins at the command (no approach, no wait), 25 MP paid")
 	_check(battle.get_skill_cooldown_remaining(warrior) == 0 and battle.get_guard_remaining(warrior) == 0, "Casting: no cooldown, no Guard yet")
 	_check(not battle.command_move(Vector2i(5, 1)) and not battle.command_target(enemy) and not battle.command_skill() and battle.get_skill_readiness(warrior) == CombatBattle.SkillReadiness.CASTING, "Casting: Move / Target / Skill commands refused")
-	battle.advance(989)
-	_check(warrior.skill_state == CombatUnit.SkillState.CASTING and battle.get_cast_remaining(warrior) == 11 and warrior.cell == cell and not warrior.is_moving() and not warrior.has_goal and warrior.target == null, "999 ms: still casting, not moved")
-	battle.advance(11)
+	battle.advance(999)
+	_check(warrior.skill_state == CombatUnit.SkillState.CASTING and battle.get_cast_remaining(warrior) == 1 and warrior.cell == cell and not warrior.is_moving() and not warrior.has_goal and warrior.target == null, "999 ms: still casting, not moved")
+	battle.advance(1)
 	var resolved_at := battle.get_elapsed_ms()
 	_check(warrior.skill_state == CombatUnit.SkillState.NONE and battle.get_guard_remaining(warrior) == 5000 and battle.get_skill_cooldown_remaining(warrior) == 8000, "1000 ms: Guard 5 s, cooldown 8 s")
 	_check(battle.get_skill_readiness(warrior) == CombatBattle.SkillReadiness.COOLDOWN and not battle.command_skill(), "Cooldown: Skill refused")
@@ -144,6 +143,65 @@ func _verify_guard_cast_cooldown_mp() -> void:
 	battle.advance(60000)
 	_check(warrior.mp == 0 or not warrior.alive, "No MP regeneration over a minute")
 	_sections_done.append("guard_cast_cooldown_mp")
+
+
+# --- Guard priority while moving (C06 fix) ----------------------------------------------------
+
+## Merc A in the middle of a step: Guard begins its cast at the command; the
+## unit freezes where it is (step progress, next cell and claimed destination
+## kept), resolves on time, then finishes the step and resumes its move.
+func _verify_guard_while_moving() -> void:
+	var battle := _fight(10)
+	var warrior := battle.get_friends()[1]
+	battle.select_unit(warrior)
+	_check(battle.command_move(Vector2i(8, 1)), "Merc A ordered to (8, 1)")
+	battle.advance(100)
+	var cell := warrior.cell
+	var next_cell := warrior.next_cell
+	var progress := warrior.step_progress_ms
+	var claim := warrior.claim
+	var visual := warrior.visual_cell()
+	_check(warrior.is_moving() and progress == 100 and progress < warrior.step_ms() and claim == Vector2i(8, 1), "Mid-step: 100 of %d ms toward %s, claiming (8, 1)" % [warrior.step_ms(), str(next_cell)])
+	var ordered_at := battle.get_elapsed_ms()
+	_check(battle.command_skill(), "Guard ordered mid-step")
+	_check(warrior.skill_state == CombatUnit.SkillState.CASTING and warrior.mp == 75 and warrior.cast_end_ms == ordered_at + 1000, "The cast begins at once (not after the step), 25 MP paid")
+	_check(not warrior.has_goal and warrior.resume_has_goal and warrior.resume_goal == Vector2i(8, 1), "The move order is set aside for the Skill")
+	_check(_occupancy_ok(battle), "Occupancy valid at the cast start")
+	battle.advance(500)
+	_check(warrior.cell == cell and warrior.next_cell == next_cell and warrior.step_progress_ms == progress and warrior.claim == claim and warrior.visual_cell() == visual, "500 ms into the cast: frozen (no step progress, same claim)")
+	_check(_occupancy_ok(battle), "Occupancy valid during the cast")
+	battle.advance(499)
+	_check(warrior.skill_state == CombatUnit.SkillState.CASTING and warrior.step_progress_ms == progress and warrior.cell == cell, "999 ms: still casting, still frozen")
+	battle.advance(1)
+	_check(warrior.skill_state == CombatUnit.SkillState.NONE and battle.get_guard_remaining(warrior) == 5000 and battle.get_skill_cooldown_remaining(warrior) == 8000 and warrior.mp == 75, "1000 ms: Guard 5 s, cooldown 8 s")
+	_check(warrior.has_goal and warrior.goal == Vector2i(8, 1) and warrior.step_progress_ms == progress, "Resolved: the move order resumes")
+	battle.advance(warrior.step_ms() - progress - 1)
+	_check(warrior.cell == cell and warrior.is_moving(), "The interrupted step finishes from where it froze (1 ms left)")
+	battle.advance(1)
+	_check(warrior.cell == next_cell, "The step completes onto its next cell")
+	_check(_occupancy_ok(battle), "Occupancy valid after the cast")
+	battle.advance(3000)
+	_check(warrior.cell == Vector2i(8, 1) and not warrior.has_goal and _occupancy_ok(battle), "Merc A arrives at (8, 1)")
+	_sections_done.append("guard_while_moving")
+
+
+## No two alive units claim one cell and no two standing alive units share a
+## cell.
+func _occupancy_ok(battle: CombatBattle) -> bool:
+	var claims := {}
+	var standing := {}
+	for unit in battle.get_friends() + battle.get_enemies():
+		if not unit.alive:
+			continue
+		if unit.claim != CombatUnit.NO_CELL:
+			if claims.has(unit.claim):
+				return false
+			claims[unit.claim] = true
+		if not unit.is_moving():
+			if standing.has(unit.cell):
+				return false
+			standing[unit.cell] = true
+	return true
 
 
 # --- Hero Slow ---------------------------------------------------------------------------------
@@ -514,6 +572,10 @@ func _verify_stress() -> void:
 	var worst_usec := 0
 	var ticks := 0
 	while not battle.is_over() and ticks < 10000:
+		# (MP before the commands: Guard pays at its command.)
+		var before := {}
+		for unit in battle.get_friends():
+			before[unit.id] = unit.mp
 		for unit in battle.get_friends():
 			if not unit.alive:
 				continue
@@ -523,9 +585,7 @@ func _verify_stress() -> void:
 				battle.command_skill(nearest)
 			elif unit.skill_state == CombatUnit.SkillState.NONE and unit.target == null and nearest != null:
 				battle.command_target(nearest)
-		var before := {}
-		for unit in battle.get_friends():
-			before[unit.id] = unit.mp
+		_note_cast_positions(battle, cast_cells)
 		var started := Time.get_ticks_usec()
 		battle.advance(16)
 		var spent := Time.get_ticks_usec() - started
@@ -535,13 +595,14 @@ func _verify_stress() -> void:
 		for unit in battle.get_friends():
 			if unit.mp < before[unit.id]:
 				casts[unit.id] += 1
-				cast_cells[unit.id] = unit.cell
 			mp_ok = mp_ok and unit.mp >= 0 and unit.mp == 100 - 25 * casts[unit.id]
+		_note_cast_positions(battle, cast_cells)
+		for unit in battle.get_friends():
 			if unit.skill_state == CombatUnit.SkillState.CASTING:
-				still_while_casting = still_while_casting and unit.cell == cast_cells[unit.id] and not unit.is_moving()
+				still_while_casting = still_while_casting and cast_cells[[unit.id, unit.cast_end_ms]] == [unit.cell, unit.next_cell, unit.step_progress_ms]
 	_check(battle.is_over() and battle.get_result() != null, "20 enemies with Skills: the battle ends (%s after %d ticks)" % [CombatBattle.Phase.keys()[battle.get_phase()], ticks])
 	_check(mp_ok and casts.values().all(func(n: int) -> bool: return n <= 4), "MP always 100 - 25 x casts, never below 0 (%s)" % str(casts))
-	_check(still_while_casting, "No unit moved while casting")
+	_check(still_while_casting and cast_cells.size() == casts.values().reduce(func(sum: int, n: int) -> int: return sum + n, 0), "No unit moved while casting (%d casts tracked)" % cast_cells.size())
 	var gaps_ok := true
 	var last := {}
 	for entry in _resolved:
@@ -579,7 +640,21 @@ func _verify_in_game() -> void:
 	var label := view.get_node("SkillLabel") as Label
 	var hint := view.get_node("HintLabel") as Label
 	await process_frame
-	_check(battle != null and battle.get_phase() == CombatBattle.Phase.PREPARATION and not button.visible and not label.visible, "PREPARATION: no Skill button")
+	# C06 fix: PREPARATION shows the selected unit's Skill, disabled.
+	_check(battle != null and battle.get_phase() == CombatBattle.Phase.PREPARATION and button.visible and button.disabled and button.text == "緩速：戰鬥開始後可用", "PREPARATION: the Hero's Skill shown, disabled (%s)" % button.text)
+	_check(label.visible and label.text.contains("主角 魔力 100 / 100") and label.text.contains("傭兵A 魔力 100 / 100") and label.text.contains("傭兵B 魔力 100 / 100"), "PREPARATION: Skill / MP status shown (%s)" % label.text)
+	var prep_texts := [button.text, label.text]
+	for friend in battle.get_friends():
+		_check(view.tap_at(view.cell_center(Vector2(friend.cell))) and battle.get_selected() == friend, "PREPARATION: tap %s selects it" % friend.id)
+		await process_frame
+		var skill_name: String = CombatView.SKILL_NAMES[friend.skill["kind"]]
+		_check(button.visible and button.disabled and button.text == skill_name + "：戰鬥開始後可用", "PREPARATION: %s shows %s, disabled (%s)" % [friend.id, skill_name, button.text])
+		prep_texts.append(button.text)
+		button.pressed.emit()
+		await process_frame
+		_check(not battle.is_aiming() and friend.skill_state == CombatUnit.SkillState.NONE and friend.mp == 100 and friend.skill_ready_at_ms == 0 and battle.get_skill_cooldown_remaining(friend) == 0 and not friend.has_goal and friend.target == null, "PREPARATION: pressing %s changes nothing (no aim, pending, cast, MP or cooldown)" % skill_name)
+	_check(battle.get_phase() == CombatBattle.Phase.PREPARATION, "Still PREPARATION after the presses")
+	battle.select_unit(battle.get_hero())
 	battle.advance(CombatConfig.PREPARATION_MS)
 	await process_frame
 	var hero := battle.get_hero()
@@ -587,6 +662,7 @@ func _verify_in_game() -> void:
 	_check(button.visible and not button.disabled and button.text == "緩速（魔力 25）", "FIGHTING: 緩速（魔力 25） for the selected Hero (%s)" % button.text)
 	_check(label.visible and label.text.contains("主角 魔力 100 / 100") and label.text.contains("傭兵A 魔力 100 / 100") and label.text.contains("傭兵B 魔力 100 / 100") and label.text.contains("緩速中敵人 0"), "Every unit's MP shown (%s)" % label.text)
 	var texts := [button.text, label.text]
+	texts.append_array(prep_texts)
 	button.pressed.emit()
 	await process_frame
 	_check(battle.is_aiming() and button.text == "緩速：選擇目標" and hint.text == "點敵人施放技能　點其他地方取消", "Skill pressed: aiming (%s / %s)" % [button.text, hint.text])
@@ -602,7 +678,7 @@ func _verify_in_game() -> void:
 	await process_frame
 	_check(button.text == "守護（魔力 25）", "Merc A: 守護（魔力 25）")
 	button.pressed.emit()
-	_check(warrior.skill_state == CombatUnit.SkillState.PENDING and not battle.is_aiming(), "Guard: ordered at once, no aiming")
+	_check(warrior.skill_state == CombatUnit.SkillState.CASTING and warrior.mp == 75 and not battle.is_aiming(), "Guard: cast at once, no aiming")
 	battle.advance(10)
 	await process_frame
 	_check(button.text == "守護：施法中…" and button.disabled and label.text.contains("傭兵A 魔力 75 / 100 施法中"), "Casting shown (%s / %s)" % [button.text, label.text])
@@ -664,6 +740,14 @@ func _cast(battle: CombatBattle, unit: CombatUnit, target: CombatUnit) -> int:
 	battle.advance(10)
 	battle.advance(unit.cast_end_ms - battle.get_elapsed_ms())
 	return battle.get_elapsed_ms()
+
+
+## Records where each cast was when first seen (keyed by unit and cast end):
+## a casting unit must stay exactly there (cell, next cell, step progress).
+func _note_cast_positions(battle: CombatBattle, positions: Dictionary) -> void:
+	for unit in battle.get_friends():
+		if unit.skill_state == CombatUnit.SkillState.CASTING and not positions.has([unit.id, unit.cast_end_ms]):
+			positions[[unit.id, unit.cast_end_ms]] = [unit.cell, unit.next_cell, unit.step_progress_ms]
 
 
 func _place(unit: CombatUnit, cell: Vector2i) -> void:

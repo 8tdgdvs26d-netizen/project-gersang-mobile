@@ -49,6 +49,8 @@ const SKILL_PENDING_TEXT := "%s：接近目標"
 const SKILL_CASTING_TEXT := "%s：施法中…"
 const SKILL_COOLDOWN_TEXT := "%s：冷卻 %.1f 秒"
 const SKILL_NO_MP_TEXT := "%s：魔力不足"
+## C06 fix: PREPARATION shows the selected unit's Skill, not usable yet.
+const SKILL_PREPARATION_TEXT := "%s：戰鬥開始後可用"
 const AIM_HINT_TEXT := "點敵人施放技能　點其他地方取消"
 const UNIT_MP_TEXT := "%s 魔力 %d / %d"
 const CASTING_STATUS_TEXT := "施法中"
@@ -123,7 +125,7 @@ func _ready() -> void:
 	_retreat_button.offset_bottom = _exit_button.offset_bottom
 	_retreat_button.pressed.connect(toggle_retreat)
 	add_child(_retreat_button)
-	# C06: the selected unit's Normal Skill (FIGHTING only, below 撤退).
+	# C06: the selected unit's Normal Skill (shown from PREPARATION, usable while FIGHTING; below 撤退).
 	_skill_button = Button.new()
 	_skill_button.name = "SkillButton"
 	_skill_button.focus_mode = Control.FOCUS_NONE
@@ -271,6 +273,8 @@ func get_skill_button_text() -> String:
 	if unit == null or unit.skill.is_empty():
 		return ""
 	var skill_name: String = SKILL_NAMES[unit.skill["kind"]]
+	if _battle.get_phase() == CombatBattle.Phase.PREPARATION:
+		return SKILL_PREPARATION_TEXT % skill_name
 	if _battle.is_aiming():
 		return SKILL_AIM_TEXT % skill_name
 	if unit.skill_state == CombatUnit.SkillState.PENDING:
@@ -323,7 +327,9 @@ func _refresh() -> void:
 		return
 	_exit_button.visible = _battle != null and _battle.is_over()
 	_retreat_button.visible = _battle != null and _battle.get_phase() == CombatBattle.Phase.FIGHTING
-	_skill_label.visible = _battle != null and _battle.get_phase() == CombatBattle.Phase.FIGHTING
+	# C06 fix: the Skill UI shows from PREPARATION on (the button stays
+	# disabled until FIGHTING; the battle refuses Skills before that anyway).
+	_skill_label.visible = _battle != null and (_battle.get_phase() == CombatBattle.Phase.PREPARATION or _battle.get_phase() == CombatBattle.Phase.FIGHTING)
 	_skill_button.visible = _skill_label.visible and not _battle.is_retreating() and get_skill_button_text() != ""
 	if _battle == null:
 		return
