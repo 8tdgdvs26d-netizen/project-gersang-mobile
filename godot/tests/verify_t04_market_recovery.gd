@@ -47,7 +47,7 @@ func _verify_static() -> void:
 	_check(MarketRecovery.STEP_MS == 12000 and MarketRecovery.STOCK_PER_STEP == 1, "Approved rule: 1 stock unit every 12 seconds")
 	_check(MarketRecovery.MAX_ELAPSED_MS == 30 * 60 * 1000, "Approved offline cap: 30 minutes")
 	_check(MarketPrices.TARGET_STOCK == 100 and MarketPrices.INITIAL_STOCK == 100, "Target stock stays 100")
-	_check(SaveStore.VERSION == 8 and SaveStore.V6_KEYS.has("market_recovery") and SaveStore.V7_KEYS.has("market_recovery") and SaveStore.V8_KEYS.has("market_recovery"), "Save version 6 (and T05's 7, T06's 8) carries the market recovery anchor")
+	_check(SaveStore.VERSION == 9 and SaveStore.V9_KEYS.has("market_recovery") and SaveStore.V6_KEYS.has("market_recovery") and SaveStore.V7_KEYS.has("market_recovery") and SaveStore.V8_KEYS.has("market_recovery"), "Save version 6 (and T05's 7, T06's 8) carries the market recovery anchor")
 	var recovery := _code_only("res://scripts/market_recovery.gd")
 	for clock in ["Time.", "OS.get_", "get_ticks"]:
 		_check(not recovery.contains(clock), "Recovery must take time from its caller, never read %s" % clock)
@@ -437,7 +437,7 @@ func _verify_save_reload() -> void:
 	var no_key := v6.duplicate(true)
 	no_key.erase("market_recovery")
 	var future_version := v6.duplicate(true)
-	future_version["version"] = 9
+	future_version["version"] = 10
 	var v5_with_key := v6.duplicate(true)
 	v5_with_key["version"] = 5
 	_check(SaveStore.validate(no_key).is_empty(), "A v6 save missing market_recovery is rejected as a whole")
@@ -473,6 +473,7 @@ func _verify_migration() -> void:
 	v5.erase("market_recovery")
 	v5.erase("cost_ledger")  # T05 (v7) data is not part of a real v5 save
 	v5["location"].erase("world_position")  # nor is T06's (v8) exact world position
+	v5.erase("progression")  # nor C05's (v9) progression
 	v5["version"] = 5
 	v5["warehouses"] = {"A": {"items": {"test_good_02": 5}}, "B": {"items": {"test_good_06": 1}}}
 	var v4 := v5.duplicate(true)

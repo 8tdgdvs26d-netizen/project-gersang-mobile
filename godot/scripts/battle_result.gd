@@ -4,7 +4,9 @@ extends RefCounted
 ## Combat C02: the outcome of one finished battle, produced once by
 ## CombatBattle when it reaches VICTORY or DEFEAT and consumed once by the
 ## world lifecycle (main.commit_battle_result). Runtime only, never saved.
-## It carries no reward, EXP or loot.
+## C05: it carries the battle's EXP pool and the friendly units alive at
+## settlement; ProgressionState turns them into EXP when the world commits it
+## (DEFEAT awards none). No loot or money.
 
 ## C04: RETREAT — at least one friendly unit escaped through the Retreat Zone.
 enum Outcome { VICTORY, DEFEAT, RETREAT }
@@ -14,6 +16,11 @@ var encounter_id := ""
 var outcome: Outcome = Outcome.DEFEAT
 ## The World Enemy Groups that took part (primary group first).
 var group_monster_ids: Array[String] = []
+## C05: EXP earned by enemies actually killed in this battle.
+var exp_pool := 0
+## C05: ids of the friendly units alive at settlement ("hero", "merc_a",
+## "merc_b").
+var survivor_ids: Array[String] = []
 var _committed := false
 
 

@@ -42,6 +42,8 @@ var cargo: CharacterInventory:
 		inventory = value
 		if value != null:
 			character_stats = value.get_stats()
+## C05: Level / EXP of the three fixed Prototype combat slots (saved, v9).
+var progression := ProgressionState.new()
 ## Session-owned player money, with the same lifetime as the cargo.
 var wallet := Wallet.new()
 ## City market state (reference price, stock and target stock per city x good).
@@ -85,6 +87,7 @@ var _combat_view: CombatView
 ## path): the E01–E03 encounter tests, written before Combat existed, turn it
 ## off to keep observing the bare LOCKED phase. Always true in the game.
 var combat_enabled := true
+var _last_award := {}
 
 
 func _ready() -> void:
@@ -113,6 +116,7 @@ func _ready() -> void:
 	_encounter_handoff.group_removed.connect(_on_group_removed)
 	_combat_view = CombatView.new()
 	_combat_view.name = "CombatView"
+	_combat_view.progression = progression
 	add_child(_combat_view)
 	_combat_view.exit_requested.connect(_on_combat_exit_requested)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
@@ -335,6 +339,7 @@ func _load_saved_session() -> void:
 		warehouses = loaded["warehouses"]
 		market_recovery = loaded["market_recovery"]
 		cost_ledger = loaded["cost_ledger"]
+		progression = loaded["progression"]
 
 
 ## Puts the scene into the loaded location: the world (at the last city's
@@ -362,7 +367,7 @@ func _save_session() -> void:
 func _persist() -> bool:
 	if location.is_in_world() and is_node_ready() and not location.set_world_position(_player.global_position):
 		return false
-	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger)
+	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression)
 	if saved:
 		_saved_world_position = location.get_world_position()
 	return saved
@@ -508,6 +513,12 @@ func _set_world_active(active: bool) -> void:
 		monster.set_threat_active(active)
 
 
+## C05: the EXP shares of the last committed battle ({slot: {exp, level,
+## leveled}}; empty when it awarded none).
+func get_last_award() -> Dictionary:
+	return _last_award
+
+
 ## The running battle (null when none).
 func get_combat() -> CombatBattle:
 	return _combat_view.get_battle() if _combat_view != null else null
@@ -556,7 +567,8 @@ func _on_combat_exit_requested() -> void:
 ##      session's world, DEFEAT and C04 RETREAT reset them home
 ##      (EncounterHandoff),
 ##   5. end the encounter (player unlocked where the encounter caught the player),
-##   6. close the battle, world input back, 7. save once.
+##   6. C05: EXP to the slots alive at settlement (ProgressionState; none on
+##      DEFEAT), close the battle, world input back, 7. save once.
 ## A failed save does not undo the committed result. No reward, EXP, loot,
 ## penalty, hospital or respawn happens here.
 func commit_battle_result(result: BattleResult) -> bool:
@@ -573,6 +585,9 @@ func commit_battle_result(result: BattleResult) -> bool:
 	_encounter_session.start_recovery_protection()
 	_encounter_handoff.resolve_encounter(result.encounter_id, result.is_victory())
 	_encounter_session.end_resolved_encounter(result.encounter_id)
+	# C05: the battle's EXP goes to the slots alive at settlement (none on
+	# DEFEAT); part of the committed result, saved with it below.
+	_last_award = progression.apply(result)
 	_close_combat()
 	var saved := save_world_position()
 	print("Myrial: battle result ", BattleResult.Outcome.keys()[result.outcome], " of ", result.encounter_id, " committed (saved: ", saved, ")")

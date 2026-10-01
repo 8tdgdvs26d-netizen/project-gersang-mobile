@@ -30,6 +30,10 @@ const RETREAT_TEXT := "撤退成功"
 const RETREAT_BUTTON_TEXT := "撤退"
 const CANCEL_RETREAT_TEXT := "取消撤退"
 const RETREAT_ZONE_TEXT := "撤退區"
+## C05 result reward (minimal text, no animation).
+const REWARD_TEXT := "%s 經驗 +%d"
+const LEVEL_UP_TEXT := "%s 升至 %d 級"
+const NO_REWARD_TEXT := "本場沒有獲得經驗"
 ## C03: friendly unit names and colours (Prototype presentation).
 const ROLE_NAMES := {CombatUnit.Role.HERO: "主角", CombatUnit.Role.MERC_A: "傭兵A", CombatUnit.Role.MERC_B: "傭兵B"}
 const ROLE_COLORS := {CombatUnit.Role.HERO: Color(0.95, 0.78, 0.3), CombatUnit.Role.MERC_A: Color(0.35, 0.65, 0.95), CombatUnit.Role.MERC_B: Color(0.55, 0.85, 0.5)}
@@ -44,6 +48,10 @@ var _field: Field
 var _status_label: Label
 var _info_label: Label
 var _hint_label: Label
+var _reward_label: Label
+## C05: the session's progression (set by main.gd), read only to preview the
+## result's EXP shares; the world lifecycle applies them.
+var progression: ProgressionState
 var _exit_button: Button
 var _retreat_button: Button
 var _carry_ms := 0.0
@@ -67,6 +75,8 @@ func _ready() -> void:
 	_info_label = _label("InfoLabel", 240.0, 24, Color(0.9, 0.9, 0.9))
 	_info_label.offset_bottom = _info_label.offset_top + 80.0
 	_hint_label = _label("HintLabel", FIELD_TOP + CombatConfig.ROWS * CELL_SIZE.y + 30.0, 24, Color(0.7, 0.7, 0.75))
+	_reward_label = _label("RewardLabel", FIELD_TOP + CombatConfig.ROWS * CELL_SIZE.y + 8.0, 24, Color(0.95, 0.85, 0.5))
+	_reward_label.offset_bottom = _reward_label.offset_top + 76.0
 	_hint_label.text = HINT_TEXT
 	_exit_button = Button.new()
 	_exit_button.name = "ExitButton"
@@ -189,6 +199,24 @@ func tap_at(screen_position: Vector2) -> bool:
 	return cell != Vector2i(-1, -1) and _battle.tap(cell)
 
 
+## C05: the result screen's EXP line(s): what each survivor gets and who
+## reaches a new Level (preview of the commit), or that nothing was earned.
+func get_reward_text() -> String:
+	if _battle == null or _battle.get_result() == null or progression == null:
+		return ""
+	var shares := progression.preview(_battle.get_result())
+	if shares.is_empty():
+		return NO_REWARD_TEXT
+	var gains := []
+	var levels := []
+	for unit in _battle.get_friends():
+		if shares.has(unit.id):
+			gains.append(REWARD_TEXT % [ROLE_NAMES[unit.role], shares[unit.id]["exp"]])
+			if shares[unit.id]["leveled"]:
+				levels.append(LEVEL_UP_TEXT % [ROLE_NAMES[unit.role], shares[unit.id]["level"]])
+	return "　".join(gains) + ("\n" + "　".join(levels) if not levels.is_empty() else "")
+
+
 ## C04: the 撤退 / 取消撤退 button: starts or cancels the party retreat.
 func toggle_retreat() -> bool:
 	if _battle == null:
@@ -222,6 +250,8 @@ func _refresh() -> void:
 		friends.append(FRIEND_TEXT % [ROLE_NAMES[unit.role], unit.hp, unit.max_hp] if unit.alive else FRIEND_DEAD_TEXT % ROLE_NAMES[unit.role])
 	_info_label.text = "　".join(friends) + "\n" + (ENEMIES_TEXT % [_battle.get_alive_enemy_count(), _battle.get_enemies().size()])
 	_hint_label.visible = not _battle.is_over()
+	_reward_label.visible = _battle.is_over()
+	_reward_label.text = get_reward_text() if _battle.is_over() else ""
 	_field.queue_redraw()
 
 
@@ -245,8 +275,10 @@ class Field extends Control:
 		var height := CombatConfig.ROWS * cell_size.y
 		draw_rect(Rect2(left, CombatView.FIELD_TOP, CombatConfig.COLUMNS * cell_size.x, height), Color(0.16, 0.2, 0.17))
 		if battle.get_phase() == CombatBattle.Phase.PREPARATION:
-			draw_rect(Rect2(left, CombatView.FIELD_TOP, CombatConfig.PREPARATION_COLUMNS * cell_size.x, height), Color(0.3, 0.7, 0.4, 0.35))
-			var edge := left + CombatConfig.PREPARATION_COLUMNS * cell_size.x
+			var start := left + CombatConfig.PREPARATION_FIRST_COLUMN * cell_size.x
+			draw_rect(Rect2(start, CombatView.FIELD_TOP, CombatConfig.PREPARATION_COLUMNS * cell_size.x, height), Color(0.3, 0.7, 0.4, 0.35))
+			draw_line(Vector2(start, CombatView.FIELD_TOP), Vector2(start, CombatView.FIELD_TOP + height), Color(0.5, 1.0, 0.6), 4.0)
+			var edge := start + CombatConfig.PREPARATION_COLUMNS * cell_size.x
 			draw_line(Vector2(edge, CombatView.FIELD_TOP), Vector2(edge, CombatView.FIELD_TOP + height), Color(0.5, 1.0, 0.6), 4.0)
 		elif battle.get_phase() == CombatBattle.Phase.FIGHTING:
 			# C04: the Retreat Zone (column 0), brighter while retreating.

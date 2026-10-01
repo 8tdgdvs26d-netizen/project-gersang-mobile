@@ -45,7 +45,7 @@ func _initialize() -> void:
 # --- Static ------------------------------------------------------------------------------------
 
 func _verify_static() -> void:
-	_check(SaveStore.VERSION == 8 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 8, unchanged sections")
+	_check(SaveStore.VERSION == 9 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 9, unchanged sections")
 	for path in ["res://scripts/save_store.gd"]:
 		var code := _code_only(path).to_lower()
 		for word in ["combat", "battle", "defeated", "monster", "group", "respawn"]:
@@ -133,7 +133,7 @@ func _verify_victory() -> void:
 	_check(session.is_protection_active() and session.get_protection_remaining_ms() == 5000 and handoff.is_protected(), "5 s recovery protection")
 	_check(main.wallet.get_balance() == money and main.inventory.get_items() == items, "No reward, loot or item change")
 	var saved: Variant = _read(TEST_SAVE)
-	_check(saved != null and int(saved["version"]) == 8 and Vector2(saved["location"]["world_position"]["x"], saved["location"]["world_position"]["y"]) == spot, "Saved once after the commit: v8, the encounter position")
+	_check(saved != null and int(saved["version"]) == 9 and Vector2(saved["location"]["world_position"]["x"], saved["location"]["world_position"]["y"]) == spot, "Saved once after the commit: v9, the encounter position")
 	_check(not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("monster") and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("battle"), "The save holds no group or battle data")
 	# Duplicates: button, signal, direct call, later frames.
 	var saved_text := FileAccess.get_file_as_string(TEST_SAVE)
@@ -169,7 +169,7 @@ func _verify_victory() -> void:
 	for index in range(3):
 		back = back and main.has_node(NODES[index]) and (main.get_node(NODES[index]) as WorldMonster).monster_id == IDS[index]
 	_check(back and main._world_monsters.size() == 3, "Relaunch rebuilds all three Prototype groups (session-only removal)")
-	_check(main.get_world_position() == Vector2(last_saved["x"], last_saved["y"]) and SaveStore.VERSION == 8, "Relaunch restores the last saved position; save v8")
+	_check(main.get_world_position() == Vector2(last_saved["x"], last_saved["y"]) and SaveStore.VERSION == 9, "Relaunch restores the last saved position; save v9")
 	await _destroy(main)
 	_sections_done.append("victory")
 
@@ -209,7 +209,7 @@ func _verify_defeat() -> void:
 	_check(session.is_protection_active() and session.get_protection_remaining_ms() == 5000, "5 s recovery protection")
 	_check(main.wallet.get_balance() == money and main.character_stats.get_strength() == CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "No money or stat penalty")
 	var saved: Variant = _read(TEST_SAVE)
-	_check(saved != null and int(saved["version"]) == 8 and Vector2(saved["location"]["world_position"]["x"], saved["location"]["world_position"]["y"]) == spot, "Saved once: v8, the encounter position")
+	_check(saved != null and int(saved["version"]) == 9 and Vector2(saved["location"]["world_position"]["x"], saved["location"]["world_position"]["y"]) == spot, "Saved once: v9, the encounter position")
 	_delete(TEST_SAVE)
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(not main.commit_battle_result(result) and _commits.size() == 1 and not FileAccess.file_exists(TEST_SAVE), "A repeated DEFEAT commit changes nothing")

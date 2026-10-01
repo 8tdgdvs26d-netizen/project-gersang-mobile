@@ -8,7 +8,7 @@ extends RefCounted
 ##
 ##   PREPARATION  the first CombatConfig.PREPARATION_MS: enemies stand still
 ##                (no movement, attack or damage); friendly units may move
-##                only inside the first PREPARATION_COLUMNS columns
+##                only inside the preparation columns (C05: 1-3)
 ##   FIGHTING     real time: each friendly unit follows its own player
 ##                commands (move / target, automatic approach + Basic
 ##                Attack); every enemy pursues and attacks the nearest alive
@@ -58,6 +58,8 @@ var _selected: CombatUnit
 var _result: BattleResult
 ## C04: the whole-party retreat is running.
 var _retreating := false
+## C05: EXP earned by enemies actually killed in this battle.
+var _exp_pool := 0
 
 
 ## C03: which friendly party a battle gets. PROTOTYPE is the game's party
@@ -101,11 +103,12 @@ static func from_encounter(context: EncounterContext) -> CombatBattle:
 	return battle
 
 
-## Enemy start cells, filled column by column (every row) from
-## ENEMY_FIRST_COLUMN, never beyond ENEMY_LAST_COLUMN.
+## C05: enemy start cells in the rightmost columns, column by column (every
+## row): 10 / 15 / 20 enemies fill columns 59-60 / 58-60 / 57-60.
 static func enemy_spawn_cells(count: int) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
-	for column in range(CombatConfig.ENEMY_FIRST_COLUMN, CombatConfig.ENEMY_LAST_COLUMN + 1):
+	var first_column := CombatConfig.COLUMNS - ceili(float(count) / CombatConfig.ROWS)
+	for column in range(maxi(first_column, 0), CombatConfig.COLUMNS):
 		for row in range(CombatConfig.ROWS):
 			if cells.size() < count:
 				cells.append(Vector2i(column, row))
@@ -189,6 +192,11 @@ func get_result() -> BattleResult:
 	return _result
 
 
+## C05: EXP earned so far (every enemy killed adds CombatConfig.EXP_PER_KILL).
+func get_exp_pool() -> int:
+	return _exp_pool
+
+
 func get_selected() -> CombatUnit:
 	return _selected
 
@@ -203,7 +211,7 @@ func is_cell_allowed(unit: CombatUnit, cell: Vector2i) -> bool:
 	if not is_in_grid(cell):
 		return false
 	if _phase == Phase.PREPARATION and unit.team == CombatUnit.Team.FRIEND:
-		return cell.x < CombatConfig.PREPARATION_COLUMNS
+		return cell.x >= CombatConfig.PREPARATION_FIRST_COLUMN and cell.x < CombatConfig.PREPARATION_FIRST_COLUMN + CombatConfig.PREPARATION_COLUMNS
 	return true
 
 
@@ -379,6 +387,16 @@ func _target_of(unit: CombatUnit) -> CombatUnit:
 	return best
 
 
+## The cells claimed by every alive unit except `unit`.
+func _claimed_by_others(unit: CombatUnit) -> Dictionary:
+	var claimed := {}
+	for others in [_friends, _enemies]:
+		for other: CombatUnit in others:
+			if other != unit and other.alive:
+				claimed[other.claim] = true
+	return claimed
+
+
 ## No other alive unit has claimed `cell` (a standing unit claims its own
 ## cell, a walking one its destination).
 func _is_free_for(unit: CombatUnit, cell: Vector2i) -> bool:
@@ -407,10 +425,14 @@ func _best_free_cell(unit: CombatUnit, center: Vector2i, reach: int) -> Vector2i
 func _best_free_cell_in(unit: CombatUnit, center: Vector2i, reach: int, first_column: int, last_column: int) -> Variant:
 	var best: Variant = null
 	var best_score := Vector3i(1 << 20, 1 << 20, 1 << 20)
+	# C05: the other units' claims, collected once per search (same answer as
+	# _is_free_for, without rescanning every unit for every cell — on the
+	# 5 x 61 grid a search can cover the whole field).
+	var claimed := _claimed_by_others(unit)
 	for column in range(first_column, last_column + 1):
 		for row in range(CombatConfig.ROWS):
 			var cell := Vector2i(column, row)
-			if not _is_free_for(unit, cell):
+			if claimed.has(cell) or not is_cell_allowed(unit, cell):
 				continue
 			var score := Vector3i(maxi(CombatUnit.grid_distance(cell, center) - reach, 0), CombatUnit.grid_distance(unit.cell, cell), row * CombatConfig.COLUMNS + column)
 			if score < best_score:
@@ -448,6 +470,8 @@ func _kill(unit: CombatUnit) -> void:
 	for friend in _friends:
 		if friend.target == unit:
 			friend.target = null
+	if unit.team == CombatUnit.Team.ENEMY:
+		_exp_pool += CombatConfig.EXP_PER_KILL
 	print("Myrial: combat unit died ", unit.id)
 	unit_died.emit(unit)
 	if get_alive_enemy_count() == 0:
@@ -466,5 +490,11 @@ func _set_phase(phase: Phase) -> void:
 	if is_over():
 		var outcome := {Phase.VICTORY: BattleResult.Outcome.VICTORY, Phase.DEFEAT: BattleResult.Outcome.DEFEAT, Phase.RETREAT: BattleResult.Outcome.RETREAT}[phase] as BattleResult.Outcome
 		_result = BattleResult.create(encounter_id, outcome, group_monster_ids)
+		# C05: the reward facts at settlement — the EXP pool and the friendly
+		# units alive at this moment (where they stand does not matter).
+		_result.exp_pool = _exp_pool
+		for friend in _friends:
+			if friend.alive:
+				_result.survivor_ids.append(friend.id)
 	print("Myrial: combat phase ", Phase.keys()[phase], " at ", _elapsed_ms, " ms")
 	phase_changed.emit(phase)
