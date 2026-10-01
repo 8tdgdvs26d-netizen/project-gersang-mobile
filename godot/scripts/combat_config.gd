@@ -6,14 +6,17 @@ extends RefCounted
 ## Canonical balance; later work packages tune or replace them here.
 
 ## Battlefield: ROWS x COLUMNS discrete cells. A cell is Vector2i(column, row);
-## column 0 is the far left (the friendly side).
+## column 0 is the far left (the friendly side; C04 Retreat Zone). C05: 5 x 61
+## (columns 0-60).
 const ROWS := 5
-const COLUMNS := 60
+const COLUMNS := 61
 
 ## Fixed preparation before real-time fighting starts.
 const PREPARATION_MS := 3000
-## During preparation friendly units may only stand in the first
-## PREPARATION_COLUMNS columns (all rows): 5 x 3 = 15 cells.
+## During preparation friendly units may only stand in PREPARATION_COLUMNS
+## columns from PREPARATION_FIRST_COLUMN (all rows): C05 columns 1-3, 5 x 3 =
+## 15 cells (column 0, the Retreat Zone, is not part of it).
+const PREPARATION_FIRST_COLUMN := 1
 const PREPARATION_COLUMNS := 3
 
 ## Where the Hero starts (inside the preparation area).
@@ -21,10 +24,13 @@ const HERO_START_CELL := Vector2i(1, 2)
 ## C03: the two fixed Prototype Mercenaries start above and below the Hero.
 const MERC_A_START_CELL := Vector2i(1, 1)
 const MERC_B_START_CELL := Vector2i(1, 3)
-## Enemies are placed column by column (all rows) from this column on, so 10 /
-## 15 / 20 enemies fill columns 10–11 / 10–12 / 10–13 (at most up to 15).
-const ENEMY_FIRST_COLUMN := 10
-const ENEMY_LAST_COLUMN := 15
+## C05: enemies start in the rightmost columns, every row of a column filled:
+## 10 / 15 / 20 enemies fill columns 59-60 / 58-60 / 57-60.
+
+## C05 Prototype reward placeholders (not the future Monster EXP design and not
+## the final EXP curve): every enemy actually killed adds EXP_PER_KILL to the
+## battle's EXP pool.
+const EXP_PER_KILL := 10
 
 ## Prototype stats. attack_range is in cells (8-direction / Chebyshev
 ## distance), attack_interval_ms in milliseconds, move_speed in cells per

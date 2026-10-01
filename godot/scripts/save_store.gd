@@ -1,6 +1,11 @@
 class_name SaveStore
 extends RefCounted
 
+## Version 9 (C05) adds `progression`: the Level / EXP of the three fixed
+## Prototype combat slots, owned and validated by ProgressionState (strict;
+## a malformed section rejects the whole save). v1-v8 saves load with the
+## default progression (every slot Lv1, 0 EXP) in memory only; the source
+## file is not rewritten until the next normal save, which writes v9.
 ## Prototype local persistence. Version 8 (T06) stores the exact WORLD
 ## coordinates inside `location` (PlayerLocation owns and validates the shape;
 ## non-finite or out-of-bounds coordinates reject the whole save, never
@@ -34,8 +39,8 @@ extends RefCounted
 ## returning any runtime object.
 
 const DEFAULT_PATH := "user://myrial_save.json"
-const VERSION := 8
-const INVENTORY_VERSIONS := [3, 4, 5, 6, 7, 8]
+const VERSION := 9
+const INVENTORY_VERSIONS := [3, 4, 5, 6, 7, 8, 9]
 const LEGACY_CARGO_VERSIONS := [1, 2]
 const MAX_SAVED_MONEY := 9007199254740992
 ## The fixed capacity legacy v1/v2 Cargo had when those saves were written.
@@ -48,6 +53,8 @@ const V6_KEYS := ["version", "money", "character", "market", "location", "wareho
 const V7_KEYS := ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger"]
 ## Same sections as v7; only the location gains exact world coordinates.
 const V8_KEYS := V7_KEYS
+## C05: v8 + the progression section.
+const V9_KEYS := ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression"]
 const LEGACY_KEYS := ["version", "money", "cargo", "market"]
 const CHARACTER_KEYS := ["id", "stats", "inventory"]
 const STATS_KEYS := ["strength"]
@@ -59,7 +66,7 @@ const EARLY_V3_STACK_KEYS := ["quantity", "capacity_cost"]
 ## `location`, `warehouses`, `recovery` and `ledger` are optional only for
 ## historical callers; the game always passes its own. Without them the
 ## defaults are written (an unanchored recovery, unknown-cost lots).
-static func serialize(wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null) -> Dictionary:
+static func serialize(wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null, progression: ProgressionState = null) -> Dictionary:
 	var stored := warehouses if warehouses != null else WarehouseState.create_default()
 	var lots := ledger if ledger != null else TradeCostLedger.unknown_for(inventory.get_items(), stored)
 	var saved_items := {}
@@ -78,10 +85,11 @@ static func serialize(wallet: Wallet, inventory: CharacterInventory, market: Mar
 		"warehouses": stored.get_snapshot(),
 		"market_recovery": (recovery if recovery != null else MarketRecovery.new()).to_dict(),
 		"cost_ledger": lots.to_save(WorldLayout.ACTIVE_CITY_IDS),
+		"progression": (progression if progression != null else ProgressionState.new()).to_dict(),
 	}
 
 
-static func save(path: String, wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null) -> bool:
+static func save(path: String, wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null, progression: ProgressionState = null) -> bool:
 	if path == "" or wallet == null or inventory == null or market == null:
 		return false
 	# T06: never write an invalid location (e.g. world coordinates outside the
@@ -97,7 +105,7 @@ static func save(path: String, wallet: Wallet, inventory: CharacterInventory, ma
 	var file := FileAccess.open(temp_path, FileAccess.WRITE)
 	if file == null:
 		return false
-	file.store_string(JSON.stringify(serialize(wallet, inventory, market, location, warehouses, recovery, ledger), "", true, true))
+	file.store_string(JSON.stringify(serialize(wallet, inventory, market, location, warehouses, recovery, ledger, progression), "", true, true))
 	file.close()
 	var error := DirAccess.rename_absolute(ProjectSettings.globalize_path(temp_path), ProjectSettings.globalize_path(path))
 	return error == OK
@@ -135,7 +143,7 @@ static func validate(data: Variant) -> Dictionary:
 ## stored quantities; older versions get the default world location, empty
 ## warehouses, no recovery anchor and unknown-cost lots.
 static func _validate_inventory_save(data: Dictionary, version: int) -> Dictionary:
-	var keys: Array = {3: V3_KEYS, 4: V4_KEYS, 5: V5_KEYS, 6: V6_KEYS, 7: V7_KEYS, 8: V8_KEYS}[version]
+	var keys: Array = {3: V3_KEYS, 4: V4_KEYS, 5: V5_KEYS, 6: V6_KEYS, 7: V7_KEYS, 8: V8_KEYS, 9: V9_KEYS}[version]
 	if not _has_only_keys(data, keys) or not data.has_all(keys):
 		return {}
 	var location := PlayerLocation.new()
@@ -151,6 +159,11 @@ static func _validate_inventory_save(data: Dictionary, version: int) -> Dictiona
 	if version >= 5:
 		warehouses = WarehouseState.from_snapshot(data["warehouses"])
 		if warehouses == null:
+			return {}
+	var progression := ProgressionState.new()
+	if version >= 9:
+		progression = ProgressionState.from_dict(data["progression"])
+		if progression == null:
 			return {}
 	var recovery := MarketRecovery.new()
 	if version >= 6:
@@ -182,7 +195,7 @@ static func _validate_inventory_save(data: Dictionary, version: int) -> Dictiona
 			return {}
 	if ledger == null:
 		return {}
-	return {"money": money, "character_id": character["id"], "strength": strength, "items": items, "market": market, "location": location, "warehouses": warehouses, "market_recovery": recovery, "cost_ledger": ledger}
+	return {"money": money, "character_id": character["id"], "strength": strength, "items": items, "market": market, "location": location, "warehouses": warehouses, "market_recovery": recovery, "cost_ledger": ledger, "progression": progression}
 
 
 static func _validate_legacy(data: Dictionary, version: int) -> Dictionary:
@@ -213,7 +226,7 @@ static func _validate_legacy(data: Dictionary, version: int) -> Dictionary:
 	# more than its fixed capacity, so an over-capacity legacy payload is invalid.
 	if used > LEGACY_CARGO_CAPACITY:
 		return {}
-	return {"money": money, "character_id": "player", "strength": CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "items": items, "market": market, "location": PlayerLocation.new(), "warehouses": WarehouseState.create_default(), "market_recovery": MarketRecovery.new(), "cost_ledger": TradeCostLedger.unknown_for(items, null)}
+	return {"money": money, "character_id": "player", "strength": CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "items": items, "market": market, "location": PlayerLocation.new(), "warehouses": WarehouseState.create_default(), "market_recovery": MarketRecovery.new(), "cost_ledger": TradeCostLedger.unknown_for(items, null), "progression": ProgressionState.new()}
 
 
 ## Version 3 currently writes item_id -> {quantity}. Early unmerged M2-08 builds
@@ -279,9 +292,9 @@ static func _rebuild(payload: Dictionary) -> Dictionary:
 	var inventory := CharacterInventory.new(payload["character_id"], stats)
 	if not inventory.restore_items(payload["items"]):
 		return {}
-	if wallet.get_balance() != payload["money"] or payload["market"] == null or payload["location"] == null or payload["warehouses"] == null or payload["market_recovery"] == null or payload["cost_ledger"] == null:
+	if wallet.get_balance() != payload["money"] or payload["market"] == null or payload["location"] == null or payload["warehouses"] == null or payload["market_recovery"] == null or payload["cost_ledger"] == null or payload["progression"] == null:
 		return {}
-	return {"wallet": wallet, "inventory": inventory, "cargo": inventory, "character_stats": stats, "market": payload["market"], "location": payload["location"], "warehouses": payload["warehouses"], "market_recovery": payload["market_recovery"], "cost_ledger": payload["cost_ledger"]}
+	return {"wallet": wallet, "inventory": inventory, "cargo": inventory, "character_stats": stats, "market": payload["market"], "location": payload["location"], "warehouses": payload["warehouses"], "market_recovery": payload["market_recovery"], "cost_ledger": payload["cost_ledger"], "progression": payload["progression"]}
 
 
 static func _valid_money(value: Variant) -> int:

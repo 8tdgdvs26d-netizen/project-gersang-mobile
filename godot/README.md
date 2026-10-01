@@ -47,7 +47,33 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C04: Retreat. Runtime only; save version stays 8.
+Combat C05: Reward & Progression Bridge. Save version 9.
+
+- battlefield 5 x 61 (columns 0-60): column 0 is the Retreat Zone, PREPARATION allows columns 1-3
+  only (15 cells, column 0 excluded), enemies start at the right edge column by column: 10 / 15 /
+  20 enemies fill columns 59-60 / 58-60 / 57-60. Speeds, AI and ranges unchanged, so contact now
+  takes much longer (enemies walk ~55 columns at 2 cells/s) and they start off-screen — a Mac L2
+  gameplay focus, not tuned here
+- every enemy actually killed adds `CombatConfig.EXP_PER_KILL` (10) to the battle's EXP pool.
+  `BattleResult` carries the pool and the friendly units alive at settlement (where they stand
+  does not matter). VICTORY and RETREAT share the pool equally among them (integer division,
+  remainder discarded); dead units get 0; DEFEAT awards nothing
+- `ProgressionState`: Level / EXP of the three fixed Prototype combat slots (hero, merc_a,
+  merc_b). Lv1 → Lv2 at 100 EXP, overflow kept; Lv2 is the C05 ceiling (EXP keeps accumulating,
+  no Lv3). A Level changes no combat stat. Not a Mercenary roster: nothing else about the slots is
+  saved
+- applied once in the C02 commit (after the encounter ends, before the one save); a failed save
+  does not roll it back
+- Save v9 = v8 + `progression` (strict: exactly the three slots, each exactly {level, exp},
+  integers, Lv1-2, Lv1 below its threshold; anything else rejects the save). v1-v8 load with every
+  slot Lv1 / 0 EXP in memory; the file is rewritten as v9 only by the next normal save
+- result screen: 「主角 經驗 +N」 per survivor, 「主角 升至 2 級」 on a Level Up, or 「本場沒有獲得經驗」
+  (text only)
+- performance: free-cell searches collect the other units' claims once per search (same result,
+  needed on the wider grid)
+- tests: `tests/verify_c05_reward_progression.gd`
+
+Previous: Combat C04: Retreat. Runtime only; save version stays 8.
 
 - during FIGHTING only, 「撤退」 sends the whole party toward the Retreat Zone (column 0, every
   row, shaded 「撤退區」): every alive friendly unit drops its target and move order, stops Basic

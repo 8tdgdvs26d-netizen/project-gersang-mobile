@@ -60,7 +60,7 @@ func _verify_static() -> void:
 	var hub := _code_only("res://scripts/city_hub.gd")
 	_check(not hub.contains("WarehouseService") and not hub.contains("WarehouseState") and not hub.contains("restore_items"), "The UI must not change warehouse state directly")
 	_check(FileAccess.get_file_as_string("res://scripts/warehouse_state.gd").contains("PROTOTYPE PARAMETER"), "Warehouse capacity must be marked as a prototype parameter")
-	_check(SaveStore.VERSION == 8, "Save version must be 8 (5 for warehouses, T04 added market recovery, T05 the cost ledger, T06 the exact world position)")
+	_check(SaveStore.VERSION == 9, "Save version must be 9 (5 for warehouses, T04 added market recovery, T05 the cost ledger, T06 the exact world position, C05 progression)")
 	_sections_done.append("static")
 
 
@@ -266,7 +266,7 @@ func _verify_save_versions() -> void:
 	warehouses._warehouse("B").restore_items({"test_good_03": 7})
 	_check(SaveStore.save(TEST_SAVE, Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.from_legacy_dict(location), warehouses), "v5 save must write")
 	var raw := _read_json()
-	_check(int(raw["version"]) == 8 and raw.keys().size() == 8 and raw.has("market_recovery") and raw.has("cost_ledger") and raw["warehouses"].keys().size() == 2, "The current (v8) save must hold the warehouses")
+	_check(int(raw["version"]) == 9 and raw.keys().size() == 9 and raw.has("market_recovery") and raw.has("cost_ledger") and raw.has("progression") and raw["warehouses"].keys().size() == 2, "The current (v8) save must hold the warehouses")
 	_check(not JSON.stringify(raw["warehouses"]).contains("capacity"), "Warehouse capacity (balance data) must not be saved")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["warehouses"].get_snapshot() == warehouses.get_snapshot(), "Reload must restore each city's warehouse exactly")
@@ -300,7 +300,7 @@ func _verify_save_versions() -> void:
 		"string quantity": _with(v5, {"warehouses": {"A": {"items": {"test_good_01": "3"}}, "B": {"items": {}}}}),
 		"huge quantity": _with(v5, {"warehouses": {"A": {"items": {"test_good_01": 1e15}}, "B": {"items": {}}}}),
 		"v4 with warehouses": _with(legacy["v4"], {"warehouses": {"A": {"items": {}}, "B": {"items": {}}}}),
-		"v9": _with(v5, {"version": 9}),
+		"v10": _with(v5, {"version": 10}),
 	}
 	for label in broken:
 		_write_json(broken[label])

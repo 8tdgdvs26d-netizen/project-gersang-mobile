@@ -49,17 +49,18 @@ func _initialize() -> void:
 # --- Static ------------------------------------------------------------------------------------
 
 func _verify_static() -> void:
-	_check(CombatConfig.ROWS == 5 and CombatConfig.COLUMNS == 60, "Battlefield is 5 rows x 60 columns")
+	_check(CombatConfig.ROWS == 5 and CombatConfig.COLUMNS == 61, "Battlefield is 5 rows x 61 columns (C05)")
 	_check(CombatConfig.PREPARATION_MS == 3000 and CombatConfig.PREPARATION_COLUMNS == 3, "Preparation: 3000 ms, first 3 columns")
 	_check(CombatConfig.HERO == {"max_hp": 300, "attack_damage": 20, "attack_range": 1, "attack_interval_ms": 1000, "move_speed": 4.0}, "Hero Prototype stats as approved")
 	_check(CombatConfig.ENEMY == {"max_hp": 40, "attack_damage": 4, "attack_range": 1, "attack_interval_ms": 1500, "move_speed": 2.0}, "Enemy Prototype stats as approved (one archetype)")
 	_check(EncounterContext.PLANNED_COMBAT_ENEMIES == {1: 10, 2: 15, 3: 20} and EncounterHandoff.MAX_GROUPS == 3, "1 / 2 / 3 groups -> 10 / 15 / 20 enemies, at most 3 groups")
-	_check(SaveStore.VERSION == 8 and not _code_only("res://scripts/save_store.gd").to_lower().contains("combat"), "Save version 8; the save knows nothing about Combat")
+	_check(SaveStore.VERSION == 9 and not _code_only("res://scripts/save_store.gd").to_lower().contains("combat"), "Save version 9; the save knows nothing about Combat")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd"]:
 		var code := _code_only(path).to_lower()
 		# C03 brought the fixed Prototype Mercenaries into scope ("merc" left the list).
 		# C04 brought Retreat into scope ("retreat" left the list).
-		for word in ["reward", "loot", "exp", "skill", "mana", "crit", "dodge", "randf", "randi", "time.get_", "time_source", "save_store"]:
+		# C05 brought EXP rewards into scope ("reward" and "exp" left the list).
+		for word in ["loot", "skill", "mana", "crit", "dodge", "randf", "randi", "time.get_", "time_source", "save_store"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_check(main.combat_enabled == true, "Combat is enabled by default (the flag is a test seam only)")
@@ -82,9 +83,9 @@ func _verify_entry() -> void:
 		var cells := {}
 		var valid := true
 		for enemy in battle.get_enemies():
-			valid = valid and enemy.alive and enemy.hp == 40 and enemy.team == CombatUnit.Team.ENEMY and enemy.cell.x >= 10 and enemy.cell.x <= 15 and CombatBattle.is_in_grid(enemy.cell)
+			valid = valid and enemy.alive and enemy.hp == 40 and enemy.team == CombatUnit.Team.ENEMY and enemy.cell.x >= 57 and enemy.cell.x <= 60 and CombatBattle.is_in_grid(enemy.cell)
 			cells[enemy.cell] = true
-		_check(valid and cells.size() == expected, "Enemies on distinct cells in columns 10–15 (%d)" % groups)
+		_check(valid and cells.size() == expected, "Enemies on distinct cells in columns 57–60 (C05) (%d)" % groups)
 	var empty := EncounterContext.new()
 	_check(CombatBattle.from_encounter(empty) == null and CombatBattle.from_encounter(null) == null, "No battle without a valid locked encounter")
 	var battle := CombatBattle.create(10, CombatBattle.PartyFixture.HERO_ONLY)
@@ -105,17 +106,17 @@ func _verify_preparation() -> void:
 	_place(close, Vector2i(2, 2))
 	var start := _cells(battle.get_enemies())
 	_check(battle.select_unit(hero), "The Hero can be selected during PREPARATION")
-	_check(battle.command_move(Vector2i(0, 0)), "Move inside the 5 x 3 area is accepted")
+	_check(battle.command_move(Vector2i(1, 0)), "Move inside the 5 x 3 area (C05: columns 1-3) is accepted")
 	battle.advance(1000)
-	_check(hero.cell == Vector2i(0, 0), "The Hero walked to (0, 0)")
+	_check(hero.cell == Vector2i(1, 0), "The Hero walked to (1, 0)")
 	var legal := 0
 	for column in range(CombatConfig.COLUMNS):
 		for row in range(CombatConfig.ROWS):
 			if battle.is_cell_allowed(hero, Vector2i(column, row)):
 				legal += 1
 	_check(legal == 15, "Exactly 15 legal preparation cells (%d)" % legal)
-	_check(not battle.command_move(Vector2i(3, 0)) and not battle.command_move(Vector2i(3, 4)) and not battle.command_move(Vector2i(30, 2)), "Column 4 (index 3) and beyond are refused")
-	_check(not battle.tap(Vector2i(5, 2)) and hero.goal == Vector2i(0, 0), "A tap beyond the area is refused, the last command kept")
+	_check(not battle.command_move(Vector2i(4, 0)) and not battle.command_move(Vector2i(4, 4)) and not battle.command_move(Vector2i(30, 2)) and not battle.command_move(Vector2i(0, 2)), "C05: column 0 and columns 4+ are refused")
+	_check(not battle.tap(Vector2i(5, 2)) and hero.goal == Vector2i(1, 0), "A tap beyond the area is refused, the last command kept")
 	_check(not battle.command_target(close) and not battle.tap(close.cell) and hero.target == null, "No targeting before FIGHTING")
 	_check(battle.command_move(Vector2i(2, 4)), "Move to the area's last column is accepted")
 	battle.advance(1000)
@@ -125,7 +126,10 @@ func _verify_preparation() -> void:
 	for friend in battle.get_friends():
 		max_x = maxi(max_x, maxi(friend.cell.x, friend.next_cell.x))
 	_check(battle.get_phase() == CombatBattle.Phase.PREPARATION and battle.get_elapsed_ms() == 2999, "Still PREPARATION at 2999 ms")
-	_check(max_x <= 2, "The Hero never left the first 3 columns")
+	var min_x := 60
+	for friend in battle.get_friends():
+		min_x = mini(min_x, mini(friend.cell.x, friend.next_cell.x))
+	_check(max_x <= 3 and min_x >= 1, "The Hero never left columns 1-3 (C05)")
 	_check(_cells(battle.get_enemies()) == start, "No enemy moved during PREPARATION")
 	var ready := true
 	for enemy in battle.get_enemies():
@@ -162,15 +166,15 @@ func _verify_transition() -> void:
 	var jump := _battle(10)
 	var enemy := jump.get_enemies()[0]
 	jump.advance(3499)
-	_check(jump.get_phase() == CombatBattle.Phase.FIGHTING and _phases.size() == 1 and enemy.cell == Vector2i(10, 0) and enemy.is_moving(), "3499 ms in one go: the enemy has been active only 499 ms")
+	_check(jump.get_phase() == CombatBattle.Phase.FIGHTING and _phases.size() == 1 and enemy.cell == Vector2i(59, 0) and enemy.is_moving(), "3499 ms in one go: the enemy has been active only 499 ms")
 	jump.advance(1)
-	_check(enemy.cell == Vector2i(9, 1), "Its first step lands exactly 500 ms after the transition")
+	_check(enemy.cell == Vector2i(58, 1), "Its first step lands exactly 500 ms after the transition")
 	# A move issued during preparation is still carried out afterwards.
 	var carried := _battle(10)
 	carried.advance(2500)
-	_check(carried.command_move(Vector2i(0, 4)), "Move ordered at 2500 ms")
+	_check(carried.command_move(Vector2i(3, 4)), "Move ordered at 2500 ms")
 	carried.advance(1000)
-	_check(carried.get_hero().cell == Vector2i(0, 4) and not carried.get_hero().has_goal, "Not stuck: the move ends at (0, 4) after the transition")
+	_check(carried.get_hero().cell == Vector2i(3, 4) and not carried.get_hero().has_goal, "Not stuck: the move ends at (3, 4) after the transition")
 	_sections_done.append("transition")
 
 
@@ -200,11 +204,11 @@ func _verify_target_and_attack() -> void:
 	var far_hero := far.get_hero()
 	var target := far.get_enemies()[0]
 	far.advance(3000)
-	_check(far.command_target(target) and not far_hero.has_goal, "Target an enemy 9 columns away")
+	_check(far.command_target(target) and not far_hero.has_goal, "Target an enemy 58 columns away (C05)")
 	far.advance(250)
 	_check(far_hero.cell.x == 2, "The Hero approaches (%s)" % str(far_hero.cell))
 	var frames := 0
-	while _hits_by(far_hero).is_empty() and frames < 100:
+	while _hits_by(far_hero).is_empty() and frames < 400:
 		far.advance(50)
 		frames += 1
 	var first := _hits_by(far_hero)
@@ -287,7 +291,7 @@ func _verify_enemy_ai() -> void:
 	battle.advance(1000)
 	_check(CombatUnit.grid_distance(enemy.cell, hero.cell) == distance - 2, "The enemy approaches the Hero (2 cells / s)")
 	var frames := 0
-	while _hits_by(enemy).is_empty() and frames < 200:
+	while _hits_by(enemy).is_empty() and frames < 800:
 		battle.advance(50)
 		frames += 1
 	_check(not _hits_by(enemy).is_empty() and CombatUnit.grid_distance(enemy.cell, hero.cell) <= 1 and hero.hp == 100000 - 4, "In range it attacks the Hero")
@@ -313,7 +317,7 @@ func _verify_occupancy() -> void:
 	battle.advance(3000)
 	var shared := false
 	var outside := false
-	for step in range(200):
+	for step in range(800):
 		battle.advance(50)
 		var taken := {}
 		for unit in battle.get_friends() + battle.get_enemies():
@@ -321,7 +325,7 @@ func _verify_occupancy() -> void:
 			if unit.alive and not unit.is_moving():
 				shared = shared or taken.has(unit.cell)
 				taken[unit.cell] = true
-	_check(not shared, "No two standing units ever share a cell (20 enemies, 10 s)")
+	_check(not shared, "No two standing units ever share a cell (20 enemies, 40 s)")
 	_check(not outside, "Every unit stays on the 5 x 60 grid")
 	var adjacent := 0
 	for enemy in battle.get_enemies():
@@ -407,7 +411,7 @@ func _verify_locked_to_combat() -> void:
 	var hero := battle.get_hero()
 	_check(view.cell_at(view.cell_center(Vector2(hero.cell))) == hero.cell and view.tap_at(view.cell_center(Vector2(hero.cell))), "Tap on the Hero selects it")
 	_check(not view.tap_at(view.cell_center(Vector2(8, 2))), "Tap beyond the preparation area is refused")
-	_check(view.tap_at(view.cell_center(Vector2(0, 1))) and hero.goal == Vector2i(0, 1), "Tap inside the area moves the Hero")
+	_check(view.tap_at(view.cell_center(Vector2(2, 1))) and hero.goal == Vector2i(2, 1), "Tap inside the area moves the Hero")
 	# Physics time drives the battle: 3 s = 180 physics frames.
 	await _frames(170)
 	_check(battle.get_phase() == CombatBattle.Phase.PREPARATION and status.text in ["備戰 1", "備戰 2"], "Still preparing after 170 physics frames (%s)" % status.text)
@@ -421,7 +425,7 @@ func _verify_locked_to_combat() -> void:
 		battle.resolve_damage(hero, unit, 1000)
 	await _process_frames(2)
 	_check(battle.get_phase() == CombatBattle.Phase.VICTORY and status.text == "勝利" and exit.visible and exit.text == "返回世界", "VICTORY: 勝利 and 返回世界 (C02 lifecycle)")
-	_check(main.save_world_position() and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("combat") and int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 8, "Saving during Combat: version 8, nothing about Combat")
+	_check(main.save_world_position() and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("combat") and int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 9, "Saving during Combat: version 9, nothing about Combat")
 	exit.pressed.emit()
 	# C02 replaced the C01 bridge: VICTORY removes the participating group 3
 	# (verify_c02_world_lifecycle covers the lifecycle); groups 1 and 2 stay.

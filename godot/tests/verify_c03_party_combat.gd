@@ -49,15 +49,16 @@ func _verify_static() -> void:
 	_check(CombatConfig.MERC_A == {"max_hp": 200, "attack_damage": 15, "attack_range": 1, "attack_interval_ms": 1000, "move_speed": 4.0}, "Merc A Prototype stats")
 	_check(CombatConfig.MERC_B == {"max_hp": 150, "attack_damage": 12, "attack_range": 3, "attack_interval_ms": 1200, "move_speed": 4.0}, "Merc B Prototype stats")
 	_check(CombatConfig.HERO == {"max_hp": 300, "attack_damage": 20, "attack_range": 1, "attack_interval_ms": 1000, "move_speed": 4.0}, "Hero stats unchanged")
-	_check(CombatConfig.PREPARATION_MS == 3000 and CombatConfig.PREPARATION_COLUMNS == 3 and CombatConfig.ROWS == 5 and CombatConfig.COLUMNS == 60, "3 s preparation, 5 x 3 area, 5 x 60 grid unchanged")
+	_check(CombatConfig.PREPARATION_MS == 3000 and CombatConfig.PREPARATION_COLUMNS == 3 and CombatConfig.PREPARATION_FIRST_COLUMN == 1 and CombatConfig.ROWS == 5 and CombatConfig.COLUMNS == 61, "3 s preparation, 5 x 3 area (C05: columns 1-3), 5 x 61 grid (C05)")
 	_check(EncounterContext.PLANNED_COMBAT_ENEMIES == {1: 10, 2: 15, 3: 20}, "Encounter scaling unchanged")
-	_check(SaveStore.VERSION == 8 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 8, unchanged sections")
+	_check(SaveStore.VERSION == 9 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 9, unchanged sections")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()
 	_check(not save_code.contains("merc") and not save_code.contains("party") and not save_code.contains("combat"), "The save knows nothing about Mercenaries, party or Combat")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd", "res://scripts/battle_result.gd"]:
 		var code := _code_only(path).to_lower()
 		# C04 brought Retreat into scope ("retreat" left the list).
-		for word in ["recruit", "roster", "hire", "equipment", "level", "exp ", "reward", "loot", "revive", "heal", "skill", "mana", "skill_cooldown", "formation", "select_all", "taunt", "threat"]:
+		# C05 brought Level / EXP rewards into scope ("level" and "reward" left the list).
+		for word in ["recruit", "roster", "hire", "equipment", "exp ", "loot", "revive", "heal", "skill", "mana", "skill_cooldown", "formation", "select_all", "taunt", "threat"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_check(not _code_only("res://scripts/battle_result.gd").to_lower().contains("merc") and not _code_only("res://scripts/battle_result.gd").to_lower().contains("friend"), "BattleResult carries no party data")
 	_sections_done.append("static")
@@ -83,7 +84,7 @@ func _verify_party() -> void:
 	for unit in friends:
 		ids[unit.id] = true
 		cells[unit.cell] = true
-		inside = inside and unit.cell.x < CombatConfig.PREPARATION_COLUMNS and CombatBattle.is_in_grid(unit.cell) and unit.team == CombatUnit.Team.FRIEND and unit.alive
+		inside = inside and battle.is_cell_allowed(unit, unit.cell) and unit.cell.x >= 1 and unit.cell.x <= 3 and CombatBattle.is_in_grid(unit.cell) and unit.team == CombatUnit.Team.FRIEND and unit.alive
 	_check(ids.size() == 3 and cells.size() == 3 and inside, "Three unique friendly units on unique cells inside the 5 x 3 area")
 	_check(friends[0].cell == Vector2i(1, 2) and friends[1].cell == Vector2i(1, 1) and friends[2].cell == Vector2i(1, 3), "Spawn: Hero (1, 2), Merc A (1, 1), Merc B (1, 3)")
 	_check(friends[0].is_hero and not friends[1].is_hero and not friends[2].is_hero and battle.get_hero() == friends[0], "Only the Hero is the Hero")
@@ -110,12 +111,12 @@ func _verify_selection() -> void:
 	_check(battle.tap(hero.cell) and battle.get_selected() == hero, "Tap the Hero selects the Hero")
 	# Commands stay with the unit that got them.
 	battle.select_unit(merc_a)
-	_check(battle.command_move(Vector2i(0, 0)), "Merc A ordered to (0, 0)")
+	_check(battle.command_move(Vector2i(1, 0)), "Merc A ordered to (1, 0)")
 	battle.select_unit(merc_b)
-	_check(battle.command_move(Vector2i(0, 4)), "Merc B ordered to (0, 4)")
-	_check(merc_a.has_goal and merc_a.goal == Vector2i(0, 0) and merc_b.goal == Vector2i(0, 4) and not hero.has_goal, "Switching selection kept Merc A's order; the Hero has none")
+	_check(battle.command_move(Vector2i(1, 4)), "Merc B ordered to (1, 4)")
+	_check(merc_a.has_goal and merc_a.goal == Vector2i(1, 0) and merc_b.goal == Vector2i(1, 4) and not hero.has_goal, "Switching selection kept Merc A's order; the Hero has none")
 	battle.advance(1000)
-	_check(merc_a.cell == Vector2i(0, 0) and merc_b.cell == Vector2i(0, 4) and hero.cell == Vector2i(1, 2), "Both Mercs walked at the same time; the Hero stayed")
+	_check(merc_a.cell == Vector2i(1, 0) and merc_b.cell == Vector2i(1, 4) and hero.cell == Vector2i(1, 2), "Both Mercs walked at the same time; the Hero stayed")
 	battle.advance(2000)
 	# The selected unit dies: nothing stays selected, commands are refused.
 	battle.select_unit(merc_b)
@@ -133,12 +134,12 @@ func _verify_selection() -> void:
 func _verify_preparation() -> void:
 	var battle := _battle(10)
 	var friends := battle.get_friends()
-	var targets := [Vector2i(0, 0), Vector2i(2, 1), Vector2i(2, 4)]
+	var targets := [Vector2i(3, 0), Vector2i(2, 1), Vector2i(3, 4)]
 	var all_limited := true
 	var no_target := true
 	for index in range(3):
 		battle.select_unit(friends[index])
-		all_limited = all_limited and not battle.command_move(Vector2i(3, index)) and not battle.command_move(Vector2i(20, 2))
+		all_limited = all_limited and not battle.command_move(Vector2i(4, index)) and not battle.command_move(Vector2i(0, index)) and not battle.command_move(Vector2i(20, 2))
 		no_target = no_target and not battle.command_target(battle.get_enemies()[index]) and friends[index].target == null
 		_check(battle.command_move(targets[index]), "%s may move inside the area during PREPARATION" % friends[index].id)
 	_check(all_limited, "Every friendly unit is limited to the first 3 columns")
@@ -148,7 +149,10 @@ func _verify_preparation() -> void:
 	var max_x := 0
 	for unit in friends:
 		max_x = maxi(max_x, maxi(unit.cell.x, unit.next_cell.x))
-	_check(cells == targets and max_x <= 2, "All three moved at once, none left the area (%s)" % str(cells))
+	var min_x := 60
+	for unit in friends:
+		min_x = mini(min_x, mini(unit.cell.x, unit.next_cell.x))
+	_check(cells == targets and max_x <= 3 and min_x >= 1, "All three moved at once, none left columns 1-3 (%s)" % str(cells))
 	_check(battle.get_phase() == CombatBattle.Phase.PREPARATION and _phases.is_empty(), "2999 ms: still PREPARATION")
 	battle.advance(1)
 	_check(battle.get_phase() == CombatBattle.Phase.FIGHTING and _phases == [CombatBattle.Phase.FIGHTING], "3000 ms: FIGHTING, once")
@@ -244,7 +248,7 @@ func _verify_enemy_ai() -> void:
 	split.get_friends()[2].cell = Vector2i(1, 4)
 	split.get_friends()[2].next_cell = Vector2i(1, 4)
 	split.get_friends()[2].claim = Vector2i(1, 4)
-	split.advance(15000)
+	split.advance(45000)
 	var victims := {}
 	for hit in _hits:
 		if hit[0].team == CombatUnit.Team.ENEMY:
@@ -263,6 +267,7 @@ func _verify_friendly_death() -> void:
 		enemy.max_hp = 100000
 		enemy.hp = 100000
 	battle.advance(3000)
+	_place(enemies[0], Vector2i(4, 1))  # C05: enemies start at columns 57-60
 	battle.select_unit(merc_a)
 	battle.command_target(enemies[0])
 	for step in range(30):
@@ -423,7 +428,7 @@ func _verify_in_game() -> void:
 	_check(battle.get_result().is_committed() and session.get_phase() == EncounterSession.Phase.NONE and main.get_combat() == null, "C02 lifecycle: DEFEAT committed, encounter ended, battle closed")
 	_check(group_3.global_position == HOMES[2] and not group_3.is_held() and session.get_protection_remaining_ms() == 5000, "C02 DEFEAT: group reset home, 5 s protection")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(saved != null and int(saved["version"]) == 8 and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("merc") and main.wallet.get_balance() == money, "Saved once: v8, no Mercenary data, no reward or penalty")
+	_check(saved != null and int(saved["version"]) == 9 and _only_progression_mentions_mercs(saved) and main.wallet.get_balance() == money, "Saved once: v9, no Mercenary battle data (C05: only their Level / EXP in progression), no money reward or penalty")
 	await _destroy(main)
 	# VICTORY with the Hero dead, through the C02 lifecycle.
 	main = await _new_main("")
@@ -454,6 +459,20 @@ func _battle(enemies: int) -> CombatBattle:
 	battle.phase_changed.connect(func(phase: int) -> void: _phases.append(phase))
 	battle.damage_dealt.connect(func(attacker: CombatUnit, target: CombatUnit, amount: int) -> void: _hits.append([attacker, target, amount, battle.get_elapsed_ms()]))
 	return battle
+
+
+## C05: the v9 save keeps the slots' Level / EXP (exactly {level, exp}) and
+## nothing else about the Mercenaries.
+func _only_progression_mentions_mercs(saved: Dictionary) -> bool:
+	var rest := saved.duplicate(true)
+	var progression: Variant = rest.get("progression")
+	rest.erase("progression")
+	if typeof(progression) != TYPE_DICTIONARY or progression.keys().size() != 3:
+		return false
+	for slot in progression:
+		if progression[slot].keys().size() != 2 or not progression[slot].has_all(["level", "exp"]):
+			return false
+	return not JSON.stringify(rest).to_lower().contains("merc")
 
 
 func _count_result(phase: int) -> void:
