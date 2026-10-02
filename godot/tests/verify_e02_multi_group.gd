@@ -463,11 +463,21 @@ func _verify_protection() -> void:
 	for monster in monsters:
 		restored = restored and not monster.is_aggro_suppressed()
 	_check(restored, "Every group can aggro again")
+	# Encounter protection recheck (corrective): the player still touches
+	# group 1 (contact reported, and ignored, during protection), so the end
+	# of protection starts the normal encounter at once.
+	_check(_encounters.size() == 2 and (_encounters.back() as EncounterContext).encounter_id == "encounter_2" and (_encounters.back() as EncounterContext).monster_id == monsters[0].monster_id and session.get_phase() == EncounterSession.Phase.JOINING, "Still touching group 1 when protection ends: encounter at once")
+	await _run_to_lock(main)
+	_end_button(session).pressed.emit()
 	player.global_position = FAR
 	await _settle()
+	main.time_source.advance_ms(EncounterSession.PROTECTION_MS)
+	await process_frame
+	await process_frame
+	_check(not session.is_protection_active() and session.get_phase() == EncounterSession.Phase.NONE and _encounters.size() == 2, "That encounter ended (prototype end; the player left before its protection ran out), nothing pending")
 	await _frames(300)
 	var again := await _caught_at(player, SPOT_A)
-	_check(again != null and again.encounter_id == "encounter_2", "After protection, a new catch starts an encounter")
+	_check(again != null and again.encounter_id == "encounter_3", "After protection, a new catch starts an encounter")
 	_check(main.wallet.get_balance() == money, "No reward at any point")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
