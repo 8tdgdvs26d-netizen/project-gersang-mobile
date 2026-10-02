@@ -30,6 +30,11 @@ extends Node
 ## (used by the prototype recovery; meant for later reuse by Combat retreat):
 ## every group stops aggroing (they keep patrolling, a chase turns back) and no
 ## contact becomes an encounter until set_protected(false).
+## Corrective (post-victory re-engagement): contact is edge-triggered (a
+## monster reports it once, when the overlap begins), so a contact ignored
+## during protection would otherwise stay unanswered for as long as the
+## overlap lasts. When protection ends, every group still in contact is
+## checked again through the normal contact rules (_on_player_contacted).
 
 ## E03: dispositions. Only an AGGRESSIVE group's contact starts an encounter
 ## and only AGGRESSIVE groups auto-join. A PASSIVE group starts one only when
@@ -74,10 +79,25 @@ func is_protected() -> bool:
 
 ## Starts (true) or ends (false) the player protection for every group.
 func set_protected(protected: bool) -> void:
+	var ended := _protected and not protected
 	_protected = protected
 	for monster_id in _monsters:
 		if is_instance_valid(_monsters[monster_id]):
 			(_monsters[monster_id] as WorldMonster).set_aggro_suppressed(protected)
+	if ended:
+		_recheck_contacts()
+
+
+## Protection just ended: a contact still held (reported while it was being
+## ignored) gets the normal encounter check now — at most one encounter
+## starts, and every existing rule (pending, active, WORLD, PASSIVE, safe
+## buffer, real overlap) still applies.
+func _recheck_contacts() -> void:
+	for monster_id in _monsters.keys():
+		if _pending != null:
+			return
+		if is_instance_valid(_monsters[monster_id]) and (_monsters[monster_id] as WorldMonster).is_in_contact():
+			_on_player_contacted(monster_id)
 
 
 func has_pending_encounter() -> bool:
