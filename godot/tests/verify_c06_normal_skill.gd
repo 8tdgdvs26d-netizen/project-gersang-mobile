@@ -62,7 +62,8 @@ func _verify_static() -> void:
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd"]:
 		var code := _code_only(path).to_lower()
 		# ("level" is C05's result text in the view; the rules files are pinned by C05.)
-		for word in ["regen", "potion", "crit", "element", "resist", "mana", "select_all", "box_select", "equipment", "strength", "intelligence", "ultimate", "talent", "camera"]:
+		# C08 brought Select All and the camera into scope ("select_all" and "camera" left the list).
+		for word in ["regen", "potion", "crit", "element", "resist", "mana", "box_select", "equipment", "strength", "intelligence", "ultimate", "talent"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_sections_done.append("static")
 
@@ -636,21 +637,22 @@ func _verify_in_game() -> void:
 	await process_frame
 	var battle: CombatBattle = main.get_combat()
 	var view := main.get_node("CombatView") as CombatView
-	var button := view.get_node("SkillButton") as Button
-	var label := view.get_node("SkillLabel") as Label
 	var hint := view.get_node("HintLabel") as Label
 	await process_frame
-	# C06 fix: PREPARATION shows the selected unit's Skill, disabled.
-	_check(battle != null and battle.get_phase() == CombatBattle.Phase.PREPARATION and button.visible and button.disabled and button.text == "緩速：戰鬥開始後可用", "PREPARATION: the Hero's Skill shown, disabled (%s)" % button.text)
-	_check(label.visible and label.text.contains("主角 魔力 200 / 200") and label.text.contains("傭兵A 魔力 100 / 100") and label.text.contains("傭兵B 魔力 100 / 100"), "PREPARATION: Skill / MP status shown (%s)" % label.text)
-	var prep_texts := [button.text, label.text]
+	# C08: the single Skill button / MP status line became the skill bar
+	# (entries of the selected units), the portraits and the ⓘ info.
+	var entry := _skill_entry(view, battle.get_hero(), "slow")
+	_check(battle != null and battle.get_phase() == CombatBattle.Phase.PREPARATION and not entry.is_empty() and entry["disabled"] and entry["title"] == "普通技能：緩速　魔力 25" and entry["state"] == "戰鬥開始後可用", "PREPARATION: the Hero's Skill shown, disabled (%s)" % str(entry.get("text")))
+	_check(view.get_info_text(battle.get_hero()).contains("魔力 200 / 200") and view.get_info_text(battle.get_friends()[1]).contains("魔力 100 / 100") and view.get_info_text(battle.get_friends()[2]).contains("魔力 100 / 100"), "PREPARATION: MP shown (info)")
+	var prep_texts := [entry["text"], view.get_info_text(battle.get_hero())]
 	for friend in battle.get_friends():
 		_check(view.tap_at(view.cell_center(Vector2(friend.cell))) and battle.get_selected() == friend, "PREPARATION: tap %s selects it" % friend.id)
 		await process_frame
 		var skill_name: String = CombatView.SKILL_NAMES[friend.skill["kind"]]
-		_check(button.visible and button.disabled and button.text == skill_name + "：戰鬥開始後可用", "PREPARATION: %s shows %s, disabled (%s)" % [friend.id, skill_name, button.text])
-		prep_texts.append(button.text)
-		button.pressed.emit()
+		entry = _skill_entry(view, friend, friend.skill["kind"])
+		_check(not entry.is_empty() and entry["disabled"] and entry["state"] == "戰鬥開始後可用" and entry["title"].contains(skill_name), "PREPARATION: %s shows %s, disabled (%s)" % [friend.id, skill_name, str(entry.get("text"))])
+		prep_texts.append(entry["text"])
+		view.press_skill_entry(entry)
 		await process_frame
 		_check(not battle.is_aiming() and friend.skill_state == CombatUnit.SkillState.NONE and friend.mp == friend.max_mp and friend.skill_ready_at_ms == 0 and battle.get_skill_cooldown_remaining(friend) == 0 and not friend.has_goal and friend.target == null, "PREPARATION: pressing %s changes nothing (no aim, pending, cast, MP or cooldown)" % skill_name)
 	_check(battle.get_phase() == CombatBattle.Phase.PREPARATION, "Still PREPARATION after the presses")
@@ -659,42 +661,48 @@ func _verify_in_game() -> void:
 	await process_frame
 	var hero := battle.get_hero()
 	var warrior := battle.get_friends()[1]
-	_check(button.visible and not button.disabled and button.text == "緩速（魔力 25）", "FIGHTING: 緩速（魔力 25） for the selected Hero (%s)" % button.text)
-	_check(label.visible and label.text.contains("主角 魔力 200 / 200") and label.text.contains("傭兵A 魔力 100 / 100") and label.text.contains("傭兵B 魔力 100 / 100") and label.text.contains("緩速中敵人 0"), "Every unit's MP shown (%s)" % label.text)
-	var texts := [button.text, label.text]
+	entry = _skill_entry(view, hero, "slow")
+	_check(not entry["disabled"] and entry["state"] == "可用", "FIGHTING: 緩速 ready for the selected Hero (%s)" % entry["text"])
+	_check(view.get_info_text(hero).contains("魔力 200 / 200") and view.get_info_text(warrior).contains("魔力 100 / 100"), "Every unit's MP shown (info)")
+	var texts := [entry["text"], view.get_info_text(hero)]
 	texts.append_array(prep_texts)
-	button.pressed.emit()
+	view.press_skill_entry(entry)
 	await process_frame
-	_check(battle.is_aiming() and button.text == "緩速：選擇目標" and hint.text == "點敵人施放技能　點其他地方取消", "Skill pressed: aiming (%s / %s)" % [button.text, hint.text])
-	texts.append_array([button.text, hint.text])
+	entry = _skill_entry(view, hero, "slow")
+	_check(battle.is_aiming() and entry["state"] == "選擇目標" and hint.visible and hint.text == "點敵人施放技能　點其他地方取消", "Skill pressed: aiming (%s / %s)" % [entry["text"], hint.text])
+	texts.append_array([entry["text"], hint.text])
 	_check(view.tap_at(view.cell_center(Vector2(5, 0))) == false and not battle.is_aiming() and not hero.has_goal and hero.skill_state == CombatUnit.SkillState.NONE, "Tap elsewhere: aim cancelled, no move")
-	button.pressed.emit()
+	await process_frame
+	_check(not hint.visible, "The targeting prompt disappears when targeting ends")
+	view.press_skill_entry(_skill_entry(view, hero, "slow"))
 	var enemy := battle.get_enemies()[0]
 	_check(view.tap_at(view.cell_center(Vector2(enemy.cell))) and hero.skill_state == CombatUnit.SkillState.PENDING and hero.skill_target == enemy, "Tap an enemy: Slow ordered on it")
 	await process_frame
-	_check(button.text == "緩速：接近目標" and label.text.contains("主角 魔力 200 / 200 接近中"), "Approaching shown (%s / %s)" % [button.text, label.text])
-	texts.append_array([button.text, label.text])
+	entry = _skill_entry(view, hero, "slow")
+	_check(entry["state"] == "接近目標" and view.get_info_text(hero).contains("魔力 200 / 200"), "Approaching shown (%s)" % entry["text"])
+	texts.append(entry["text"])
 	_check(view.tap_at(view.cell_center(Vector2(warrior.cell))) and battle.get_selected() == warrior, "Tap Merc A: selected")
 	await process_frame
-	_check(button.text == "守護（魔力 25）", "Merc A: 守護（魔力 25）")
-	button.pressed.emit()
+	entry = _skill_entry(view, warrior, "guard")
+	_check(entry["title"] == "普通技能：守護　魔力 25" and entry["state"] == "可用", "Merc A: 守護 ready (%s)" % entry["text"])
+	view.press_skill_entry(entry)
 	_check(warrior.skill_state == CombatUnit.SkillState.CASTING and warrior.mp == 75 and not battle.is_aiming(), "Guard: cast at once, no aiming")
 	battle.advance(10)
 	await process_frame
-	_check(button.text == "守護：施法中…" and button.disabled and label.text.contains("傭兵A 魔力 75 / 100 施法中"), "Casting shown (%s / %s)" % [button.text, label.text])
-	texts.append_array([button.text, label.text])
+	entry = _skill_entry(view, warrior, "guard")
+	_check(entry["state"] == "施法中…" and entry["disabled"] and view.get_info_text(warrior).contains("魔力 75 / 100"), "Casting shown (%s)" % entry["text"])
+	texts.append(entry["text"])
 	battle.advance(1000)
 	await process_frame
-	_check(button.text.begins_with("守護：冷卻 ") and button.text.ends_with(" 秒") and label.text.contains("守護 "), "Cooldown and Guard shown (%s / %s)" % [button.text, label.text])
-	texts.append_array([button.text, label.text])
+	entry = _skill_entry(view, warrior, "guard")
+	_check(entry["state"].begins_with("冷卻 ") and entry["state"].ends_with(" 秒") and view.get_info_text(warrior).contains("守護中 "), "Cooldown and Guard shown (%s / %s)" % [entry["text"], view.get_info_text(warrior)])
+	texts.append_array([entry["text"], view.get_info_text(warrior)])
 	warrior.skill_ready_at_ms = 0
 	warrior.mp = 0
 	await process_frame
-	_check(button.text == "守護：魔力不足" and button.disabled, "No MP shown (%s)" % button.text)
-	texts.append(button.text)
-	battle.get_enemies()[1].slow_until_ms = battle.get_elapsed_ms() + 5000
-	await process_frame
-	_check(label.text.contains("緩速中敵人 1"), "Slowed enemies counted (%s)" % label.text)
+	entry = _skill_entry(view, warrior, "guard")
+	_check(entry["state"] == "魔力不足" and entry["disabled"], "No MP shown (%s)" % entry["text"])
+	texts.append(entry["text"])
 	# M2-07A rule: only the standalone A / B / E are approved Latin (傭兵A / 傭兵B).
 	var latin := RegEx.new()
 	latin.compile("[A-Za-z]")
@@ -704,13 +712,13 @@ func _verify_in_game() -> void:
 	_check(with_latin.is_empty(), "All Skill texts are Traditional Chinese (%s)" % str(with_latin))
 	(view.get_node("RetreatButton") as Button).pressed.emit()
 	await process_frame
-	_check(battle.is_retreating() and not button.visible, "Retreating: no Skill button")
+	_check(battle.is_retreating() and view.get_skill_bar_entries().is_empty(), "Retreating: no Skill bar")
 	for frame in range(120):
 		if battle.is_over():
 			break
 		await physics_frame
 	await process_frame
-	_check(battle.is_over() and not button.visible and not label.visible, "Result: no Skill UI")
+	_check(battle.is_over() and view.get_skill_bar_entries().is_empty(), "Result: no Skill UI")
 	root.remove_child(main)
 	main.free()
 	await process_frame
@@ -718,6 +726,13 @@ func _verify_in_game() -> void:
 
 
 # --- Helpers -----------------------------------------------------------------------------------
+
+## C08: the skill bar entry of `owner`'s `kind` Skill ({} when not shown).
+func _skill_entry(view: CombatView, owner: CombatUnit, kind: String) -> Dictionary:
+	for entry in view.get_skill_bar_entries():
+		if entry["owner"] == owner and entry["kind"] == kind:
+			return entry
+	return {}
 
 ## A battle in FIGHTING with only the first `alive` enemies left alive.
 func _fight(enemies: int, alive: int = -1) -> CombatBattle:

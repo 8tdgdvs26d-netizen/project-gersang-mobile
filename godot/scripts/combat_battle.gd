@@ -66,6 +66,18 @@ extends RefCounted
 ## cancelled); the Combat time-up wins over a Gesture timeout at the same
 ## moment.
 ##
+## C08 control: the player selects one or several friendly units (a
+## selection; its Active Caster is get_selected(), the unit Skills and the
+## single-unit commands act on). A tap on a unit already in a multi-selection
+## only makes it the Active Caster. Move / Target taps go to every selected
+## unit (each with its own rules: the existing nearest-free-cell occupancy,
+## its own attack range, C06 cast / pending priority). Two temporary battle
+## groups (membership of this battle only, never saved) select their alive
+## members; select_all() selects every alive friendly unit. attack_all()
+## gives every alive friendly unit its nearest alive enemy (ties: enemy
+## order) through the same target command. The aggregate HP ratios use the
+## sides' total max HP recorded when the battle is built.
+##
 ## Every HP change goes through resolve_damage() (Basic Attacks, Skills and
 ## the Gesture; C06 Guard halves it). No reward, EXP, loot, retreat or world consequence exists here:
 ## a finished battle only produces its BattleResult (get_result()), which the
@@ -95,6 +107,13 @@ var _elapsed_ms := 0
 var _friends: Array[CombatUnit] = []
 var _enemies: Array[CombatUnit] = []
 var _selected: CombatUnit
+## C08: every selected friendly unit (the Active Caster _selected among them).
+var _selection: Array[CombatUnit] = []
+## C08: the two temporary battle groups (members of this battle only).
+var _groups: Array = [[], []]
+## C08: each side's total max HP when the battle was built (fixed).
+var _friend_hp_total := 0
+var _enemy_hp_total := 0
 ## C02: the battle's single result, set once on VICTORY / DEFEAT.
 var _result: BattleResult
 ## C04: the whole-party retreat is running.
@@ -154,6 +173,11 @@ static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYP
 	for index in range(cells.size()):
 		battle._enemies.append(CombatUnit.create("enemy_%02d" % (index + 1), CombatUnit.Team.ENEMY, CombatConfig.ENEMY, cells[index]))
 	battle._selected = hero
+	battle._selection = [hero]
+	for unit in battle._friends:
+		battle._friend_hp_total += unit.max_hp
+	for unit in battle._enemies:
+		battle._enemy_hp_total += unit.max_hp
 	return battle
 
 
@@ -298,6 +322,57 @@ func get_exp_pool() -> int:
 
 func get_selected() -> CombatUnit:
 	return _selected
+
+
+## C08: the alive selected friendly units, in party order.
+func get_selection() -> Array[CombatUnit]:
+	var units: Array[CombatUnit] = []
+	for unit in _friends:
+		if unit.alive and _selection.has(unit):
+			units.append(unit)
+	return units
+
+
+## C08: the current HP of a side over its fixed battle-start total max HP
+## (0..1). The two ratios are independent.
+func get_friend_hp_ratio() -> float:
+	return _hp_ratio(_friends, _friend_hp_total)
+
+
+func get_enemy_hp_ratio() -> float:
+	return _hp_ratio(_enemies, _enemy_hp_total)
+
+
+func _hp_ratio(units: Array[CombatUnit], total: int) -> float:
+	if total <= 0:
+		return 0.0
+	var current := 0
+	for unit in units:
+		if unit.alive:
+			current += unit.hp
+	return clampf(float(current) / total, 0.0, 1.0)
+
+
+## C08: the members of temporary group `index` (0 or 1), dead ones included.
+func get_group(index: int) -> Array[CombatUnit]:
+	var members: Array[CombatUnit] = []
+	for unit in _friends:
+		if (_groups[index] as Array).has(unit):
+			members.append(unit)
+	return members
+
+
+## C08: adds `unit` to group `index` or removes it. Returns whether it is a
+## member afterwards. Only friendly units of this battle, until it ends.
+func toggle_group_member(index: int, unit: CombatUnit) -> bool:
+	if is_over() or unit == null or not _friends.has(unit):
+		return false
+	var members: Array = _groups[index]
+	if members.has(unit):
+		members.erase(unit)
+		return false
+	members.append(unit)
+	return true
 
 
 ## C06: whether `unit` could be given its Skill now.
@@ -465,9 +540,56 @@ func unit_at(cell: Vector2i) -> CombatUnit:
 
 # --- Commands (touch / tap friendly) ---------------------------------------------------------
 
-## Selects an alive friendly unit. Returns whether it is selected.
+## Selects an alive friendly unit (alone: a single selection). Returns
+## whether it is selected.
 func select_unit(unit: CombatUnit) -> bool:
 	if is_over() or _gesture_open or unit == null or not unit.alive or unit.team != CombatUnit.Team.FRIEND:
+		return false
+	_selected = unit
+	_selection = [unit]
+	_aiming = false
+	return true
+
+
+## C08: selects the alive friendly units among `units` (party order). The
+## Active Caster stays if it is among them, else it is the first. Returns
+## whether anything is selected (nothing changes otherwise).
+func select_units(units: Array) -> bool:
+	if is_over() or _gesture_open:
+		return false
+	var chosen: Array[CombatUnit] = []
+	for unit in _friends:
+		if unit.alive and units.has(unit):
+			chosen.append(unit)
+	if chosen.is_empty():
+		return false
+	_selection = chosen
+	if not chosen.has(_selected):
+		_selected = chosen[0]
+	_aiming = false
+	return true
+
+
+func select_group(index: int) -> bool:
+	return select_units(_groups[index])
+
+
+func select_all() -> bool:
+	return select_units(_friends)
+
+
+## C08: a tap on a friendly unit (portrait or battlefield): one already in a
+## multi-selection becomes the Active Caster (the selection stays); any other
+## is selected alone.
+func select_or_activate(unit: CombatUnit) -> bool:
+	if get_selection().size() > 1 and get_selection().has(unit):
+		return set_active_caster(unit)
+	return select_unit(unit)
+
+
+## C08: makes `unit` (already selected) the Active Caster; the selection stays.
+func set_active_caster(unit: CombatUnit) -> bool:
+	if is_over() or _gesture_open or unit == null or not get_selection().has(unit):
 		return false
 	_selected = unit
 	_aiming = false
@@ -477,28 +599,75 @@ func select_unit(unit: CombatUnit) -> bool:
 ## Moves the selected unit to `cell` (drops its target). Refused outside the
 ## grid, outside the preparation area during PREPARATION, or once over.
 func command_move(cell: Vector2i) -> bool:
-	if is_over() or is_retreating() or _gesture_open or _selected == null or not _selected.alive or not is_cell_allowed(_selected, cell):
+	return _command_move_unit(_selected, cell)
+
+
+func _command_move_unit(unit: CombatUnit, cell: Vector2i) -> bool:
+	if is_over() or is_retreating() or _gesture_open or unit == null or not unit.alive or not is_cell_allowed(unit, cell):
 		return false
-	if not _ordinary_command_allowed(_selected):
+	if not _ordinary_command_allowed(unit):
 		return false
-	_selected.target = null
-	_selected.has_goal = true
-	_selected.goal = cell
+	unit.target = null
+	unit.has_goal = true
+	unit.goal = cell
 	return true
+
+
+## C08: every selected unit heads for `cell` (the existing nearest-free-cell
+## rule spreads them over nearby legal cells). Returns whether any accepted.
+func command_move_selection(cell: Vector2i) -> bool:
+	var accepted := false
+	for unit in get_selection():
+		accepted = _command_move_unit(unit, cell) or accepted
+	return accepted
 
 
 ## The selected unit attacks `enemy` (approaching it first when out of range;
 ## drops any move command). Only while FIGHTING, only an alive enemy.
 func command_target(enemy: CombatUnit) -> bool:
-	if _phase != Phase.FIGHTING or is_retreating() or _gesture_open or _selected == null or not _selected.alive:
+	return _command_target_unit(_selected, enemy)
+
+
+func _command_target_unit(unit: CombatUnit, enemy: CombatUnit) -> bool:
+	if _phase != Phase.FIGHTING or is_retreating() or _gesture_open or unit == null or not unit.alive:
 		return false
 	if enemy == null or not enemy.alive or enemy.team != CombatUnit.Team.ENEMY:
 		return false
-	if not _ordinary_command_allowed(_selected):
+	if not _ordinary_command_allowed(unit):
 		return false
-	_selected.has_goal = false
-	_selected.target = enemy
+	unit.has_goal = false
+	unit.target = enemy
 	return true
+
+
+## C08: every selected unit attacks `enemy` (each approaches to its own
+## range). Returns whether any accepted.
+func command_target_selection(enemy: CombatUnit) -> bool:
+	var accepted := false
+	for unit in get_selection():
+		accepted = _command_target_unit(unit, enemy) or accepted
+	return accepted
+
+
+## C08 全體進攻: every alive friendly unit targets its nearest alive enemy
+## (grid distance; ties: enemy order) with the normal target command
+## (casting units keep casting, a pending Skill is replaced). FIGHTING only,
+## not while retreating. Returns whether any accepted.
+func attack_all() -> bool:
+	var accepted := false
+	for unit in _friends:
+		if unit.alive:
+			accepted = _command_target_unit(unit, nearest_enemy(unit)) or accepted
+	return accepted
+
+
+## The alive enemy nearest to `unit` (ties: enemy order); null when none.
+func nearest_enemy(unit: CombatUnit) -> CombatUnit:
+	var best: CombatUnit
+	for enemy in _enemies:
+		if enemy.alive and (best == null or CombatUnit.grid_distance(unit.cell, enemy.cell) < CombatUnit.grid_distance(unit.cell, best.cell)):
+			best = enemy
+	return best
 
 
 ## C06: an ordinary move / target command is refused while the unit casts;
@@ -569,10 +738,10 @@ func tap(cell: Vector2i) -> bool:
 		return unit != null and unit.team == CombatUnit.Team.ENEMY and command_skill(unit)
 	_aiming = false
 	if unit != null and unit.team == CombatUnit.Team.FRIEND:
-		return select_unit(unit)
+		return select_or_activate(unit)
 	if unit != null:
-		return command_target(unit)
-	return command_move(cell)
+		return command_target_selection(unit)
+	return command_move_selection(cell)
 
 
 # --- Time ---------------------------------------------------------------------------------
@@ -875,8 +1044,11 @@ func _kill(unit: CombatUnit) -> void:
 	unit.next_cell = unit.cell
 	unit.step_progress_ms = 0
 	unit.claim = CombatUnit.NO_CELL
+	# C08: a dead unit leaves the selection (it stays in its groups); the
+	# Active Caster passes to the next selected unit, else nothing.
+	_selection.erase(unit)
 	if _selected == unit:
-		_selected = null
+		_selected = get_selection()[0] if not get_selection().is_empty() else null
 	for friend in _friends:
 		if friend.target == unit:
 			friend.target = null

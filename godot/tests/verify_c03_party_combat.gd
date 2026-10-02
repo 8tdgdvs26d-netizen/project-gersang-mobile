@@ -59,7 +59,8 @@ func _verify_static() -> void:
 		# C04 brought Retreat into scope ("retreat" left the list).
 		# C05 brought Level / EXP rewards into scope ("level" and "reward" left the list).
 		# C06 brought Normal Skills into scope ("skill" and "skill_cooldown" left the list).
-		for word in ["recruit", "roster", "hire", "equipment", "exp ", "loot", "revive", "heal", "mana", "formation", "select_all", "taunt", "threat"]:
+		# C08 brought Select All (全體) into scope ("select_all" left the list).
+		for word in ["recruit", "roster", "hire", "equipment", "exp ", "loot", "revive", "heal", "mana", "formation", "taunt", "threat"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_check(not _code_only("res://scripts/battle_result.gd").to_lower().contains("merc") and not _code_only("res://scripts/battle_result.gd").to_lower().contains("friend"), "BattleResult carries no party data")
 	_sections_done.append("static")
@@ -410,19 +411,20 @@ func _verify_in_game() -> void:
 	var friends := battle.get_friends()
 	_check(friends.size() == 3 and battle.get_enemies().size() == 10, "The game's battle: Hero + Merc A + Merc B vs 10")
 	await process_frame
-	var info := (view.get_node("InfoLabel") as Label).text
-	_check(info.contains("主角 300 / 300") and info.contains("傭兵A 200 / 200") and info.contains("傭兵B 150 / 150"), "Each friendly unit's HP is shown (%s)" % info)
-	_check(view.tap_at(view.cell_center(Vector2(friends[2].cell))) and battle.get_selected() == friends[2] and view.get_focus_unit() == friends[2], "Tap Merc B on screen: selected, camera follows it")
+	# C08: per-unit HP moved from the always-on HUD text to the portraits /
+	# ⓘ info; the camera no longer follows the selected unit.
+	_check(view.get_info_text(friends[0]).contains("生命 300 / 300") and view.get_info_text(friends[1]).contains("生命 200 / 200") and view.get_info_text(friends[2]).contains("生命 150 / 150") and view.get_portrait_unit(2) == friends[2], "Each friendly unit's HP is shown (portrait / info)")
+	var scroll := view.get_scroll_x()
+	_check(view.tap_at(view.cell_center(Vector2(friends[2].cell))) and battle.get_selected() == friends[2] and view.get_scroll_x() == scroll, "Tap Merc B on screen: selected, the camera does not move (C08)")
 	battle.advance(CombatConfig.PREPARATION_MS)
 	battle.resolve_damage(battle.get_enemies()[0], friends[0], 1000)
 	await process_frame
-	info = (view.get_node("InfoLabel") as Label).text
-	_check(battle.get_phase() == CombatBattle.Phase.FIGHTING and not (view.get_node("ExitButton") as Button).visible and info.contains("主角 陣亡"), "Hero dead in game: 主角 陣亡, still fighting, no exit")
+	_check(battle.get_phase() == CombatBattle.Phase.FIGHTING and not (view.get_node("ExitButton") as Button).visible and view.get_portrait_state(0)["dead"] and view.get_info_text(friends[0]).contains("生命 0 / 300"), "Hero dead in game: portrait 陣亡, still fighting, no exit")
 	_check(session.get_phase() == EncounterSession.Phase.LOCKED and main.get_combat() == battle, "The encounter stays LOCKED")
 	battle.resolve_damage(battle.get_enemies()[0], friends[1], 1000)
 	battle.resolve_damage(battle.get_enemies()[0], friends[2], 1000)
 	await process_frame
-	_check(battle.get_phase() == CombatBattle.Phase.DEFEAT and view.get_focus_unit() == friends[0], "Full Party Wipe: DEFEAT; the camera rests on the first unit")
+	_check(battle.get_phase() == CombatBattle.Phase.DEFEAT and view.get_scroll_x() == scroll, "Full Party Wipe: DEFEAT; the camera stays where it was (C08: no follow)")
 	_delete(TEST_SAVE)
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	var group_3 := main.get_node(NODES[2]) as WorldMonster

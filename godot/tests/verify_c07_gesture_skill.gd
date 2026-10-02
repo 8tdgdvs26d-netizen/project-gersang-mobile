@@ -59,7 +59,8 @@ func _verify_static() -> void:
 		_check(not code.contains("randi") and not code.contains("randf"), "%s has no random calls (randomness only in GestureTargets)" % path.get_file())
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd", "res://scripts/gesture_matcher.gd", "res://scripts/gesture_targets.gd"]:
 		var code := _code_only(path).to_lower()
-		for word in ["ultimate", "combo", "skill_tree", "mana", "neural", "tensorflow", "regen", "potion", "select_all", "equipment", "time_scale", "engine.time"]:
+		# C08 brought Select All (全體) into scope ("select_all" left the list).
+		for word in ["ultimate", "combo", "skill_tree", "mana", "neural", "tensorflow", "regen", "potion", "equipment", "time_scale", "engine.time"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_sections_done.append("static")
 
@@ -426,30 +427,32 @@ func _verify_in_game() -> void:
 	var battle: CombatBattle = main.get_combat()
 	_toughen(battle.get_enemies())
 	var view := main.get_node("CombatView") as CombatView
-	var button := view.get_node("GestureButton") as Button
+	# C08: the 閃電 button became the Hero's entry in the skill bar.
 	var clock := view.get_node("ClockLabel") as Label
 	var overlay := view.get_node("GestureOverlay") as Control
 	await process_frame
-	_check(button.visible and button.disabled and button.text == "閃電：戰鬥開始後可用" and not clock.visible, "PREPARATION: 閃電 shown disabled, no clock")
-	var texts := [button.text]
+	var entry := _lightning(view)
+	_check(not entry.is_empty() and entry["disabled"] and entry["state"] == "戰鬥開始後可用" and not clock.visible, "PREPARATION: 閃電 shown disabled, no clock")
+	var texts := [entry["text"]]
 	battle.advance(CombatConfig.PREPARATION_MS)
 	await process_frame
-	_check(button.visible and not button.disabled and button.text == "閃電（魔力 50）", "FIGHTING: 閃電（魔力 50） (%s)" % button.text)
+	entry = _lightning(view)
+	_check(not entry["disabled"] and entry["title"] == "特殊技能：閃電　魔力 50" and entry["state"] == "可用", "FIGHTING: 特殊技能：閃電　魔力 50 (%s)" % entry["text"])
 	_check(clock.visible and clock.text.begins_with("戰鬥時間 00:0") and clock.text.ends_with(" / 05:00"), "Combat Clock shown (%s)" % clock.text)
-	_check((view.get_node("SkillLabel") as Label).text.contains("主角 魔力 200 / 200"), "Hero MP 200 shown")
-	texts.append_array([button.text, clock.text])
+	_check(view.get_info_text(battle.get_hero()).contains("魔力 200 / 200"), "Hero MP 200 shown")
+	texts.append_array([entry["text"], clock.text])
 	view.tap_at(view.cell_center(Vector2(battle.get_friends()[1].cell)))
 	await process_frame
-	_check(not button.visible, "Merc A selected: no 閃電 button")
+	_check(_lightning(view).is_empty(), "Merc A selected: no 閃電")
 	view.tap_at(view.cell_center(Vector2(battle.get_hero().cell)))
 	await process_frame
-	button.pressed.emit()
+	view.press_skill_entry(_lightning(view))
 	await process_frame
 	_check(battle.is_gesture_open() and overlay.visible and overlay.mouse_filter == Control.MOUSE_FILTER_STOP and overlay.get_index() > view.get_node("Field").get_index(), "Pressed: the Gesture Window covers the battle and takes input")
 	var countdown := (overlay.get_node("GestureCountdown") as Label).text
 	var overlay_clock := (overlay.get_node("GestureClock") as Label).text
-	_check(countdown == "剩餘 10 秒" and overlay_clock.ends_with("（繼續計時）") and button.text == "畫符中…", "Window: 剩餘 10 秒, the clock keeps running (%s / %s)" % [countdown, overlay_clock])
-	texts.append_array([countdown, overlay_clock, button.text, (overlay.get_node("GestureTitle") as Label).text])
+	_check(countdown == "剩餘 10 秒" and overlay_clock.ends_with("（繼續計時）") and _lightning(view)["state"] == "畫符中…", "Window: 剩餘 10 秒, the clock keeps running (%s / %s)" % [countdown, overlay_clock])
+	texts.append_array([countdown, overlay_clock, _lightning(view)["text"], (overlay.get_node("GestureTitle") as Label).text])
 	_check(not view.tap_at(view.cell_center(Vector2(battle.get_enemies()[0].cell))), "A battlefield tap does nothing while open")
 	# An accidental touch is not submitted.
 	_press(overlay, Vector2(300, 600), true)
@@ -470,8 +473,9 @@ func _verify_in_game() -> void:
 	_check(not battle.is_gesture_open() and not overlay.visible and result["grade"] == GestureMatcher.Grade.PERFECT, "Lift the finger: submitted, Perfect, window closed (score %s)" % str(result.get("score")))
 	var feedback := (view.get_node("GestureResultLabel") as Label)
 	_check(feedback.visible and feedback.text == "閃電 完美！100 分　120 傷害 × 10", "Result shown (%s)" % feedback.text)
-	_check(button.text.begins_with("閃電：冷卻 ") and button.disabled and battle.get_hero().mp == 150, "Cooling down, 150 MP (%s)" % button.text)
-	texts.append_array([feedback.text, button.text])
+	entry = _lightning(view)
+	_check(entry["state"].begins_with("冷卻 ") and entry["disabled"] and battle.get_hero().mp == 150, "Cooling down, 150 MP (%s)" % entry["text"])
+	texts.append_array([feedback.text, entry["text"]])
 	# The result is UI-only: real seconds, not battle or clock time.
 	var elapsed := battle.get_elapsed_ms()
 	var combat_clock := battle.get_combat_clock_ms()
@@ -486,7 +490,7 @@ func _verify_in_game() -> void:
 	battle.advance(LIMIT - battle.get_combat_clock_ms())
 	await process_frame
 	var retreat := view.get_node("RetreatButton") as Button
-	_check(battle.is_forced_retreat() and clock.text == "時間到　強制撤退" and retreat.text == "強制撤退中" and retreat.disabled and not button.visible, "05:00 shown: 時間到　強制撤退, 強制撤退中 disabled")
+	_check(battle.is_forced_retreat() and clock.text == "時間到　強制撤退" and retreat.text == "強制撤退中" and retreat.disabled and _lightning(view).is_empty(), "05:00 shown: 時間到　強制撤退, 強制撤退中 disabled")
 	retreat.pressed.emit()
 	_check(battle.is_retreating(), "Pressing it does not cancel")
 	texts.append_array([clock.text, retreat.text])
@@ -512,6 +516,14 @@ func _verify_in_game() -> void:
 
 
 # --- Helpers -----------------------------------------------------------------------------------
+
+## C08: the Hero's 閃電 skill bar entry ({} when not shown).
+func _lightning(view: CombatView) -> Dictionary:
+	for entry in view.get_skill_bar_entries():
+		if entry["kind"] == "lightning":
+			return entry
+	return {}
+
 
 func _press(overlay: Control, position: Vector2, pressed: bool) -> void:
 	var click := InputEventMouseButton.new()
