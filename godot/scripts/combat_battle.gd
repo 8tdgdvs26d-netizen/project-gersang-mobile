@@ -651,13 +651,16 @@ func command_target_selection(enemy: CombatUnit) -> bool:
 
 ## C08 全體進攻: every alive friendly unit targets its nearest alive enemy
 ## (grid distance; ties: enemy order) with the normal target command
-## (casting units keep casting, a pending Skill is replaced). FIGHTING only,
-## not while retreating. Returns whether any accepted.
+## (casting units keep casting, a pending Skill is replaced; a Skill aim is
+## cancelled). FIGHTING only, not while retreating. Returns whether any
+## accepted.
 func attack_all() -> bool:
 	var accepted := false
 	for unit in _friends:
 		if unit.alive:
 			accepted = _command_target_unit(unit, nearest_enemy(unit)) or accepted
+	if accepted:
+		_aiming = false
 	return accepted
 
 
@@ -1045,9 +1048,11 @@ func _kill(unit: CombatUnit) -> void:
 	unit.step_progress_ms = 0
 	unit.claim = CombatUnit.NO_CELL
 	# C08: a dead unit leaves the selection (it stays in its groups); the
-	# Active Caster passes to the next selected unit, else nothing.
+	# Active Caster passes to the next selected unit, else nothing (its
+	# Skill aim ends with it).
 	_selection.erase(unit)
 	if _selected == unit:
+		_aiming = false
 		_selected = get_selection()[0] if not get_selection().is_empty() else null
 	for friend in _friends:
 		if friend.target == unit:

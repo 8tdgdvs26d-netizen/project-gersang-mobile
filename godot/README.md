@@ -61,12 +61,13 @@ groups and the camera are never saved). No combat value changed.
   and the HP / MP debug text are gone; 「點敵人施放技能　點其他地方取消」 shows only while aiming
 - selection lives in `CombatBattle` (`get_selection()`; `get_selected()` is the Active Caster).
   Tapping a friendly (portrait or battlefield) selects only it, unless it is already part of a
-  multi-selection: then it just becomes the Active Caster. Dead units leave the selection
+  multi-selection: then it just becomes the Active Caster. Dead units leave the selection (a dead
+  Active Caster passes the role to the next selected unit and its Skill aim ends)
 - Move / Target go to every selected unit through the existing per-unit commands: the same tapped
   cell for all (existing nearest-free spreading, no shared cell), each attacking from its own range;
   a casting unit refuses (C06), a pending Skill is replaced
 - 全體進攻: every alive friendly targets its nearest alive enemy (grid distance; a tie goes to the
-  earlier enemy). FIGHTING only (disabled in PREPARATION and while retreating)
+  earlier enemy) and ends a Skill aim. FIGHTING only (disabled in PREPARATION and while retreating)
 - 全體撤退 / 取消撤退 (manual retreat, cancellable) / 強制撤退中 (time up, disabled) — the C04 / C07
   retreat itself is unchanged; the skill bar hides while retreating and after the result
 - groups ① ②: temporary, this battle only, overlapping allowed, dead members stay members but are

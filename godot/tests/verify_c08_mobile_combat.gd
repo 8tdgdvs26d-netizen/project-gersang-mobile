@@ -192,6 +192,9 @@ func _verify_attack_all() -> void:
 	battle.select_unit(friends[0])
 	_check(battle.attack_all() and friends[0].target == enemies[0] and friends[1].target == enemies[0] and friends[2].target == enemies[1], "全體進攻: each targets its own nearest enemy")
 	_check(battle.get_selection() == [friends[0]], "全體進攻 leaves the selection alone")
+	battle.select_unit(friends[2])
+	_check(battle.start_skill_aim() and battle.is_aiming() and battle.attack_all() and not battle.is_aiming(), "全體進攻 while aiming a Skill cancels the aim")
+	battle.select_unit(friends[0])
 	# Dead friends are skipped; a dead nearest enemy is not chosen.
 	battle.resolve_damage(friends[0], enemies[0], 100000)
 	battle.resolve_damage(enemies[1], friends[1], 100000)
@@ -315,6 +318,13 @@ func _verify_lifecycle_rules() -> void:
 	for friend in defeat.get_friends():
 		defeat.resolve_damage(defeat.get_enemies()[0], friend, 100000)
 	_check(defeat.get_phase() == CombatBattle.Phase.DEFEAT and defeat.get_selection().is_empty() and defeat.get_selected() == null, "DEFEAT: nothing left selected")
+	# The aiming Active Caster dies: the next selected unit takes over, the aim ends.
+	var aim := _fight(10, 3)
+	aim.select_all()
+	_check(aim.get_selected() == aim.get_hero() and aim.start_skill_aim() and aim.is_aiming(), "Setup: Hero aims Slow in a multi-selection")
+	aim.resolve_damage(aim.get_enemies()[0], aim.get_hero(), 100000)
+	var merc_a := aim.get_friends()[1]
+	_check(aim.get_selected() == merc_a and not aim.is_aiming() and aim.tap(aim.get_enemies()[0].cell) and merc_a.target == aim.get_enemies()[0] and merc_a.skill_state == CombatUnit.SkillState.NONE and merc_a.mp == merc_a.max_mp, "Aiming caster dies: A takes over, aim cleared, the next enemy tap is a target, no Guard cast")
 	var retreat := _fight(10, 3)
 	retreat.select_all()
 	_check(retreat.start_retreat() and not retreat.command_move_selection(Vector2i(5, 2)) and not retreat.attack_all() and retreat.cancel_retreat(), "Manual retreat: group commands refused, still cancellable")
