@@ -49,8 +49,25 @@ extends RefCounted
 ## retreat cancels pending and casting Skills (MP spent on a cast is not
 ## refunded, no cooldown).
 ##
-## Every HP change goes through resolve_damage() (Basic Attacks and Skills;
-## C06 Guard halves it). No reward, EXP, loot, retreat or world consequence exists here:
+## C07 Gesture (Hero only, FIGHTING only, not while retreating or casting):
+## open_gesture() opens the Gesture Window — a pending Normal Skill of the
+## Hero is replaced; nothing is paid yet. While it is open the battlefield
+## is paused: advance() moves only the Combat Clock and the window's own
+## countdown (the battle time every C06 timer, step and Basic Attack runs on
+## stands still) and every battlefield command is refused.
+## submit_gesture() scores the stroke (GestureMatcher), pays the MP, starts
+## the Gesture cooldown, hits up to GESTURE_MAX_TARGETS random alive enemies
+## (GestureTargets, gesture_rng) and closes the window; GESTURE_WINDOW_MS
+## without a submission is a Fail.
+##
+## C07 Combat Clock: from 0 when FIGHTING starts, running also while the
+## window is open. At COMBAT_TIME_LIMIT_MS (once) an open window is closed
+## without any effect or cost and the C04 retreat is forced (it cannot be
+## cancelled); the Combat time-up wins over a Gesture timeout at the same
+## moment.
+##
+## Every HP change goes through resolve_damage() (Basic Attacks, Skills and
+## the Gesture; C06 Guard halves it). No reward, EXP, loot, retreat or world consequence exists here:
 ## a finished battle only produces its BattleResult (get_result()), which the
 ## world lifecycle consumes (C02).
 
@@ -59,11 +76,15 @@ signal damage_dealt(attacker: CombatUnit, target: CombatUnit, amount: int)
 signal unit_died(unit: CombatUnit)
 ## C06: a Normal Skill resolved.
 signal skill_resolved(unit: CombatUnit)
+## C07: a Gesture resolved (see get_last_gesture()).
+signal gesture_resolved(result: Dictionary)
 
 enum Phase { PREPARATION, FIGHTING, VICTORY, DEFEAT, RETREAT }
 ## C06: whether a unit could be given its Skill now (PENDING counts as READY:
 ## a new Skill command replaces its target).
 enum SkillReadiness { READY, UNAVAILABLE, CASTING, COOLDOWN, NO_MP }
+## C07: whether the Gesture Window could be opened now.
+enum GestureReadiness { READY, UNAVAILABLE, OPEN, CASTING, COOLDOWN, NO_MP }
 
 ## The locked encounter this battle came from ("" when built directly).
 var encounter_id := ""
@@ -87,6 +108,21 @@ var _tick_end_ms := 0
 var _aiming := false
 ## C06: the last AoE {"cells", "at_ms"} (presentation only).
 var _last_aoe := {}
+## C07: the Gesture's random target source (seed it to replay a pick).
+var gesture_rng := RandomNumberGenerator.new()
+## C07: Combat Clock (ms of FIGHTING, also while the Gesture Window is open).
+var _combat_clock_ms := 0
+var _time_up := false
+## C07: the retreat forced by the Combat Clock (cannot be cancelled).
+var _forced_retreat := false
+var _gesture_open := false
+## Combat Clock time at which the open window times out.
+var _gesture_deadline_ms := 0
+## Battle time from which the Gesture may be used again.
+var _gesture_ready_at_ms := 0
+## {"grade", "score", "damage", "targets", "mp_cost", "timeout"} of the last
+## resolved Gesture (empty: none).
+var _last_gesture := {}
 
 
 ## C03: which friendly party a battle gets. PROTOTYPE is the game's party
@@ -103,7 +139,7 @@ static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYP
 	var battle := CombatBattle.new()
 	var hero := CombatUnit.create("hero", CombatUnit.Team.FRIEND, CombatConfig.HERO, CombatConfig.HERO_START_CELL)
 	hero.role = CombatUnit.Role.HERO
-	_give_skill(hero, CombatConfig.HERO_SKILL)
+	_give_skill(hero, CombatConfig.HERO_SKILL, CombatConfig.HERO_MAX_MP)
 	battle._friends.append(hero)
 	if party == PartyFixture.PROTOTYPE:
 		var merc_a := CombatUnit.create("merc_a", CombatUnit.Team.FRIEND, CombatConfig.MERC_A, CombatConfig.MERC_A_START_CELL)
@@ -121,12 +157,12 @@ static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYP
 	return battle
 
 
-## C06: a friendly unit's Normal Skill and full MP (every battle starts at
-## MAX_MP; nothing carries over).
-static func _give_skill(unit: CombatUnit, skill: Dictionary) -> void:
+## C06: a friendly unit's Normal Skill and full MP (every battle starts full;
+## nothing carries over). C07: the Hero's pool is HERO_MAX_MP.
+static func _give_skill(unit: CombatUnit, skill: Dictionary, max_mp: int = CombatConfig.MAX_MP) -> void:
 	unit.skill = skill
-	unit.max_mp = CombatConfig.MAX_MP
-	unit.mp = CombatConfig.MAX_MP
+	unit.max_mp = max_mp
+	unit.mp = max_mp
 
 
 ## The battle for a LOCKED encounter: 1 / 2 / 3 World Enemy Groups -> 10 / 15
@@ -169,8 +205,14 @@ func is_retreating() -> bool:
 ## C04: starts the whole-party retreat (FIGHTING only; not while already
 ## retreating). Every alive friendly unit drops its target and move order.
 func start_retreat() -> bool:
-	if _phase != Phase.FIGHTING or _retreating:
+	if _phase != Phase.FIGHTING or _retreating or _gesture_open:
 		return false
+	_begin_retreat()
+	return true
+
+
+## C04 retreat start, shared by the 撤退 command and the C07 forced retreat.
+func _begin_retreat() -> void:
 	_retreating = true
 	_aiming = false
 	for unit in _friends:
@@ -182,13 +224,13 @@ func start_retreat() -> bool:
 			unit.target = null
 			unit.has_goal = false
 	print("Myrial: party retreat started at ", _elapsed_ms, " ms")
-	return true
 
 
 ## C04: cancels the retreat. The units stay where they are with no orders
-## (nothing from before the retreat comes back).
+## (nothing from before the retreat comes back). C07: a forced retreat
+## cannot be cancelled.
 func cancel_retreat() -> bool:
-	if not is_retreating():
+	if not is_retreating() or _forced_retreat:
 		return false
 	_retreating = false
 	for unit in _friends:
@@ -200,6 +242,20 @@ func cancel_retreat() -> bool:
 
 func get_elapsed_ms() -> int:
 	return _elapsed_ms
+
+
+## C07: the Combat Clock (0 until FIGHTING; stops at COMBAT_TIME_LIMIT_MS).
+func get_combat_clock_ms() -> int:
+	return _combat_clock_ms
+
+
+## C07: whether the Combat Clock reached its limit (the retreat is forced).
+func is_time_up() -> bool:
+	return _time_up
+
+
+func is_forced_retreat() -> bool:
+	return _forced_retreat
 
 
 func get_preparation_remaining_ms() -> int:
@@ -246,7 +302,7 @@ func get_selected() -> CombatUnit:
 
 ## C06: whether `unit` could be given its Skill now.
 func get_skill_readiness(unit: CombatUnit) -> SkillReadiness:
-	if unit == null or unit.skill.is_empty() or not unit.alive or _phase != Phase.FIGHTING or _retreating:
+	if unit == null or unit.skill.is_empty() or not unit.alive or _phase != Phase.FIGHTING or _retreating or _gesture_open:
 		return SkillReadiness.UNAVAILABLE
 	if unit.skill_state == CombatUnit.SkillState.CASTING:
 		return SkillReadiness.CASTING
@@ -279,6 +335,100 @@ func get_guard_remaining(unit: CombatUnit) -> int:
 ## C06: the last AoE ({"cells": Array[Vector2i], "at_ms": int}; empty: none).
 func get_last_aoe() -> Dictionary:
 	return _last_aoe
+
+
+# --- Gesture (C07) -------------------------------------------------------------------------------
+
+## Whether the Hero could open the Gesture Window now.
+func get_gesture_readiness() -> GestureReadiness:
+	var hero := get_hero()
+	if hero == null or not hero.alive or _phase != Phase.FIGHTING or _retreating:
+		return GestureReadiness.UNAVAILABLE
+	if _gesture_open:
+		return GestureReadiness.OPEN
+	if hero.skill_state == CombatUnit.SkillState.CASTING:
+		return GestureReadiness.CASTING
+	if _gesture_ready_at_ms > _elapsed_ms:
+		return GestureReadiness.COOLDOWN
+	if hero.mp < CombatConfig.GESTURE_MP_COST:
+		return GestureReadiness.NO_MP
+	return GestureReadiness.READY
+
+
+func is_gesture_open() -> bool:
+	return _gesture_open
+
+
+## Milliseconds left before the open window times out (0: closed).
+func get_gesture_remaining_ms() -> int:
+	return maxi(_gesture_deadline_ms - _combat_clock_ms, 0) if _gesture_open else 0
+
+
+## Milliseconds of Gesture cooldown left (battle time: paused with the field).
+func get_gesture_cooldown_remaining() -> int:
+	return maxi(_gesture_ready_at_ms - _elapsed_ms, 0)
+
+
+func get_last_gesture() -> Dictionary:
+	return _last_gesture
+
+
+## Opens the Gesture Window (no MP paid yet). A pending Normal Skill of the
+## Hero is replaced (its earlier order comes back); a casting Hero must wait.
+func open_gesture() -> bool:
+	if get_gesture_readiness() != GestureReadiness.READY:
+		return false
+	var hero := get_hero()
+	if hero.skill_state == CombatUnit.SkillState.PENDING:
+		print("Myrial: combat skill of ", hero.id, " replaced by the Gesture")
+		_end_skill(hero, true)
+	_aiming = false
+	_gesture_open = true
+	_gesture_deadline_ms = _combat_clock_ms + CombatConfig.GESTURE_WINDOW_MS
+	print("Myrial: combat gesture opened at clock ", _combat_clock_ms, " ms")
+	return true
+
+
+## Submits a finished stroke (drawing-area units, see GestureMatcher). A
+## stroke too short to be an attempt is ignored (the window stays open) and
+## an empty Dictionary is returned; otherwise the Gesture resolves.
+func submit_gesture(stroke: PackedVector2Array) -> Dictionary:
+	if not _gesture_open or not GestureMatcher.is_submittable(stroke):
+		return {}
+	var match_score := GestureMatcher.score(stroke)
+	return _resolve_gesture(GestureMatcher.grade_for(match_score), match_score, false)
+
+
+func _resolve_gesture(grade: GestureMatcher.Grade, match_score: int, timeout: bool) -> Dictionary:
+	var hero := get_hero()
+	_gesture_open = false
+	var failed := grade == GestureMatcher.Grade.FAIL
+	var cost := CombatConfig.GESTURE_FAIL_MP_COST if failed else CombatConfig.GESTURE_MP_COST
+	hero.mp -= cost
+	_gesture_ready_at_ms = _elapsed_ms + CombatConfig.GESTURE_COOLDOWN_MS
+	var damage: int = CombatConfig.GESTURE_BASE_DAMAGE * CombatConfig.GESTURE_DAMAGE_PERCENT[grade] / 100
+	var targets: Array[CombatUnit] = []
+	if not failed:
+		targets = GestureTargets.pick(_enemies, CombatConfig.GESTURE_MAX_TARGETS, gesture_rng)
+	_last_gesture = {"grade": grade, "score": match_score, "damage": damage, "targets": targets, "mp_cost": cost, "timeout": timeout}
+	print("Myrial: combat gesture ", GestureMatcher.Grade.keys()[grade], " (", match_score, ") at clock ", _combat_clock_ms, " ms: ", targets.size(), " x ", damage)
+	for enemy in targets:
+		resolve_damage(hero, enemy, damage)
+	gesture_resolved.emit(_last_gesture)
+	return _last_gesture
+
+
+## The Combat Clock reached its limit: an open window closes with no effect,
+## no MP and no cooldown; the C04 retreat is forced.
+func _on_time_up() -> void:
+	_time_up = true
+	if _gesture_open:
+		_gesture_open = false
+		print("Myrial: combat gesture cancelled by the time limit")
+	_forced_retreat = true
+	if not _retreating:
+		_begin_retreat()
+	print("Myrial: combat time up at ", _combat_clock_ms, " ms: forced retreat")
 
 
 ## C06: the cells an AoE centred on `center` hits: the cell and its four
@@ -317,7 +467,7 @@ func unit_at(cell: Vector2i) -> CombatUnit:
 
 ## Selects an alive friendly unit. Returns whether it is selected.
 func select_unit(unit: CombatUnit) -> bool:
-	if is_over() or unit == null or not unit.alive or unit.team != CombatUnit.Team.FRIEND:
+	if is_over() or _gesture_open or unit == null or not unit.alive or unit.team != CombatUnit.Team.FRIEND:
 		return false
 	_selected = unit
 	_aiming = false
@@ -327,7 +477,7 @@ func select_unit(unit: CombatUnit) -> bool:
 ## Moves the selected unit to `cell` (drops its target). Refused outside the
 ## grid, outside the preparation area during PREPARATION, or once over.
 func command_move(cell: Vector2i) -> bool:
-	if is_over() or is_retreating() or _selected == null or not _selected.alive or not is_cell_allowed(_selected, cell):
+	if is_over() or is_retreating() or _gesture_open or _selected == null or not _selected.alive or not is_cell_allowed(_selected, cell):
 		return false
 	if not _ordinary_command_allowed(_selected):
 		return false
@@ -340,7 +490,7 @@ func command_move(cell: Vector2i) -> bool:
 ## The selected unit attacks `enemy` (approaching it first when out of range;
 ## drops any move command). Only while FIGHTING, only an alive enemy.
 func command_target(enemy: CombatUnit) -> bool:
-	if _phase != Phase.FIGHTING or is_retreating() or _selected == null or not _selected.alive:
+	if _phase != Phase.FIGHTING or is_retreating() or _gesture_open or _selected == null or not _selected.alive:
 		return false
 	if enemy == null or not enemy.alive or enemy.team != CombatUnit.Team.ENEMY:
 		return false
@@ -410,6 +560,8 @@ func is_aiming() -> bool:
 ## One tap on `cell`: a friendly unit there is selected, an enemy there is
 ## targeted, any other cell is a move destination.
 func tap(cell: Vector2i) -> bool:
+	if _gesture_open:
+		return false
 	var unit := unit_at(cell)
 	# C06: while aiming, an enemy is the Skill target; any other tap cancels.
 	if is_aiming():
@@ -427,6 +579,10 @@ func tap(cell: Vector2i) -> bool:
 
 ## Runs the battle for `ms` milliseconds. PREPARATION ends exactly at
 ## PREPARATION_MS (once); what remains of `ms` is already FIGHTING.
+## C07: FIGHTING time also runs the Combat Clock. While the Gesture Window is
+## open only the clock (and the window's countdown) moves: no tick, and the
+## battle time stays put. The time is split exactly at the Combat time limit
+## and at the window's timeout; the time limit is handled first.
 func advance(ms: int) -> void:
 	while ms > 0 and not is_over():
 		if _phase == Phase.PREPARATION:
@@ -436,10 +592,26 @@ func advance(ms: int) -> void:
 			ms -= chunk
 			if _elapsed_ms >= CombatConfig.PREPARATION_MS:
 				_set_phase(Phase.FIGHTING)
-		else:
-			_tick(ms)
-			_elapsed_ms += ms
-			ms = 0
+			continue
+		var step := ms
+		if not _time_up:
+			step = mini(step, CombatConfig.COMBAT_TIME_LIMIT_MS - _combat_clock_ms)
+		if _gesture_open:
+			step = mini(step, _gesture_deadline_ms - _combat_clock_ms)
+		if step > 0:
+			if not _gesture_open:
+				_tick(step)
+				_elapsed_ms += step
+			if not _time_up:
+				_combat_clock_ms += step
+			ms -= step
+		if is_over():
+			return
+		if not _time_up and _combat_clock_ms >= CombatConfig.COMBAT_TIME_LIMIT_MS:
+			_on_time_up()
+		elif _gesture_open and _combat_clock_ms >= _gesture_deadline_ms:
+			print("Myrial: combat gesture window timed out")
+			_resolve_gesture(GestureMatcher.Grade.FAIL, 0, true)
 
 
 func _tick(ms: int) -> void:
@@ -737,6 +909,7 @@ func _set_phase(phase: Phase) -> void:
 	_phase = phase
 	if is_over():
 		_aiming = false
+		_gesture_open = false
 		var outcome := {Phase.VICTORY: BattleResult.Outcome.VICTORY, Phase.DEFEAT: BattleResult.Outcome.DEFEAT, Phase.RETREAT: BattleResult.Outcome.RETREAT}[phase] as BattleResult.Outcome
 		_result = BattleResult.create(encounter_id, outcome, group_monster_ids)
 		# C05: the reward facts at settlement — the EXP pool and the friendly
