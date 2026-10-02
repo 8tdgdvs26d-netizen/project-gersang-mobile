@@ -47,7 +47,39 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C06 corrective: Normal Skill approved-behaviour alignment. Runtime only; save version stays 9.
+Combat C07: Minimum Gesture Skill. Runtime only; save version stays 9 (nothing about the Gesture or
+the Combat Clock is saved).
+
+- Hero only, one symbol: Lightning (⚡). The Hero's MP is 200 (shared with its Normal Skill, still
+  25); Merc A / B stay at 100. `CombatConfig.GESTURE_*`, `HERO_MAX_MP`, `COMBAT_TIME_LIMIT_MS`
+- 「閃電」 button (shown only while the Hero is selected; disabled in PREPARATION, while the Hero
+  casts a Normal Skill, cooling down or below 50 MP). It opens the Gesture Window: a dimmed overlay
+  that takes every touch (no close button), a faint ⚡ guide, the stroke, 「剩餘 N 秒」 and the
+  running Combat Clock. One stroke; lifting the finger submits it (a touch shorter than 0.05 of the
+  area is ignored). A pending Normal Skill of the Hero is replaced (its earlier order resumes); a
+  casting Hero must finish first
+- while the window is open the battlefield is paused: `advance()` runs only the Combat Clock and
+  the window countdown, the battle time that every C06 timer, step and Basic Attack uses stands
+  still, and every battlefield command is refused. No global time stop
+- `GestureMatcher` (deterministic geometry, no recognition): stroke and guide resampled to 32
+  points; mean point-to-point deviation d (order, direction, position); shape 100 while
+  d <= 0.04, then -5 per 0.01; x coverage (guide points within 0.08 of the stroke); missing either
+  key turn (0.10) caps at 59; shorter than 30% of the guide = 0. Exactly 100 Perfect (120 damage),
+  80-99 Success (100), 60-79 Partial (50), below 60 Fail (0). Constants in `gesture_matcher.gd`
+- Perfect / Success / Partial: 50 MP; Fail or the 10 s window timeout: 25 MP; either way the
+  Gesture's own 15 s cooldown (battle time). Up to 10 random alive enemies hit
+  (`GestureTargets.pick`, `CombatBattle.gesture_rng` — seed it to replay); hits go through
+  `resolve_damage`, so kills count for C05 EXP and the usual VICTORY
+- Combat Clock: 00:00 when FIGHTING starts (PREPARATION not counted), shown as 「戰鬥時間 MM:SS /
+  05:00」, running also while the window is open. At 05:00 (once) an open window closes with no
+  effect, MP or cooldown, and the C04 retreat is forced: 「時間到　強制撤退」, 「強制撤退中」
+  cannot be cancelled (a manual retreat still can). The rest is the C04 / C02 lifecycle (RETREAT
+  result, C05 EXP, groups reset, 5 s protection); a Full Party Wipe is still DEFEAT. The time-up
+  wins over a Gesture timeout at the same moment
+- the result line (「閃電 完美！100 分　120 傷害 × 10」 etc.) shows for 1.5 s of UI time only
+- tests: `tests/verify_c07_gesture_skill.gd`
+
+Previous: Combat C06 corrective: Normal Skill approved-behaviour alignment. Runtime only; save version stays 9.
 
 - PREPARATION shows the selected unit's Normal Skill (「緩速：戰鬥開始後可用」 etc.) and the 魔力 /
   status line; the button stays disabled and a press changes nothing (no aim, pending, cast, MP or

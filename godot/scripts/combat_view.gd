@@ -62,6 +62,28 @@ const AOE_TEXT := "範圍 -%d"
 ## How long the AoE cells stay marked (battle time).
 const AOE_MARK_MS := 600
 const EXIT_TEXT := "返回世界"
+## C07 Gesture / Combat Clock (functional Prototype presentation).
+const CLOCK_TEXT := "戰鬥時間 %02d:%02d / 05:00"
+const TIME_UP_TEXT := "時間到　強制撤退"
+const FORCED_RETREAT_BUTTON_TEXT := "強制撤退中"
+const GESTURE_READY_TEXT := "閃電（魔力 %d）"
+const GESTURE_PREPARATION_TEXT := "閃電：戰鬥開始後可用"
+const GESTURE_OPEN_TEXT := "畫符中…"
+const GESTURE_CASTING_TEXT := "閃電：施法完成後可用"
+const GESTURE_COOLDOWN_TEXT := "閃電：冷卻 %.1f 秒"
+const GESTURE_NO_MP_TEXT := "閃電：魔力不足"
+const GESTURE_TITLE_TEXT := "沿淡色閃電一筆畫出，放手即完成"
+const GESTURE_COUNTDOWN_TEXT := "剩餘 %d 秒"
+const GESTURE_CLOCK_TEXT := "戰鬥時間 %02d:%02d（繼續計時）"
+const GESTURE_GRADE_TEXTS := ["完美", "成功", "部分", "失敗"]
+const GESTURE_HIT_TEXT := "閃電 %s！%d 分　%d 傷害 × %d"
+const GESTURE_FAIL_TEXT := "閃電 失敗　%d 分"
+const GESTURE_TIMEOUT_TEXT := "閃電 時間到　失敗"
+## How long the Gesture result stays on screen (UI time only: real seconds,
+## independent of the battle and the Combat Clock).
+const GESTURE_FEEDBACK_SECONDS := 1.5
+## The square drawing area of the Gesture Window (screen pixels).
+const GESTURE_AREA := Rect2(80.0, 360.0, 560.0, 560.0)
 
 var _battle: CombatBattle
 var _field: Field
@@ -76,6 +98,16 @@ var _exit_button: Button
 var _retreat_button: Button
 var _skill_button: Button
 var _skill_label: Label
+var _clock_label: Label
+var _gesture_button: Button
+var _gesture_overlay: GestureOverlay
+var _gesture_result_label: Label
+var _gesture_countdown_label: Label
+var _gesture_clock_label: Label
+## C07: the stroke being drawn (drawing-area units, see GestureMatcher).
+var _stroke := PackedVector2Array()
+var _drawing := false
+var _feedback_left := 0.0
 var _carry_ms := 0.0
 
 
@@ -139,6 +171,35 @@ func _ready() -> void:
 	add_child(_skill_button)
 	_skill_label = _label("SkillLabel", 330.0, 20, Color(0.7, 0.85, 1.0))
 	_skill_label.offset_bottom = _skill_label.offset_top + 64.0
+	# C07: Combat Clock, the Hero's Gesture button and the result line.
+	_clock_label = _label("ClockLabel", 100.0, 26, Color(0.85, 0.85, 0.9))
+	_gesture_button = Button.new()
+	_gesture_button.name = "GestureButton"
+	_gesture_button.focus_mode = Control.FOCUS_NONE
+	_gesture_button.add_theme_font_size_override("font_size", 30)
+	_gesture_button.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_gesture_button.offset_left = -220.0
+	_gesture_button.offset_right = 220.0
+	_gesture_button.offset_top = _skill_button.offset_bottom + 20.0
+	_gesture_button.offset_bottom = _gesture_button.offset_top + 80.0
+	_gesture_button.pressed.connect(press_gesture)
+	add_child(_gesture_button)
+	_gesture_result_label = _label("GestureResultLabel", FIELD_TOP + 10.0, 34, Color(1.0, 0.9, 0.4))
+	# The Gesture Window: on top of everything, it takes every touch.
+	_gesture_overlay = GestureOverlay.new()
+	_gesture_overlay.name = "GestureOverlay"
+	_gesture_overlay.view = self
+	_gesture_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_gesture_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_gesture_overlay.visible = false
+	add_child(_gesture_overlay)
+	var title := _label("GestureTitle", 230.0, 30, Color(0.95, 0.95, 1.0))
+	_gesture_countdown_label = _label("GestureCountdown", 280.0, 30, Color(1.0, 0.85, 0.4))
+	_gesture_clock_label = _label("GestureClock", 940.0, 26, Color(0.85, 0.85, 0.9))
+	for label in [title, _gesture_countdown_label, _gesture_clock_label]:
+		remove_child(label)
+		_gesture_overlay.add_child(label)
+	title.text = GESTURE_TITLE_TEXT
 	_refresh()
 
 
@@ -159,11 +220,18 @@ func _label(label_name: String, top: float, font_size: int, color: Color) -> Lab
 func open(battle: CombatBattle) -> void:
 	_battle = battle
 	_carry_ms = 0.0
+	_stroke.clear()
+	_drawing = false
+	_feedback_left = 0.0
+	_gesture_result_label.text = ""
+	battle.gesture_resolved.connect(_on_gesture_resolved)
 	visible = true
 	_refresh()
 
 
 func close() -> void:
+	if _battle != null and _battle.gesture_resolved.is_connected(_on_gesture_resolved):
+		_battle.gesture_resolved.disconnect(_on_gesture_resolved)
 	_battle = null
 	visible = false
 
@@ -185,7 +253,9 @@ func _physics_process(delta: float) -> void:
 	_battle.advance(ms)
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	# C07: the Gesture result shows for a moment of UI time only.
+	_feedback_left = maxf(_feedback_left - delta, 0.0)
 	if _battle != null:
 		_refresh()
 
@@ -313,6 +383,95 @@ func get_skill_status_text() -> String:
 	return "　".join(parts) + "\n" + (SLOWED_ENEMIES_TEXT % slowed)
 
 
+## C07: the 閃電 button (selected Hero only): opens the Gesture Window.
+func press_gesture() -> bool:
+	if _battle == null or not _battle.open_gesture():
+		return false
+	_stroke.clear()
+	_drawing = false
+	_refresh()
+	return true
+
+
+## C07: the 閃電 button text ("" when it is not shown).
+func get_gesture_button_text() -> String:
+	if _battle == null or _battle.get_selected() == null or not _battle.get_selected().is_hero:
+		return ""
+	if _battle.get_phase() == CombatBattle.Phase.PREPARATION:
+		return GESTURE_PREPARATION_TEXT
+	match _battle.get_gesture_readiness():
+		CombatBattle.GestureReadiness.OPEN:
+			return GESTURE_OPEN_TEXT
+		CombatBattle.GestureReadiness.CASTING:
+			return GESTURE_CASTING_TEXT
+		CombatBattle.GestureReadiness.COOLDOWN:
+			return GESTURE_COOLDOWN_TEXT % (_battle.get_gesture_cooldown_remaining() / 1000.0)
+		CombatBattle.GestureReadiness.NO_MP:
+			return GESTURE_NO_MP_TEXT
+	return GESTURE_READY_TEXT % CombatConfig.GESTURE_MP_COST
+
+
+## C07: the Combat Clock line ("" outside FIGHTING).
+func get_clock_text() -> String:
+	if _battle == null or _battle.get_phase() != CombatBattle.Phase.FIGHTING:
+		return ""
+	if _battle.is_time_up():
+		return TIME_UP_TEXT
+	var seconds := _battle.get_combat_clock_ms() / 1000
+	return CLOCK_TEXT % [seconds / 60, seconds % 60]
+
+
+## C07: the Gesture Window's stroke, in screen pixels (one stroke; lifting
+## the finger submits it — a too-short touch is ignored and the window stays).
+func begin_stroke(screen_position: Vector2) -> void:
+	if _battle == null or not _battle.is_gesture_open():
+		return
+	_stroke.clear()
+	_stroke.append(_to_area(screen_position))
+	_drawing = true
+
+
+func extend_stroke(screen_position: Vector2) -> void:
+	if _drawing:
+		_stroke.append(_to_area(screen_position))
+
+
+func end_stroke() -> Dictionary:
+	if not _drawing or _battle == null:
+		return {}
+	_drawing = false
+	var result := _battle.submit_gesture(_stroke)
+	if result.is_empty():
+		_stroke.clear()
+	_refresh()
+	return result
+
+
+func get_stroke() -> PackedVector2Array:
+	return _stroke
+
+
+func _to_area(screen_position: Vector2) -> Vector2:
+	return (screen_position - GESTURE_AREA.position) / GESTURE_AREA.size.x
+
+
+func _on_gesture_resolved(result: Dictionary) -> void:
+	_stroke.clear()
+	_drawing = false
+	var grade: int = result["grade"]
+	if result["timeout"]:
+		_gesture_result_label.text = GESTURE_TIMEOUT_TEXT
+	elif grade == GestureMatcher.Grade.FAIL:
+		_gesture_result_label.text = GESTURE_FAIL_TEXT % result["score"]
+	else:
+		_gesture_result_label.text = GESTURE_HIT_TEXT % [GESTURE_GRADE_TEXTS[grade], result["score"], result["damage"], result["targets"].size()]
+	_feedback_left = GESTURE_FEEDBACK_SECONDS
+
+
+func get_gesture_result_text() -> String:
+	return _gesture_result_label.text if _feedback_left > 0.0 else ""
+
+
 ## C04: the 撤退 / 取消撤退 button: starts or cancels the party retreat.
 func toggle_retreat() -> bool:
 	if _battle == null:
@@ -326,6 +485,10 @@ func _refresh() -> void:
 	if _status_label == null:
 		return
 	_exit_button.visible = _battle != null and _battle.is_over()
+	if _battle == null:
+		_gesture_overlay.visible = false
+		_gesture_button.visible = false
+		_clock_label.visible = false
 	_retreat_button.visible = _battle != null and _battle.get_phase() == CombatBattle.Phase.FIGHTING
 	# C06 fix: the Skill UI shows from PREPARATION on (the button stays
 	# disabled until FIGHTING; the battle refuses Skills before that anyway).
@@ -338,6 +501,23 @@ func _refresh() -> void:
 		_skill_button.disabled = not _battle.is_aiming() and _battle.get_skill_readiness(_battle.get_selected()) != CombatBattle.SkillReadiness.READY
 	_skill_label.text = get_skill_status_text() if _skill_label.visible else ""
 	_retreat_button.text = CANCEL_RETREAT_TEXT if _battle.is_retreating() else RETREAT_BUTTON_TEXT
+	# C07: a forced retreat cannot be cancelled.
+	_retreat_button.disabled = _battle.is_forced_retreat()
+	if _battle.is_forced_retreat():
+		_retreat_button.text = FORCED_RETREAT_BUTTON_TEXT
+	_clock_label.text = get_clock_text()
+	_clock_label.visible = _clock_label.text != ""
+	var gesture_text := get_gesture_button_text()
+	_gesture_button.visible = gesture_text != "" and _skill_label.visible and not _battle.is_retreating()
+	_gesture_button.text = gesture_text
+	_gesture_button.disabled = _battle.get_gesture_readiness() != CombatBattle.GestureReadiness.READY
+	_gesture_overlay.visible = _battle.is_gesture_open()
+	if _gesture_overlay.visible:
+		var seconds := _battle.get_combat_clock_ms() / 1000
+		_gesture_countdown_label.text = GESTURE_COUNTDOWN_TEXT % ceili(_battle.get_gesture_remaining_ms() / 1000.0)
+		_gesture_clock_label.text = GESTURE_CLOCK_TEXT % [seconds / 60, seconds % 60]
+		_gesture_overlay.queue_redraw()
+	_gesture_result_label.visible = get_gesture_result_text() != ""
 	match _battle.get_phase():
 		CombatBattle.Phase.PREPARATION:
 			_status_label.text = PREPARATION_TEXT % ceili(_battle.get_preparation_remaining_ms() / 1000.0)
@@ -402,6 +582,10 @@ class Field extends Control:
 				draw_rect(Rect2(left + cell.x * cell_size.x, CombatView.FIELD_TOP + cell.y * cell_size.y, cell_size.x, cell_size.y), Color(1.0, 0.55, 0.15, 0.5))
 			var center: Vector2i = aoe["cells"][0]
 			draw_string(get_theme_default_font(), view.cell_center(Vector2(center)) + Vector2(-40.0, -40.0), CombatView.AOE_TEXT % CombatConfig.AOE_DAMAGE, HORIZONTAL_ALIGNMENT_CENTER, 80.0, 18, Color(1.0, 0.85, 0.4))
+		# C07: the last Gesture's targets, while its result shows.
+		if view.get_gesture_result_text() != "" and battle.get_last_gesture().has("targets"):
+			for unit: CombatUnit in battle.get_last_gesture()["targets"]:
+				draw_arc(view.cell_center(unit.visual_cell()), 24.0, 0.0, TAU, 32, Color(1.0, 0.95, 0.3), 4.0)
 		for unit in battle.get_enemies():
 			_draw_unit(unit, Color(0.55, 0.3, 0.85) if battle.get_slow_remaining(unit) > 0 else Color(0.85, 0.25, 0.2))
 			if battle.get_slow_remaining(unit) > 0:
@@ -440,3 +624,39 @@ class Field extends Control:
 		var bar := Rect2(center + Vector2(-20.0, -34.0), Vector2(40.0, 6.0))
 		draw_rect(bar, Color(0.2, 0.05, 0.05))
 		draw_rect(Rect2(bar.position, Vector2(bar.size.x * unit.hp / unit.max_hp, bar.size.y)), Color(0.3, 0.9, 0.35))
+
+
+## C07: the Gesture Window — a dimmed screen over the battle with the drawing
+## area, the faint ⚡ guide and the player's stroke. It takes every touch, so
+## nothing reaches the battlefield while it is open (no close button).
+class GestureOverlay extends Control:
+	var view: CombatView
+
+	func _gui_input(event: InputEvent) -> void:
+		# Touch arrives as emulated mouse events; desktop drags the same way.
+		var click := event as InputEventMouseButton
+		if click != null and click.button_index == MOUSE_BUTTON_LEFT:
+			if click.pressed:
+				view.begin_stroke(click.position)
+			else:
+				view.end_stroke()
+		var motion := event as InputEventMouseMotion
+		if motion != null and motion.button_mask & MOUSE_BUTTON_MASK_LEFT:
+			view.extend_stroke(motion.position)
+		accept_event()
+
+	func _draw() -> void:
+		draw_rect(Rect2(Vector2.ZERO, size), Color(0.0, 0.0, 0.05, 0.82))
+		var area := CombatView.GESTURE_AREA
+		draw_rect(area, Color(0.12, 0.12, 0.18, 0.95))
+		draw_rect(area, Color(1, 1, 1, 0.25), false, 2.0)
+		var guide := PackedVector2Array()
+		for point in GestureMatcher.GUIDE:
+			guide.append(area.position + point * area.size.x)
+		draw_polyline(guide, Color(1.0, 0.95, 0.5, 0.28), 26.0)
+		var stroke := view.get_stroke()
+		if stroke.size() >= 2:
+			var screen := PackedVector2Array()
+			for point in stroke:
+				screen.append(area.position + point * area.size.x)
+			draw_polyline(screen, Color(0.6, 0.85, 1.0), 8.0)

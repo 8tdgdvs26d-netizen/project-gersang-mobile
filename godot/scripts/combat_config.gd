@@ -89,3 +89,28 @@ const AOE_DAMAGE := 40
 const HERO_SKILL := {"kind": "slow", "range": 3}
 const MERC_A_SKILL := {"kind": "guard", "range": 0}
 const MERC_B_SKILL := {"kind": "aoe", "range": 5}
+
+## C07 Minimum Gesture Skill (Prototype values approved for C07, not final
+## balance). Only the Hero has it (one symbol: Lightning). The Hero's MP pool
+## is HERO_MAX_MP (shared with its Normal Skill); the Mercenaries keep MAX_MP.
+const HERO_MAX_MP := 200
+## Opening the Gesture Window needs GESTURE_MP_COST MP; the MP is paid when
+## the Gesture resolves: GESTURE_MP_COST for Perfect / Success / Partial,
+## GESTURE_FAIL_MP_COST for Fail or the window timeout. Either way the
+## Gesture cooldown (its own, not the Normal Skill's) starts.
+const GESTURE_MP_COST := 50
+const GESTURE_FAIL_MP_COST := 25
+const GESTURE_COOLDOWN_MS := 15000
+## The Gesture Window closes as a Fail after this long (Combat Clock time).
+const GESTURE_WINDOW_MS := 10000
+## Damage to each affected enemy = GESTURE_BASE_DAMAGE x percent of the grade
+## (GestureMatcher.Grade order: Perfect, Success, Partial, Fail).
+const GESTURE_BASE_DAMAGE := 100
+const GESTURE_DAMAGE_PERCENT := [120, 100, 50, 0]
+## At most this many alive enemies, picked at random, are affected.
+const GESTURE_MAX_TARGETS := 10
+
+## C07 Combat Clock: starts at 0 when FIGHTING begins (PREPARATION does not
+## count) and keeps running while the Gesture Window pauses the battlefield.
+## Reaching the limit forces the C04 Retreat (not cancellable).
+const COMBAT_TIME_LIMIT_MS := 300000
