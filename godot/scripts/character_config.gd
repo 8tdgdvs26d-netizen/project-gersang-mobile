@@ -16,6 +16,11 @@ const ALLOCATABLE := ["hp", "str", "agi", "int"]
 ## The fixed Prototype combat party (no fourth character; Stage 8 brings the
 ## held / deployed Mercenary model).
 const PROTOTYPE_CHARACTERS := ["hero", "merc_a", "merc_b"]
+## Stage 7 corrective: the player-facing labels of the three characters
+## (Character UI, combat info, result). TEMPORARY Prototype functional labels
+## from each character's approved combat role (Merc A guards, Merc B casts),
+## NOT permanent Canonical names.
+const DISPLAY_NAMES := {"hero": "主角", "merc_a": "傭兵A（守護）", "merc_b": "傭兵B（術法）"}
 
 ## Base Stats. HP / MP are the C01-C08 values (unchanged); STR / AGI / INT
 ## are the approved S01 placeholders (10 each; STR 10 is the existing

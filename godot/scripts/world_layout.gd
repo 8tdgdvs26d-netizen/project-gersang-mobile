@@ -68,6 +68,10 @@ const PROTOTYPE_MONSTER_PATROL_PAUSES := [0.0, 1.2, 0.0, 0.8, 0.0, 0.0, 1.5, 0.0
 ## positions: west of group 1 → one group; north between groups 1 and 2 →
 ## two (out of group 3's reach); the middle → three. No group's aggro reaches
 ## the new-game spawn or a city return point.
+## Stage 7 corrective — PROTOTYPE TUNABLE: a World Enemy Group defeated in a
+## committed VICTORY comes back this long after the player returned to the
+## world (GroupRespawn; runtime only, never saved).
+const GROUP_RESPAWN_MS := 10000
 const PROTOTYPE_GROUPS := [
 	{
 		"id": PROTOTYPE_MONSTER_ID,

@@ -73,6 +73,18 @@ func watch(monsters: Array, player: Node2D, is_world: Callable, time_source: Tim
 		monster.player_contacted.connect(_on_player_contacted)
 
 
+## Stage 7 corrective: watches one more group (a respawned one; see
+## GroupRespawn), under the current protection. Refused (false) while a group
+## with the same id is still watched.
+func watch_monster(monster: WorldMonster) -> bool:
+	if _monsters.has(monster.monster_id) and is_instance_valid(_monsters[monster.monster_id]):
+		return false
+	_monsters[monster.monster_id] = monster
+	monster.player_contacted.connect(_on_player_contacted)
+	monster.set_aggro_suppressed(_protected)
+	return true
+
+
 func is_protected() -> bool:
 	return _protected
 
@@ -142,8 +154,9 @@ func cancel_pending_encounter() -> bool:
 ## pending encounter is cleared, then:
 ##   groups_defeated  every participating group leaves the current world
 ##                    instance (unwatched, removed from the tree, freed; never
-##                    reset home). A relaunch rebuilds the fixed Prototype
-##                    groups from main.tscn (session only)
+##                    reset home). Stage 7 corrective: main.gd brings the
+##                    group back later (GroupRespawn); a relaunch rebuilds
+##                    the fixed Prototype groups from main.tscn
 ##   otherwise        every participating group is released and reset home
 ## Groups that did not take part are untouched.
 func resolve_encounter(encounter_id: String, groups_defeated: bool) -> bool:

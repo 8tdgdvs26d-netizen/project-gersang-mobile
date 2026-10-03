@@ -772,7 +772,7 @@ func _verify_in_game() -> void:
 	(view.get_node("InfoButton1") as Button).pressed.emit()
 	await process_frame
 	var info := (view.get_node("InfoPanel/InfoText") as Label).text
-	_check((view.get_node("InfoPanel") as Control).visible and info.contains("傭兵A") and info.contains("生命 200 / 200") and info.contains("魔力 100 / 100") and info.contains("等級 1") and info.contains("經驗 0") and info.contains("攻擊 15") and info.contains("攻擊距離 1 格") and info.contains("守護"), "ⓘ: name, HP, MP, Level, EXP, combat values, Skill (%s)" % info)
+	_check((view.get_node("InfoPanel") as Control).visible and info.contains("傭兵A") and info.contains("血量 200 / 200") and info.contains("魔力 100 / 100") and info.contains("等級 1") and info.contains("經驗 0") and info.contains("攻擊 15") and info.contains("攻擊距離 1 格") and info.contains("守護"), "ⓘ: name, HP, MP, Level, EXP, combat values, Skill (%s)" % info)
 	_check(battle.get_selection() == [hero, merc_a, merc_b], "ⓘ does not change the selection")
 	texts.append(info)
 	(view.get_node("InfoPanel/InfoClose") as Button).pressed.emit()
