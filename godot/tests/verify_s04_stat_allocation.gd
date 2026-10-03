@@ -234,6 +234,14 @@ func _verify_in_game() -> void:
 	await process_frame
 	var joystick := main.get_node("TouchControls/Joystick") as Node
 	_check(panel.is_open() and not joystick.is_processing_input(), "Character UI open: the joystick is paused")
+	# Keyboard movement is locked too (Codex review on #109).
+	var player := main.get_node("Actors/Player") as Player
+	var spot := player.global_position
+	Input.action_press("move_right")
+	for frame in range(10):
+		await physics_frame
+	Input.action_release("move_right")
+	_check(player.movement_locked and player.global_position == spot, "Character UI open: keyboard movement locked, the player stays put")
 	var capacity: int = main.inventory.get_max_capacity()
 	(panel.get_node("Panel/Plus_str") as Button).pressed.emit()
 	(panel.get_node("Panel/Plus_str") as Button).pressed.emit()
@@ -242,7 +250,7 @@ func _verify_in_game() -> void:
 	_check(hero.get_allocated_points("str") == 2 and main.inventory.get_max_capacity() == capacity + 18 and hero.get_unspent_points() == 1, "Confirmed: STR +2, backpack +18, 1 point left")
 	(panel.get_node("Panel/CloseButton") as Button).pressed.emit()
 	await process_frame
-	_check(not panel.is_open() and joystick.is_processing_input(), "Closed: the joystick works again")
+	_check(not panel.is_open() and joystick.is_processing_input() and not player.movement_locked, "Closed: the joystick and keyboard movement work again")
 	# A battle uses it; the settlement resync keeps it.
 	battle = await _locked_battle_far(main)
 	_check(battle != null and battle.get_hero().attack_damage == 20 + 1 + 2, "AC13 The next battle: Hero ATK 23 (base 20 + Growth 1 + 2 allocated)")

@@ -565,15 +565,21 @@ func _can_open_character_panel() -> bool:
 	return location.is_in_world() and not _combat_view.is_open() and _encounter_session.get_phase() == EncounterSession.Phase.NONE
 
 
-## S04: no walking while the Character UI is open (the joystick reads every
-## touch); back when it closes.
+## S04: no walking while the Character UI is open — neither the joystick
+## (it reads every touch) nor the keyboard (the player's movement is locked);
+## back when it closes. An encounter that starts meanwhile closes the panel
+## and keeps its own lock (EncounterSession owns it then).
 func _on_character_panel_opened() -> void:
 	_joystick.release()
 	_joystick.set_process_input(false)
+	_player.movement_locked = true
+	_player.velocity = Vector2.ZERO
 
 
 func _on_character_panel_closed() -> void:
 	_joystick.set_process_input(location.is_in_world() and not _combat_view.is_open())
+	if _encounter_session.get_phase() == EncounterSession.Phase.NONE:
+		_player.movement_locked = false
 
 
 ## S01: character id -> CharacterStats of the fixed combat party (the Hero is
