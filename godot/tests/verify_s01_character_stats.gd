@@ -172,7 +172,8 @@ func _verify_static() -> void:
 	for word in ["allocated", "equipment", "\"agi\"", "\"int\"", "merc_stats"]:
 		_check(not save_code.contains(word), "save_store.gd saves no %s" % word)
 	var stats_code := FileAccess.get_file_as_string("res://scripts/character_stats.gd") + FileAccess.get_file_as_string("res://scripts/character_config.gd")
-	for word in ["level", "exp", "merc_c", "hospital", "crit", "dodge"]:
+	# S03 brought Level growth into the stats model ("level" left this list).
+	for word in ["exp", "merc_c", "hospital", "crit", "dodge"]:
 		_check(not stats_code.to_lower().contains(word), "Stats code has no %s (out of S01 scope)" % word)
 	_check(CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"] and CharacterConfig.BASE.size() == 3, "Exactly the three fixed characters")
 	_sections_done.append("static")

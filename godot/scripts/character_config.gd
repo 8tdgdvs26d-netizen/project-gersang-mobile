@@ -70,3 +70,13 @@ const MOVE_SPEED_AGI_HALF := 30.0
 const MAX_MOVE_SPEED := 7.0
 ## Percent values (Gesture grade multipliers) are divided by this.
 const PERCENT_DIVISOR := 100
+
+## Stage 7 S03 Base Growth per Level gained (approved Prototype values): Max
+## HP / Max MP and Growth STR / AGI / INT. Every Level gained also grants
+## STAT_POINTS_PER_LEVEL unspent Stat Points (spent in S04).
+const GROWTH_PER_LEVEL := {
+	"hero": {"hp": 20, "mp": 5, "str": 1, "agi": 1, "int": 1},
+	"merc_a": {"hp": 25, "mp": 0, "str": 2, "agi": 1, "int": 0},
+	"merc_b": {"hp": 15, "mp": 10, "str": 0, "agi": 1, "int": 2},
+}
+const STAT_POINTS_PER_LEVEL := 3

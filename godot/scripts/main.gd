@@ -42,6 +42,7 @@ var cargo: CharacterInventory:
 		inventory = value
 		if value != null:
 			character_stats = value.get_stats()
+			_apply_level_growth()
 ## Stage 7 S01: the two Prototype Mercenaries' stats for battles (the Hero's
 ## are character_stats). A minimal runtime holder only, not saved (fixed
 ## Prototype values) and not the Party / Mercenary model, which Stage 8
@@ -97,6 +98,7 @@ var _last_award := {}
 
 func _ready() -> void:
 	_load_saved_session()
+	_apply_level_growth()
 	for child in $Cities.get_children():
 		if child is CityMarker and child.city_id in WorldLayout.ACTIVE_CITY_IDS:
 			_city_markers[child.city_id] = child
@@ -536,6 +538,17 @@ func _on_encounter_phase_changed(phase: int) -> void:
 		_close_combat()
 
 
+## S03: each character's stats follow its Level (Growth and unspent Stat
+## Points); run after loading, after every settlement and when the Hero's
+## stats object is replaced.
+func _apply_level_growth() -> void:
+	if progression == null:
+		return
+	var party := get_party_stats()
+	for slot in ProgressionState.SLOTS:
+		(party[slot] as CharacterStats).apply_level(progression.get_level(slot))
+
+
 ## S01: character id -> CharacterStats of the fixed combat party (the Hero is
 ## the backpack's character_stats).
 func get_party_stats() -> Dictionary:
@@ -599,6 +612,7 @@ func commit_battle_result(result: BattleResult) -> bool:
 	# C05: the battle's EXP goes to the slots alive at settlement (none on
 	# DEFEAT); part of the committed result, saved with it below.
 	_last_award = progression.apply(result)
+	_apply_level_growth()
 	_close_combat()
 	var saved := save_world_position()
 	print("Myrial: battle result ", BattleResult.Outcome.keys()[result.outcome], " of ", result.encounter_id, " committed (saved: ", saved, ")")

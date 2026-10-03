@@ -7,8 +7,10 @@ extends RefCounted
 ## Layers per stat (HP, MP, STR, AGI, INT; CharacterConfig.STATS):
 ##   Base       the character's foundation (CharacterConfig.BASE; the Hero's
 ##              STR comes from Save v9 character.stats.strength)
-##   Growth     future character growth (S03; S02 prerequisite correction); 0,
-##              runtime only, never saved, nothing grants it yet
+##   Growth     S03 Base Growth: (Level - 1) x the character's per-Level
+##              growth (CharacterConfig.GROWTH_PER_LEVEL), set by
+##              apply_level(); derived from the saved Level, never saved
+##              itself
 ##   Allocated  future player-assigned points (S03 / S04); 0, runtime only,
 ##              never saved; MP is not allocatable
 ##   Equipment  future equipment bonuses (Stage 9); 0, runtime only
@@ -38,6 +40,9 @@ var _base := {}
 var _growth := {}
 var _allocated := {}
 var _equipment := {}
+## S03: unspent Stat Points, 3 per Level gained (nothing spends them before
+## S04).
+var _unspent_points := 0
 
 
 func _init(strength: int = PROTOTYPE_DEFAULT_STRENGTH, id: String = "hero") -> void:
@@ -78,7 +83,23 @@ func get_effective(stat: String) -> int:
 	return get_base(stat) + get_growth(stat) + get_allocated(stat) + get_equipment_bonus(stat)
 
 
-## Future growth hook (S03; no gameplay calls it, nothing is saved).
+## S03: this character at `level` — Growth = (level - 1) x its per-Level
+## growth and (level - 1) x 3 unspent Stat Points (the same as applying every
+## Level from 1 one by one). Current HP / MP are not touched (Level Up never
+## heals; Current HP / MP are battle-runtime state).
+func apply_level(level: int) -> void:
+	var gained := clampi(level, ProgressionState.START_LEVEL, ProgressionState.MAX_LEVEL) - ProgressionState.START_LEVEL
+	var per_level: Dictionary = CharacterConfig.GROWTH_PER_LEVEL[character_id]
+	for stat in CharacterConfig.STATS:
+		_growth[stat] = gained * int(per_level.get(stat, 0))
+	_unspent_points = gained * CharacterConfig.STAT_POINTS_PER_LEVEL
+
+
+func get_unspent_points() -> int:
+	return _unspent_points
+
+
+## Growth hook for tests (the game sets Growth through apply_level only).
 func set_growth(stat: String, value: Variant) -> bool:
 	if not CharacterConfig.STATS.has(stat) or not _is_valid(value):
 		return false
