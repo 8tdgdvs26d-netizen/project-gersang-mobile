@@ -47,7 +47,32 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 7 S03: Level & Growth v0.1. Save version stays 9 (unchanged schema).
+Stage 7 S04: Stat Allocation & Character UI. Save version stays 9 (unchanged schema).
+
+- Stat Points: earned = (Level - 1) x 3; spent = the points allocated; unspent = earned - spent
+  (never below 0). `apply_level()` only changes the earned side, so Level recalculation (load,
+  settlement, resync) never gives spent points back; a later Level adds only its new points
+- allocatable: HP / STR / AGI / INT (`CharacterConfig.ALLOCATION_VALUE`: 1 HP point = +10 Max
+  HP, 1 point = +1 STR / AGI / INT); MP is not. The Allocated layer counts points; its
+  contribution feeds Effective (Base + Growth + Allocated + Equipment) and so the S02 formulas and
+  the backpack Capacity. Allocation never heals
+- `CharacterStats.confirm_allocation({stat: points})` applies a whole allocation or nothing
+  (unknown / MP / negative / non-integer entries, an empty one or more than the unspent points
+  are refused as a whole). No Stat Reset
+- Character UI (`CharacterPanel`): the 角色 button (top right, world only; 角色（屬性點 N） when
+  points are waiting) opens it; tabs 主角 / 傭兵A / 傭兵B; Level, EXP, unspent points, Max HP,
+  Max MP, STR / AGI / INT and Physical / Magic Attack, Physical / Magic Defense, Attack
+  Interval, Move Speed, Capacity. + / - build a preview computed on a copy of the stats
+  (before → after); - only removes this preview's points; 確認分配 applies it; closing,
+  switching character or an encounter discards it. The joystick pauses while it is open
+- the result screen's Level Up line says the points: 「主角 升至 2 級（屬性點 +3）」
+- persistence: confirmed allocations last for the running session (UI, battles, settlements);
+  an application restart keeps Level / EXP but not the allocation — the points are free again.
+  Persisting allocations is S05 (Save v10)
+- tests: `tests/verify_s04_stat_allocation.gd`; the C05 Level Up text check and two S01 HP
+  allocation checks follow the S04 rules
+
+Previous: Stage 7 S03: Level & Growth v0.1. Save version stays 9 (unchanged schema).
 
 - EXP curve (`ProgressionState`): leaving Level L needs 100 + 50 x (L - 1) (Lv1 100, Lv2 150,
   Lv3 200, ...); one award passes as many Levels as it covers, each consuming its own

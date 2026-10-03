@@ -11,8 +11,11 @@ extends RefCounted
 ##              growth (CharacterConfig.GROWTH_PER_LEVEL), set by
 ##              apply_level(); derived from the saved Level, never saved
 ##              itself
-##   Allocated  future player-assigned points (S03 / S04); 0, runtime only,
-##              never saved; MP is not allocatable
+##   Allocated  S04: the Stat Points the player confirmed per stat (HP / STR /
+##              AGI / INT; MP is not allocatable) x CharacterConfig.
+##              ALLOCATION_VALUE (1 HP point = +10 Max HP); runtime only, not
+##              saved before S05 (an application restart gives the points
+##              back)
 ##   Equipment  future equipment bonuses (Stage 9); 0, runtime only
 ##   Effective  Base + Growth + Allocated + Equipment — what every consumer
 ##              reads (each layer counted once)
@@ -40,9 +43,9 @@ var _base := {}
 var _growth := {}
 var _allocated := {}
 var _equipment := {}
-## S03: unspent Stat Points, 3 per Level gained (nothing spends them before
-## S04).
-var _unspent_points := 0
+## S03 / S04: Stat Points earned by the Level ((level - 1) x 3). The points
+## spent are the allocated points; unspent = earned - spent (one source).
+var _earned_points := 0
 
 
 func _init(strength: int = PROTOTYPE_DEFAULT_STRENGTH, id: String = "hero") -> void:
@@ -71,7 +74,13 @@ func get_growth(stat: String) -> int:
 	return int(_growth.get(stat, 0))
 
 
+## The Allocated layer's contribution to `stat` (points x its value).
 func get_allocated(stat: String) -> int:
+	return get_allocated_points(stat) * int(CharacterConfig.ALLOCATION_VALUE.get(stat, 0))
+
+
+## Stat Points allocated to `stat`.
+func get_allocated_points(stat: String) -> int:
 	return int(_allocated.get(stat, 0))
 
 
@@ -92,11 +101,56 @@ func apply_level(level: int) -> void:
 	var per_level: Dictionary = CharacterConfig.GROWTH_PER_LEVEL[character_id]
 	for stat in CharacterConfig.STATS:
 		_growth[stat] = gained * int(per_level.get(stat, 0))
-	_unspent_points = gained * CharacterConfig.STAT_POINTS_PER_LEVEL
+	_earned_points = gained * CharacterConfig.STAT_POINTS_PER_LEVEL
 
 
+## S04: Stat Points earned by the Level (spent ones included).
+func get_earned_points() -> int:
+	return _earned_points
+
+
+## S04: Stat Points already allocated (confirmed), all stats.
+func get_spent_points() -> int:
+	var spent := 0
+	for stat in CharacterConfig.ALLOCATABLE:
+		spent += get_allocated_points(stat)
+	return spent
+
+
+## Earned - spent, never below 0. apply_level() changes only the earned
+## side, so recalculating a Level never gives spent points back.
 func get_unspent_points() -> int:
-	return _unspent_points
+	return maxi(_earned_points - get_spent_points(), 0)
+
+
+## S04: confirms a pending allocation {stat: points} at once. Refused as a
+## whole (nothing changes) unless every stat is allocatable, every amount a
+## whole number >= 0, at least one point is given and the total fits in the
+## unspent points.
+func confirm_allocation(pending: Dictionary) -> bool:
+	var total := 0
+	for stat in pending:
+		var points: Variant = pending[stat]
+		if not CharacterConfig.ALLOCATABLE.has(stat) or typeof(points) != TYPE_INT or points < 0:
+			return false
+		total += points
+	if total <= 0 or total > get_unspent_points():
+		return false
+	for stat in pending:
+		_allocated[stat] = get_allocated_points(stat) + int(pending[stat])
+	return true
+
+
+## S04: an independent copy (every layer and the earned points), for
+## previews: changing it never touches this character.
+func duplicate_stats() -> CharacterStats:
+	var copy := CharacterStats.new(get_base("str"), character_id)
+	copy._base = _base.duplicate()
+	copy._growth = _growth.duplicate()
+	copy._allocated = _allocated.duplicate()
+	copy._equipment = _equipment.duplicate()
+	copy._earned_points = _earned_points
+	return copy
 
 
 ## Growth hook for tests (the game sets Growth through apply_level only).
@@ -107,7 +161,8 @@ func set_growth(stat: String, value: Variant) -> bool:
 	return true
 
 
-## Future allocation hook (S03 / S04; no gameplay calls it in S01). Only
+## Test hook: sets the points allocated to `stat` directly, outside the
+## point budget (the game allocates only through confirm_allocation()). Only
 ## CharacterConfig.ALLOCATABLE stats (not MP).
 func set_allocated(stat: String, value: Variant) -> bool:
 	if not CharacterConfig.ALLOCATABLE.has(stat) or not _is_valid(value):

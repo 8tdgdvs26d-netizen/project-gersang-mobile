@@ -71,7 +71,8 @@ const GROUP_SELECTED_HINT := "再按群組%s可編輯成員"
 const DEAD_TEXT := "陣亡"
 ## C05 result reward (minimal text, no animation).
 const REWARD_TEXT := "%s 經驗 +%d"
-const LEVEL_UP_TEXT := "%s 升至 %d 級"
+## S04: a Level Up also says how many Stat Points it brought.
+const LEVEL_UP_TEXT := "%s 升至 %d 級（屬性點 +%d）"
 const NO_REWARD_TEXT := "本場沒有獲得經驗"
 ## C03: friendly unit names and colours (Prototype presentation).
 const ROLE_NAMES := {CombatUnit.Role.HERO: "主角", CombatUnit.Role.MERC_A: "傭兵A", CombatUnit.Role.MERC_B: "傭兵B"}
@@ -775,7 +776,8 @@ func get_reward_text() -> String:
 		if shares.has(unit.id):
 			gains.append(REWARD_TEXT % [ROLE_NAMES[unit.role], shares[unit.id]["exp"]])
 			if shares[unit.id]["leveled"]:
-				levels.append(LEVEL_UP_TEXT % [ROLE_NAMES[unit.role], shares[unit.id]["level"]])
+				var gained: int = int(shares[unit.id]["level"]) - progression.get_level(unit.id)
+				levels.append(LEVEL_UP_TEXT % [ROLE_NAMES[unit.role], shares[unit.id]["level"], gained * CharacterConfig.STAT_POINTS_PER_LEVEL])
 	return "　".join(gains) + ("\n" + "　".join(levels) if not levels.is_empty() else "")
 
 

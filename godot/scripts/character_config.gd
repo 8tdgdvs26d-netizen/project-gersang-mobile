@@ -80,3 +80,6 @@ const GROWTH_PER_LEVEL := {
 	"merc_b": {"hp": 15, "mp": 10, "str": 0, "agi": 1, "int": 2},
 }
 const STAT_POINTS_PER_LEVEL := 3
+## Stage 7 S04: what one allocated Stat Point adds to each allocatable stat
+## (Prototype tunable; HP: +10 Max HP per point).
+const ALLOCATION_VALUE := {"hp": 10, "str": 1, "agi": 1, "int": 1}
