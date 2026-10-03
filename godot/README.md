@@ -47,7 +47,29 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 7 S02: Combat Formula Integration. Runtime only; save version stays 9; at STR / AGI / INT 10
+Stage 7 S03: Level & Growth v0.1. Save version stays 9 (unchanged schema).
+
+- EXP curve (`ProgressionState`): leaving Level L needs 100 + 50 x (L - 1) (Lv1 100, Lv2 150,
+  Lv3 200, ...); one award passes as many Levels as it covers, each consuming its own
+  requirement, the rest carried over; Lv100 cap — no Level, Growth or points beyond it and no EXP
+  kept at it. C05 sharing unchanged (survivors equally, remainder discarded, the dead 0, RETREAT
+  keeps the kills' EXP, DEFEAT 0)
+- Base Growth per Level gained (`CharacterConfig.GROWTH_PER_LEVEL`): Hero HP +20 MP +5 STR / AGI /
+  INT +1; Merc A HP +25 STR +2 AGI +1; Merc B HP +15 MP +10 AGI +1 INT +2; every Level +3 unspent
+  Stat Points (nothing spends them before S04)
+- `CharacterStats.apply_level(level)` sets the Growth layer and the unspent points from the
+  Level ((level - 1) x per-Level values); the session applies it after loading, after every
+  settlement and when the Hero's stats are replaced, so the S02 formulas (attack, defenses, Max
+  MP, interval, speed) and the backpack Capacity follow at once
+- Level Up raises Max HP / MP and never touches Current HP / MP; Current HP / MP stay
+  battle-runtime state (the next battle starts full, as before)
+- persistence: only Level / EXP are saved (v9, as before). Growth and unspent points are derived
+  from the saved Level on load (no point can be spent yet), not stored. A C05 save that banked EXP
+  at the old Lv2 ceiling loads through the S03 curve (e.g. Lv2 + 400 -> Lv4 50), nothing refused
+- tests: `tests/verify_s03_level_growth.gd`; C05 checks that encoded the Lv2 ceiling now follow
+  the S03 curve
+
+Previous: Stage 7 S02: Combat Formula Integration. Runtime only; save version stays 9; at STR / AGI / INT 10
 (every character in the game) the C01-C08 combat values are unchanged.
 
 - S02 prerequisite correction: `CharacterStats` gains a Growth layer — Effective = Base + Growth +

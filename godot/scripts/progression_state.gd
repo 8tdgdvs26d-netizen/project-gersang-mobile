@@ -6,20 +6,25 @@ extends RefCounted
 ## Saved (Save v9 "progression"), nothing else about the slots is. It is not a
 ## Mercenary roster.
 ##
-## Prototype rules (placeholders, not the final curve):
+## Prototype rules:
 ##   - a battle's EXP pool is shared equally (integer division, remainder
 ##     discarded) by the slots alive at settlement; DEFEAT awards nothing
-##   - Lv1 -> Lv2 at 100 EXP; EXP beyond the threshold carries over
-##   - Lv2 is the C05 ceiling: EXP keeps accumulating there, no Lv3
-##   - a Level changes no combat stat (Combat never reads it)
-## Each slot's "exp" is the EXP held towards the next Level (all EXP at the
-## ceiling).
+##     (C05)
+##   - Stage 7 S03 curve: leaving Level L needs 100 + 50 x (L - 1) EXP
+##     (Lv1 100, Lv2 150, Lv3 200, ...); one award may pass several Levels,
+##     each consuming its own requirement; the rest carries over
+##   - Lv100 cap: no Level beyond it, no EXP kept at it
+##   - the Level's growth (stats, Stat Points) is applied by the session to the
+##     characters' CharacterStats (CharacterStats.apply_level); this class
+##     holds only Level and EXP
+## Each slot's "exp" is the EXP held towards the next Level (0 at the cap).
 
 const SLOTS := ["hero", "merc_a", "merc_b"]
 const START_LEVEL := 1
-const MAX_LEVEL := 2
-## EXP needed to leave a Level (only Lv1 -> Lv2 exists in C05).
-const LEVEL_THRESHOLDS := {1: 100}
+const MAX_LEVEL := 100
+## EXP to leave Level L = EXP_BASE + EXP_STEP x (L - 1).
+const EXP_BASE := 100
+const EXP_STEP := 50
 ## Upper bound for saved EXP (exact JSON integers).
 const MAX_EXP := 9007199254740992
 const SLOT_KEYS := ["level", "exp"]
@@ -68,12 +73,22 @@ func apply(result: BattleResult) -> Dictionary:
 	return shares
 
 
-## [level, exp] after gaining `amount` EXP at `level` with `exp`.
+## EXP needed to leave `level` (0 at the cap: no further Level).
+static func required_exp(level: int) -> int:
+	if level >= MAX_LEVEL:
+		return 0
+	return EXP_BASE + EXP_STEP * (maxi(level, START_LEVEL) - 1)
+
+
+## [level, exp] after gaining `amount` EXP at `level` with `exp`: Level by
+## Level, each consuming its own requirement; nothing is kept at the cap.
 static func _gain(level: int, held: int, amount: int) -> Array:
 	held = mini(held + amount, MAX_EXP)
-	while level < MAX_LEVEL and held >= LEVEL_THRESHOLDS[level]:
-		held -= LEVEL_THRESHOLDS[level]
+	while level < MAX_LEVEL and held >= required_exp(level):
+		held -= required_exp(level)
 		level += 1
+	if level >= MAX_LEVEL:
+		held = 0
 	return [level, held]
 
 
@@ -86,7 +101,9 @@ func to_dict() -> Dictionary:
 
 ## A validated copy of saved progression, or null: exactly the three slots,
 ## each exactly {level, exp} as integers, 1 <= level <= MAX_LEVEL,
-## 0 <= exp <= MAX_EXP, and below the threshold while under the ceiling.
+## 0 <= exp <= MAX_EXP. S03: EXP at or above the Level's requirement (C05
+## saves banked EXP at the old Lv2 ceiling) is carried through the S03 curve
+## on load, Level by Level, so no valid v9 save is refused.
 static func from_dict(data: Variant) -> ProgressionState:
 	if typeof(data) != TYPE_DICTIONARY or data.size() != SLOTS.size():
 		return null
@@ -101,9 +118,8 @@ static func from_dict(data: Variant) -> ProgressionState:
 		var held: Variant = _whole(entry["exp"])
 		if level == null or held == null or level < START_LEVEL or level > MAX_LEVEL or held < 0 or held > MAX_EXP:
 			return null
-		if level < MAX_LEVEL and held >= LEVEL_THRESHOLDS[level]:
-			return null
-		state._slots[slot] = {"level": level, "exp": held}
+		var settled := _gain(level, held, 0)
+		state._slots[slot] = {"level": settled[0], "exp": settled[1]}
 	return state
 
 

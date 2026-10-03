@@ -5,9 +5,11 @@ extends SceneTree
 ## 10 / 15 / 20 in columns 59-60 / 58-60 / 57-60). Every enemy actually killed
 ## adds 10 EXP to the battle pool; VICTORY and RETREAT share it equally
 ## (integer division, remainder discarded) among the friendly units alive at
-## settlement; DEFEAT gives nothing. Lv1 -> Lv2 at 100 EXP, overflow kept, Lv2
-## is the C05 ceiling (EXP keeps accumulating, no Lv3). A Level changes no
-## combat stat. Level / EXP of the three fixed slots persist (Save v9).
+## settlement; DEFEAT gives nothing. Lv1 -> Lv2 at 100 EXP, overflow kept.
+## Stage 7 S03 replaced the C05 Lv2 ceiling with the 100 + 50 x (L - 1) curve
+## up to Lv100 (see verify_s03_level_growth.gd); the checks below that encoded
+## the ceiling now follow the S03 curve. Level / EXP of the three fixed slots
+## persist (Save v9).
 
 const TEST_SAVE := "user://c05_progression_test_save.json"
 const BAD_SAVE := "user://c05_missing_dir/save.json"
@@ -44,7 +46,8 @@ func _verify_static() -> void:
 	_check(CombatConfig.ROWS == 5 and CombatConfig.COLUMNS == 61, "Battlefield 5 x 61")
 	_check(CombatConfig.PREPARATION_FIRST_COLUMN == 1 and CombatConfig.PREPARATION_COLUMNS == 3 and CombatConfig.PREPARATION_MS == 3000, "Preparation: columns 1-3, 3000 ms")
 	_check(CombatConfig.EXP_PER_KILL == 10, "1 enemy killed = 10 EXP")
-	_check(ProgressionState.SLOTS == SLOTS and ProgressionState.START_LEVEL == 1 and ProgressionState.MAX_LEVEL == 2 and ProgressionState.LEVEL_THRESHOLDS == {1: 100}, "Three fixed slots, Lv1 -> Lv2 at 100, Lv2 ceiling, no other threshold")
+	# S03: was MAX_LEVEL 2 / LEVEL_THRESHOLDS {1: 100} (the C05 Lv2 ceiling).
+	_check(ProgressionState.SLOTS == SLOTS and ProgressionState.START_LEVEL == 1 and ProgressionState.MAX_LEVEL == 100 and ProgressionState.required_exp(1) == 100 and ProgressionState.required_exp(2) == 150, "Three fixed slots, Lv1 -> Lv2 at 100 (S03 curve, Lv100 cap)")
 	_check(SaveStore.VERSION == 9 and SaveStore.V9_KEYS == SaveStore.V8_KEYS + ["progression"], "Save v9 = v8 + progression")
 	_check(CombatConfig.HERO["max_hp"] == 300 and CombatConfig.HERO["attack_damage"] == 20 and CombatConfig.ENEMY["move_speed"] == 2.0 and CombatConfig.MERC_B["attack_range"] == 3, "Combat stats unchanged")
 	var progression_code := _code_only("res://scripts/progression_state.gd").to_lower()
@@ -218,10 +221,13 @@ func _verify_levels() -> void:
 	var p2 := ProgressionState.from_dict({"hero": {"level": 1, "exp": 80}, "merc_a": {"level": 1, "exp": 99}, "merc_b": {"level": 1, "exp": 0}})
 	p2.apply(_result(BattleResult.Outcome.VICTORY, 50, ["hero"]))
 	_check(p2.get_level("hero") == 2 and p2.get_exp("hero") == 30, "Lv1 80 + 50 -> Lv2 with 30 overflow")
+	# S03: C05 kept 530 EXP at the Lv2 ceiling; the S03 curve passes Lv3 (150)
+	# and Lv4 (200) and keeps 180.
 	p2.apply(_result(BattleResult.Outcome.VICTORY, 500, ["hero"]))
-	_check(p2.get_level("hero") == 2 and p2.get_exp("hero") == 530, "At the Lv2 ceiling EXP keeps accumulating (530), no Lv3")
+	_check(p2.get_level("hero") == 4 and p2.get_exp("hero") == 180, "Lv2 30 + 500 -> Lv4 180 (S03 curve; was 530 at the C05 Lv2 ceiling)")
+	# S03: C05 stopped at Lv2 with 999; now 1099 passes Lv1-Lv5 (100+150+200+250+300) and keeps 99.
 	p2.apply(_result(BattleResult.Outcome.VICTORY, 1000, ["merc_a"]))
-	_check(p2.get_level("merc_a") == 2 and p2.get_exp("merc_a") == 999, "Lv1 99 + 1000 -> Lv2 999 (one Level only)")
+	_check(p2.get_level("merc_a") == 6 and p2.get_exp("merc_a") == 99, "Lv1 99 + 1000 -> Lv6 99 (S03 multi-Level; was Lv2 999)")
 	var preview_only := ProgressionState.new()
 	var preview := preview_only.preview(_result(BattleResult.Outcome.VICTORY, 100, ["merc_b"]))
 	_check(preview["merc_b"]["leveled"] and preview_only.get_level("merc_b") == 1 and preview_only.get_exp("merc_b") == 0, "preview() changes nothing")
@@ -268,11 +274,11 @@ func _verify_persistence() -> void:
 		"extra field": _with(good, {"progression": {"hero": {"level": 1, "exp": 0, "hp": 999}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}}}),
 		"missing exp": _with(good, {"progression": {"hero": {"level": 1}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}}}),
 		"level 0": _with_progression_slot({"level": 0, "exp": 0}),
-		"level 3": _with_progression_slot({"level": 3, "exp": 0}),
+		# S03: Lv3 is valid now (was rejected above the C05 Lv2 ceiling).
+		"level 101": _with_progression_slot({"level": 101, "exp": 0}),
 		"negative exp": _with_progression_slot({"level": 1, "exp": -5}),
 		"fractional exp": _with_progression_slot({"level": 1, "exp": 2.5}),
 		"string level": _with_progression_slot({"level": "1", "exp": 0}),
-		"Lv1 at the threshold": _with_progression_slot({"level": 1, "exp": 100}),
 		"huge exp": _with_progression_slot({"level": 2, "exp": 1e17}),
 	}
 	for label in broken:
@@ -280,6 +286,9 @@ func _verify_persistence() -> void:
 		var before := FileAccess.get_file_as_string(TEST_SAVE)
 		_check(SaveStore.load_session(TEST_SAVE).is_empty() and FileAccess.get_file_as_string(TEST_SAVE) == before, "Rejected as a whole, file untouched: %s" % label)
 	_check(ProgressionState.from_dict({"hero": {"level": 2, "exp": 999999}, "merc_a": {"level": 1, "exp": 99}, "merc_b": {"level": 1, "exp": 0.0}}) != null, "Valid edge values load (Lv2 high EXP, Lv1 99, whole float 0.0)")
+	# S03: EXP at the requirement (C05 rejected Lv1 at 100) is carried through the curve.
+	var carried := ProgressionState.from_dict({"hero": {"level": 1, "exp": 100}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})
+	_check(carried != null and carried.get_level("hero") == 2 and carried.get_exp("hero") == 0, "Lv1 at the requirement loads as Lv2 0 (S03; C05 rejected it)")
 	_delete(TEST_SAVE)
 	_sections_done.append("persistence")
 
