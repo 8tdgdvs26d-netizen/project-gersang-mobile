@@ -73,10 +73,15 @@ extends RefCounted
 ## unit (each with its own rules: the existing nearest-free-cell occupancy,
 ## its own attack range, C06 cast / pending priority). Two temporary battle
 ## groups (membership of this battle only, never saved) select their alive
-## members; select_all() selects every alive friendly unit. attack_all()
-## gives every alive friendly unit its nearest alive enemy (ties: enemy
-## order) through the same target command. The aggregate HP ratios use the
-## sides' total max HP recorded when the battle is built.
+## members; select_all() selects every alive friendly unit. A group / 全體
+## command is a one-time order to each member: tapping one unit (portrait or
+## battlefield) selects it alone, and its next order replaces only its own.
+## attack_all() gives every alive friendly unit its nearest alive enemy (ties:
+## enemy order) through the same target command and keeps it attacking: when
+## that enemy is gone it takes the next nearest (attack_all_intent) until
+## another Move / Target order for it, the retreat, its death or the end of
+## the fighting. The aggregate HP ratios use the sides' total max HP recorded
+## when the battle is built.
 ##
 ## Every HP change goes through resolve_damage() (Basic Attacks, Skills and
 ## the Gesture; C06 Guard halves it). No reward, EXP, loot, retreat or world consequence exists here:
@@ -244,6 +249,7 @@ func _begin_retreat() -> void:
 		if unit.skill_state != CombatUnit.SkillState.NONE:
 			print("Myrial: combat skill of ", unit.id, " cancelled by the retreat")
 			_end_skill(unit, false)
+		unit.attack_all_intent = false
 		if unit.alive:
 			unit.target = null
 			unit.has_goal = false
@@ -578,15 +584,6 @@ func select_all() -> bool:
 	return select_units(_friends)
 
 
-## C08: a tap on a friendly unit (portrait or battlefield): one already in a
-## multi-selection becomes the Active Caster (the selection stays); any other
-## is selected alone.
-func select_or_activate(unit: CombatUnit) -> bool:
-	if get_selection().size() > 1 and get_selection().has(unit):
-		return set_active_caster(unit)
-	return select_unit(unit)
-
-
 ## C08: makes `unit` (already selected) the Active Caster; the selection stays.
 func set_active_caster(unit: CombatUnit) -> bool:
 	if is_over() or _gesture_open or unit == null or not get_selection().has(unit):
@@ -610,6 +607,7 @@ func _command_move_unit(unit: CombatUnit, cell: Vector2i) -> bool:
 	unit.target = null
 	unit.has_goal = true
 	unit.goal = cell
+	unit.attack_all_intent = false
 	return true
 
 
@@ -637,6 +635,7 @@ func _command_target_unit(unit: CombatUnit, enemy: CombatUnit) -> bool:
 		return false
 	unit.has_goal = false
 	unit.target = enemy
+	unit.attack_all_intent = false
 	return true
 
 
@@ -652,13 +651,15 @@ func command_target_selection(enemy: CombatUnit) -> bool:
 ## C08 全體進攻: every alive friendly unit targets its nearest alive enemy
 ## (grid distance; ties: enemy order) with the normal target command
 ## (casting units keep casting, a pending Skill is replaced; a Skill aim is
-## cancelled). FIGHTING only, not while retreating. Returns whether any
-## accepted.
+## cancelled) and keeps attacking: each unit that accepted gets
+## attack_all_intent (see _target_of). FIGHTING only, not while retreating.
+## Returns whether any accepted.
 func attack_all() -> bool:
 	var accepted := false
 	for unit in _friends:
-		if unit.alive:
-			accepted = _command_target_unit(unit, nearest_enemy(unit)) or accepted
+		if unit.alive and _command_target_unit(unit, nearest_enemy(unit)):
+			unit.attack_all_intent = true
+			accepted = true
 	if accepted:
 		_aiming = false
 	return accepted
@@ -741,7 +742,7 @@ func tap(cell: Vector2i) -> bool:
 		return unit != null and unit.team == CombatUnit.Team.ENEMY and command_skill(unit)
 	_aiming = false
 	if unit != null and unit.team == CombatUnit.Team.FRIEND:
-		return select_or_activate(unit)
+		return select_unit(unit)
 	if unit != null:
 		return command_target_selection(unit)
 	return command_move_selection(cell)
@@ -956,6 +957,11 @@ func _target_of(unit: CombatUnit) -> CombatUnit:
 	if unit.team == CombatUnit.Team.FRIEND:
 		if unit.target != null and not unit.target.alive:
 			unit.target = null
+		# C08 全體進攻: the next nearest alive enemy once the target is gone
+		# (none left: the intent ends). Never during a Skill or the retreat.
+		if unit.target == null and unit.attack_all_intent and _phase == Phase.FIGHTING and not _retreating and unit.skill_state == CombatUnit.SkillState.NONE:
+			unit.target = nearest_enemy(unit)
+			unit.attack_all_intent = unit.target != null
 		return unit.target if _phase == Phase.FIGHTING else null
 	var best: CombatUnit
 	for friend in _friends:
@@ -1051,6 +1057,7 @@ func _kill(unit: CombatUnit) -> void:
 	# Active Caster passes to the next selected unit, else nothing (its
 	# Skill aim ends with it).
 	_selection.erase(unit)
+	unit.attack_all_intent = false
 	if _selected == unit:
 		_aiming = false
 		_selected = get_selection()[0] if not get_selection().is_empty() else null
@@ -1084,6 +1091,10 @@ func _set_phase(phase: Phase) -> void:
 	if phase == _phase:
 		return
 	_phase = phase
+	# C08 全體進攻: the continuous attack ends with the fighting.
+	if phase != Phase.FIGHTING:
+		for friend in _friends:
+			friend.attack_all_intent = false
 	if is_over():
 		_aiming = false
 		_gesture_open = false

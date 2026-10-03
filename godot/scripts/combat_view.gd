@@ -16,6 +16,11 @@ extends CanvasLayer
 ##   skill bar    the selected units' Skills (one unit: full text; several:
 ##                compact icons with their owner)
 ##   navigator    horizontal camera strip with the visible range
+## Multi-touch: every finger is its own pointer (pointer_event()). The
+## battlefield, the navigator, the portraits and the Gesture Window each
+## follow only the finger that pressed them, so one hand can hold the
+## navigator while the other selects, commands or uses Skills; buttons
+## already take any finger.
 ## Selection, groups, camera and the open info panel are runtime UI / battle
 ## state only (never saved).
 ##
@@ -32,6 +37,9 @@ const FIELD_TOP := 400.0
 const FIELD_HEIGHT := 540.0
 ## C08: a press that moves farther than this is a camera drag, not a tap.
 const DRAG_THRESHOLD := 12.0
+## C08 multi-touch: the pointer id of a real (desktop) mouse; fingers use
+## their touch index (0, 1, ...).
+const MOUSE_POINTER := -2
 ## C08: the HUD has room for this many friendly portraits (party of 3 now).
 const MAX_PORTRAITS := 4
 const PORTRAIT_TOP := 282.0
@@ -147,8 +155,13 @@ var _camera := CombatCamera.new()
 ## C08 group editing (UI state): the group whose members portrait taps
 ## toggle, -1: none.
 var _editing_group := -1
-## C08 battlefield press (tap vs drag).
+## C08 battlefield press (tap vs drag), owned by one pointer.
 var _pressing := false
+var _field_pointer := 0
+## C08 navigator drag, owned by one pointer (-1: none).
+var _navigator_pointer := -1
+## C07 / C08: the pointer drawing the Gesture stroke.
+var _stroke_pointer := 0
 var _dragging := false
 var _press_position := Vector2.ZERO
 var _drag_last := Vector2.ZERO
@@ -318,6 +331,7 @@ func open(battle: CombatBattle) -> void:
 	_info_unit = null
 	_pressing = false
 	_dragging = false
+	_navigator_pointer = -1
 	_camera.offset = Vector2.ZERO
 	battle.gesture_resolved.connect(_on_gesture_resolved)
 	visible = true
@@ -390,18 +404,24 @@ func tap_at(screen_position: Vector2) -> bool:
 	return cell != Vector2i(-1, -1) and _battle.tap(cell)
 
 
-## C08 battlefield press / drag / release (screen pixels). A release that
-## never moved past DRAG_THRESHOLD is a tap; otherwise the press only pans
-## the camera and issues no command.
-func field_press(screen_position: Vector2) -> void:
+## C08 battlefield press / drag / release (screen pixels) of one pointer. A
+## release that never moved past DRAG_THRESHOLD is a tap; otherwise the press
+## only pans the camera and issues no command. While one pointer presses the
+## battlefield another finger landing on it is ignored (the same finger
+## pressing again restarts); other pointers' drags and releases never touch
+## this press.
+func field_press(screen_position: Vector2, pointer := 0) -> void:
+	if _pressing and pointer != _field_pointer:
+		return
 	_pressing = true
+	_field_pointer = pointer
 	_dragging = false
 	_press_position = screen_position
 	_drag_last = screen_position
 
 
-func field_drag(screen_position: Vector2) -> void:
-	if not _pressing:
+func field_drag(screen_position: Vector2, pointer := 0) -> void:
+	if not _pressing or pointer != _field_pointer:
 		return
 	if not _dragging and screen_position.distance_to(_press_position) > DRAG_THRESHOLD:
 		_dragging = true
@@ -411,8 +431,8 @@ func field_drag(screen_position: Vector2) -> void:
 		_field.queue_redraw()
 
 
-func field_release(screen_position: Vector2) -> bool:
-	if not _pressing:
+func field_release(screen_position: Vector2, pointer := 0) -> bool:
+	if not _pressing or pointer != _field_pointer:
 		return false
 	_pressing = false
 	if _dragging:
@@ -421,10 +441,71 @@ func field_release(screen_position: Vector2) -> bool:
 	return tap_at(screen_position)
 
 
+## A pointer lifted or cancelled away (e.g. the system took the touch):
+## its battlefield press ends with no command.
+func field_cancel(pointer := 0) -> void:
+	if _pressing and pointer == _field_pointer:
+		_pressing = false
+		_dragging = false
+
+
+func is_field_pressed() -> bool:
+	return _pressing
+
+
 ## C08 navigator: centre the camera on `ratio` of the battlefield width.
 func navigate_to(ratio: float) -> void:
 	_camera.center_on_ratio(ratio)
 	_field.queue_redraw()
+
+
+## C08 navigator press / drag / release of one pointer: it only moves the
+## camera (never a command, never the battlefield press). The newest pointer
+## pressing it takes over; other pointers' drags and releases are ignored.
+func navigator_press(ratio: float, pointer := 0) -> void:
+	_navigator_pointer = pointer
+	navigate_to(ratio)
+
+
+func navigator_drag(ratio: float, pointer := 0) -> void:
+	if pointer == _navigator_pointer:
+		navigate_to(ratio)
+
+
+func navigator_release(pointer := 0) -> void:
+	if pointer == _navigator_pointer:
+		_navigator_pointer = -1
+
+
+## The pointer dragging the navigator (-1: none).
+func get_navigator_pointer() -> int:
+	return _navigator_pointer
+
+
+## C08 multi-touch: an input event as [kind, pointer, position]; kind is
+## "press" / "move" / "release" / "cancel", "emulated" for the mouse events
+## Godot emulates from a finger (dropped: that finger's own touch events
+## already arrive, so it is never handled twice) or "" for anything else.
+## Every finger is its own pointer (its touch index); a real mouse is
+## MOUSE_POINTER.
+static func pointer_event(event: InputEvent) -> Array:
+	var touch := event as InputEventScreenTouch
+	if touch != null:
+		if touch.canceled:
+			return ["cancel", touch.index, touch.position]
+		return ["press" if touch.pressed else "release", touch.index, touch.position]
+	var drag := event as InputEventScreenDrag
+	if drag != null:
+		return ["move", drag.index, drag.position]
+	if event is InputEventMouse and event.device == InputEvent.DEVICE_ID_EMULATION:
+		return ["emulated", MOUSE_POINTER, Vector2.ZERO]
+	var click := event as InputEventMouseButton
+	if click != null and click.button_index == MOUSE_BUTTON_LEFT:
+		return ["press" if click.pressed else "release", MOUSE_POINTER, click.position]
+	var motion := event as InputEventMouseMotion
+	if motion != null and motion.button_mask & MOUSE_BUTTON_MASK_LEFT:
+		return ["move", MOUSE_POINTER, motion.position]
+	return ["", MOUSE_POINTER, Vector2.ZERO]
 
 
 ## C08 全體進攻: every alive friendly unit attacks its nearest enemy.
@@ -498,7 +579,8 @@ func is_group_selected(index: int) -> bool:
 
 
 ## A portrait tap: while editing a group it toggles that member; otherwise it
-## selects the unit (or makes it the Active Caster of a multi-selection).
+## selects the unit alone (a group command was a one-time order; the unit's
+## next order replaces only its own).
 func press_portrait(unit: CombatUnit) -> bool:
 	if _battle == null or unit == null:
 		return false
@@ -507,7 +589,7 @@ func press_portrait(unit: CombatUnit) -> bool:
 		_battle.toggle_group_member(_editing_group, unit)
 		done = true
 	else:
-		done = _battle.select_or_activate(unit)
+		done = _battle.select_unit(unit)
 	_refresh()
 	return done
 
@@ -737,21 +819,25 @@ func get_clock_text() -> String:
 
 ## C07: the Gesture Window's stroke, in screen pixels (one stroke; lifting
 ## the finger submits it — a too-short touch is ignored and the window stays).
-func begin_stroke(screen_position: Vector2) -> void:
+func begin_stroke(screen_position: Vector2, pointer := 0) -> void:
 	if _battle == null or not _battle.is_gesture_open():
 		return
+	# One stroke at a time: another finger landing meanwhile is ignored.
+	if _drawing and pointer != _stroke_pointer:
+		return
+	_stroke_pointer = pointer
 	_stroke.clear()
 	_stroke.append(_to_area(screen_position))
 	_drawing = true
 
 
-func extend_stroke(screen_position: Vector2) -> void:
-	if _drawing:
+func extend_stroke(screen_position: Vector2, pointer := 0) -> void:
+	if _drawing and pointer == _stroke_pointer:
 		_stroke.append(_to_area(screen_position))
 
 
-func end_stroke() -> Dictionary:
-	if not _drawing or _battle == null:
+func end_stroke(pointer := 0) -> Dictionary:
+	if not _drawing or _battle == null or pointer != _stroke_pointer:
 		return {}
 	_drawing = false
 	var result := _battle.submit_gesture(_stroke)
@@ -889,17 +975,21 @@ class Field extends Control:
 	var view: CombatView
 
 	func _gui_input(event: InputEvent) -> void:
-		# Touch arrives as emulated mouse events; desktop clicks the same way.
-		var click := event as InputEventMouseButton
-		if click != null and click.button_index == MOUSE_BUTTON_LEFT:
-			if click.pressed:
-				view.field_press(click.position + position)
-			else:
-				view.field_release(click.position + position)
-			accept_event()
-		var motion := event as InputEventMouseMotion
-		if motion != null and motion.button_mask & MOUSE_BUTTON_MASK_LEFT:
-			view.field_drag(motion.position + position)
+		# Each finger (touch index) or the desktop mouse is its own pointer.
+		var pointer_event := CombatView.pointer_event(event)
+		var kind: String = pointer_event[0]
+		var pointer: int = pointer_event[1]
+		var at: Vector2 = pointer_event[2] + position
+		match kind:
+			"press":
+				view.field_press(at, pointer)
+			"move":
+				view.field_drag(at, pointer)
+			"release":
+				view.field_release(at, pointer)
+			"cancel":
+				view.field_cancel(pointer)
+		if kind != "":
 			accept_event()
 
 	## Screen point -> this control's local point.
@@ -1006,16 +1096,18 @@ class HpBars extends Control:
 		draw_string(font, Vector2(center + 8.0, size.y - 10.0), CombatView.ENEMY_HP_TEXT % view.get_enemy_hp_percent(), HORIZONTAL_ALIGNMENT_RIGHT, half - 8.0, 22, Color.WHITE)
 
 
-## C08: one friendly unit's portrait (tap: select / Active Caster / group
-## edit). Shows selected, Active Caster, dead and group ① / ② marks.
+## C08: one friendly unit's portrait (tap: select alone / group edit). Shows selected, Active Caster, dead and group ① / ② marks.
 class Portrait extends Control:
 	var view: CombatView
 	var index := 0
 
 	func _gui_input(event: InputEvent) -> void:
-		var click := event as InputEventMouseButton
-		if click != null and click.button_index == MOUSE_BUTTON_LEFT and not click.pressed:
+		# Any finger (or the mouse) taps it on release over the portrait.
+		var pointer_event := CombatView.pointer_event(event)
+		var kind: String = pointer_event[0]
+		if kind == "release" and Rect2(Vector2.ZERO, size).has_point(pointer_event[2]):
 			view.press_portrait(view.get_portrait_unit(index))
+		if kind != "":
 			accept_event()
 
 	func _draw() -> void:
@@ -1086,13 +1178,20 @@ class Navigator extends Control:
 	var view: CombatView
 
 	func _gui_input(event: InputEvent) -> void:
-		var click := event as InputEventMouseButton
-		var motion := event as InputEventMouseMotion
-		if click != null and click.pressed and click.button_index == MOUSE_BUTTON_LEFT:
-			view.navigate_to(click.position.x / size.x)
-			accept_event()
-		elif motion != null and motion.button_mask & MOUSE_BUTTON_MASK_LEFT:
-			view.navigate_to(motion.position.x / size.x)
+		# Only the pointer that pressed it moves the camera; other fingers
+		# keep working on the rest of the HUD at the same time.
+		var pointer_event := CombatView.pointer_event(event)
+		var kind: String = pointer_event[0]
+		var pointer: int = pointer_event[1]
+		var ratio: float = (pointer_event[2] as Vector2).x / size.x
+		match kind:
+			"press":
+				view.navigator_press(ratio, pointer)
+			"move":
+				view.navigator_drag(ratio, pointer)
+			"release", "cancel":
+				view.navigator_release(pointer)
+		if kind != "":
 			accept_event()
 
 	func _draw() -> void:
@@ -1116,16 +1215,16 @@ class GestureOverlay extends Control:
 	var view: CombatView
 
 	func _gui_input(event: InputEvent) -> void:
-		# Touch arrives as emulated mouse events; desktop drags the same way.
-		var click := event as InputEventMouseButton
-		if click != null and click.button_index == MOUSE_BUTTON_LEFT:
-			if click.pressed:
-				view.begin_stroke(click.position)
-			else:
-				view.end_stroke()
-		var motion := event as InputEventMouseMotion
-		if motion != null and motion.button_mask & MOUSE_BUTTON_MASK_LEFT:
-			view.extend_stroke(motion.position)
+		# One finger (or the mouse) draws the stroke; lifting it submits.
+		var pointer_event := CombatView.pointer_event(event)
+		var pointer: int = pointer_event[1]
+		match pointer_event[0]:
+			"press":
+				view.begin_stroke(pointer_event[2], pointer)
+			"move":
+				view.extend_stroke(pointer_event[2], pointer)
+			"release", "cancel":
+				view.end_stroke(pointer)
 		accept_event()
 
 	func _draw() -> void:

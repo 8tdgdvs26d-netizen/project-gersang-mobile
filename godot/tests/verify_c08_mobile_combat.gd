@@ -33,8 +33,11 @@ func _initialize() -> void:
 	_verify_aggregate_hp()
 	_verify_camera()
 	_verify_lifecycle_rules()
+	_verify_group_override()
+	_verify_attack_all_continuous()
+	await _verify_multi_touch()
 	await _verify_in_game()
-	_check(_sections_done.size() == 10, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 13, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("C08 mobile combat verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -76,12 +79,18 @@ func _verify_selection() -> void:
 	_check(battle.select_group(1) and battle.get_selection() == [merc_a, merc_b] and battle.get_selected() == merc_a, "Group ②: A + B (overlapping member A)")
 	_check(not battle.toggle_group_member(1, merc_b) and battle.get_group(1) == [merc_a] and battle.toggle_group_member(1, merc_b), "Toggle removes / re-adds a member")
 	_check(battle.select_all() and battle.get_selection() == [hero, merc_a, merc_b], "全體: every alive friendly unit")
-	# Active Caster inside a multi-selection.
+	# iPhone L3 Fix 1 (replaces the earlier C08 rule "a tap on a member of a
+	# multi-selection only makes it the Active Caster"): a group / 全體 is a
+	# one-time order, a tap on any friendly unit selects it alone.
 	battle.select_group(0)
-	_check(battle.select_or_activate(hero) and battle.get_selection() == [hero, merc_a] and battle.get_selected() == hero, "Tap a member of the multi-selection: it becomes the Active Caster, the group stays")
-	_check(battle.tap(hero.cell) and battle.get_selection() == [hero, merc_a], "Battlefield tap on a member: same rule")
-	_check(battle.select_or_activate(merc_b) and battle.get_selection() == [merc_b] and battle.get_selected() == merc_b, "Tap a unit outside the selection: single selection")
-	_check(battle.select_unit(merc_a) and battle.select_or_activate(merc_a) and battle.get_selection() == [merc_a], "Single selection tapped again: still single")
+	_check(battle.tap(hero.cell) and battle.get_selection() == [hero] and battle.get_selected() == hero, "Battlefield tap on a member of the multi-selection: it alone is selected")
+	_check(battle.get_group(0) == [hero, merc_a], "…group membership unchanged")
+	# The Active Caster of a multi-selection is still chosen from the skill bar.
+	battle.select_group(0)
+	_check(battle.set_active_caster(hero) and battle.get_selection() == [hero, merc_a] and battle.get_selected() == hero, "Skill-bar caster change keeps the multi-selection")
+	_check(not battle.set_active_caster(merc_b) and battle.get_selected() == hero, "A unit outside the selection cannot be made caster")
+	_check(battle.select_unit(merc_b) and battle.get_selection() == [merc_b] and battle.get_selected() == merc_b, "Tap a unit outside the selection: single selection")
+	_check(battle.select_unit(merc_a) and battle.select_unit(merc_a) and battle.get_selection() == [merc_a], "Single selection tapped again: still single")
 	# Dead members are ignored for selection, kept as members.
 	battle.advance(CombatConfig.PREPARATION_MS)
 	battle.select_all()
@@ -90,10 +99,10 @@ func _verify_selection() -> void:
 	_check(battle.get_selection() == [hero, merc_a] and battle.get_selected() == hero, "A dead caster leaves the selection; the next selected unit is the Active Caster")
 	_check(battle.select_group(1) and battle.get_selection() == [merc_a] and battle.get_group(1) == [merc_a, merc_b], "Group ② with B dead: only A selected; B still a member")
 	_check(battle.select_all() and battle.get_selection() == [hero, merc_a], "全體 ignores the dead")
-	_check(not battle.set_active_caster(merc_b) and not battle.select_or_activate(merc_b), "A dead unit cannot be selected or made caster")
+	_check(not battle.set_active_caster(merc_b) and not battle.select_unit(merc_b), "A dead unit cannot be selected or made caster")
 	# Gesture window and result block selection; a new battle has no groups.
 	battle.open_gesture()
-	_check(not battle.select_all() and not battle.select_group(0) and not battle.select_or_activate(merc_a), "Gesture Window open: no selection change")
+	_check(not battle.select_all() and not battle.select_group(0) and not battle.select_unit(merc_a), "Gesture Window open: no selection change")
 	var next := CombatBattle.create(10)
 	_check(next.get_group(0).is_empty() and next.get_group(1).is_empty() and next.get_selection() == [next.get_hero()], "Groups exist for one battle only")
 	_sections_done.append("selection")
@@ -338,6 +347,329 @@ func _verify_lifecycle_rules() -> void:
 	_sections_done.append("lifecycle_rules")
 
 
+# --- iPhone L3 Fix 1: a group command is a one-time order --------------------------------------
+
+func _verify_group_override() -> void:
+	var battle := _fight(10, 3)
+	var friends := battle.get_friends()
+	var hero := friends[0]
+	var merc_a := friends[1]
+	var merc_b := friends[2]
+	_place(hero, Vector2i(10, 2))
+	_place(merc_a, Vector2i(10, 1))
+	_place(merc_b, Vector2i(10, 3))
+	for friend in friends:
+		friend.max_hp = 100000
+		friend.hp = 100000
+	for member in friends:
+		battle.toggle_group_member(0, member)
+	# A. Group ① Move Right, then Merc A alone Move Left.
+	battle.select_group(0)
+	_check(battle.command_move_selection(Vector2i(20, 2)) and friends.all(func(u: CombatUnit) -> bool: return u.has_goal and u.goal == Vector2i(20, 2)), "A. Group ① Move Right: every member heads right")
+	battle.advance(300)
+	_check(battle.tap(merc_a.cell) and battle.get_selection() == [merc_a], "A. Tap Merc A (battlefield) after the group order: A alone selected")
+	_check(battle.tap(Vector2i(3, 1)) and merc_a.goal == Vector2i(3, 1) and hero.goal == Vector2i(20, 2) and merc_b.goal == Vector2i(20, 2), "A. Merc A Move Left: only A's order replaced, Hero and B keep Move Right")
+	var hero_x := hero.cell.x
+	var a_x := merc_a.cell.x
+	battle.advance(1500)
+	_check(hero.cell.x > hero_x and merc_b.cell.x > hero_x - 1 and merc_a.cell.x < a_x and hero.has_goal and merc_b.has_goal, "A. Hero and B keep moving right, A moves left")
+	_check(battle.get_group(0) == [hero, merc_a, merc_b], "A. Group ① membership unchanged")
+	# B. 全體 Move, then one unit gets another order (a target).
+	var enemy := battle.get_enemies()[0]
+	_place(enemy, Vector2i(30, 0))
+	enemy.attack_damage = 0
+	battle.select_all()
+	battle.command_move_selection(Vector2i(25, 4))
+	battle.select_unit(hero)
+	_check(battle.command_target(enemy) and hero.target == enemy and not hero.has_goal and merc_a.goal == Vector2i(25, 4) and merc_b.goal == Vector2i(25, 4) and merc_a.target == null, "B. 全體 Move, then Hero Target: only the Hero changes")
+	# C. An individual Skill leaves the others' orders alone.
+	battle.select_unit(merc_a)
+	_check(battle.command_skill() and merc_a.skill_state == CombatUnit.SkillState.CASTING and hero.target == enemy and merc_b.has_goal and merc_b.goal == Vector2i(25, 4), "C. Merc A Guard: Hero's target and B's move untouched")
+	battle.select_unit(hero)
+	_check(battle.start_skill_aim() and battle.tap(enemy.cell) and hero.skill_state == CombatUnit.SkillState.PENDING and merc_b.goal == Vector2i(25, 4) and merc_a.skill_state == CombatUnit.SkillState.CASTING, "C. Hero Slow on an enemy: B's move and A's cast untouched")
+	# Selecting through a portrait (the HUD) changes no order.
+	var main := Node.new()
+	var view := CombatView.new()
+	root.add_child(main)
+	main.add_child(view)
+	view.open(battle)
+	view.press_all()
+	_check(view.press_portrait(merc_b) and battle.get_selection() == [merc_b] and merc_b.goal == Vector2i(25, 4) and hero.skill_state == CombatUnit.SkillState.PENDING, "Portrait tap selects B alone and changes no order")
+	main.free()
+	_sections_done.append("group_override")
+
+
+# --- iPhone L3 Fix 2: 全體進攻 keeps attacking -----------------------------------------------
+
+func _attack_ready(enemies: int) -> CombatBattle:
+	var battle := _fight(10, enemies)
+	for friend in battle.get_friends():
+		friend.max_hp = 100000
+		friend.hp = 100000
+	return battle
+
+
+func _targets_alive(battle: CombatBattle) -> bool:
+	return battle.get_friends().all(func(u: CombatUnit) -> bool: return u.target == null or u.target.alive)
+
+
+func _verify_attack_all_continuous() -> void:
+	# A / B. Two enemies: the first dies, everyone takes the next; repeat to VICTORY.
+	var battle := _attack_ready(2)
+	var friends := battle.get_friends()
+	var enemies := battle.get_enemies()
+	_place(enemies[0], Vector2i(6, 2))
+	_place(enemies[1], Vector2i(14, 2))
+	_check(battle.attack_all() and friends.all(func(u: CombatUnit) -> bool: return u.target == enemies[0] and u.attack_all_intent), "A. 全體進攻: all on the nearest enemy, continuous intent")
+	var dead_target_seen := false
+	var retargeted := false
+	for step in range(2400):
+		battle.advance(25)
+		dead_target_seen = dead_target_seen or not _targets_alive(battle)
+		if not enemies[0].alive and not retargeted and battle.get_phase() == CombatBattle.Phase.FIGHTING:
+			battle.advance(25)
+			retargeted = friends.all(func(u: CombatUnit) -> bool: return u.target == enemies[1])
+		if battle.is_over():
+			break
+	_check(retargeted, "A. First enemy dead: every friendly takes the next alive enemy by itself")
+	_check(battle.get_phase() == CombatBattle.Phase.VICTORY and not enemies[1].alive, "B. Continues until no enemy remains: VICTORY with no further command")
+	_check(not dead_target_seen, "Never targets a dead enemy")
+	_check(friends.all(func(u: CombatUnit) -> bool: return not u.attack_all_intent), "The intent ends with the fighting")
+	# Deterministic: same set-up, same order of kills.
+	var kills := []
+	for run in range(2):
+		var replay := _attack_ready(3)
+		var order := []
+		replay.unit_died.connect(func(u: CombatUnit) -> void: order.append(u.id))
+		_place(replay.get_enemies()[0], Vector2i(9, 0))
+		_place(replay.get_enemies()[1], Vector2i(7, 4))
+		_place(replay.get_enemies()[2], Vector2i(12, 2))
+		replay.attack_all()
+		for step in range(4800):
+			replay.advance(25)
+			if replay.is_over():
+				break
+		kills.append(order)
+	_check(kills[0] == kills[1] and kills[0].size() == 3, "Deterministic retargeting (%s)" % str(kills[0]))
+	# C / D. Override one unit: only it leaves the continuous attack.
+	var over := _attack_ready(3)
+	var of := over.get_friends()
+	var oe := over.get_enemies()
+	_place(oe[0], Vector2i(6, 2))
+	_place(oe[1], Vector2i(9, 1))
+	_place(oe[2], Vector2i(9, 3))
+	over.attack_all()
+	over.select_unit(of[0])
+	_check(over.command_move(Vector2i(2, 2)) and not of[0].attack_all_intent and of[1].attack_all_intent and of[2].attack_all_intent, "C. Hero Move: the Hero leaves the continuous attack, A and B stay in it")
+	over.resolve_damage(of[1], oe[0], 100000)
+	over.advance(25)
+	_check(of[0].target == null and of[0].has_goal and of[1].target != null and of[1].target.alive and of[2].target != null and of[2].target.alive, "D. After a kill A and B take the next enemy; the Hero keeps its own move")
+	over.select_unit(of[1])
+	_check(over.command_target(oe[2]) and not of[1].attack_all_intent and of[1].target == oe[2] and of[2].attack_all_intent, "C. A personal Target also ends A's continuous attack (B unchanged)")
+	# A plain target order is not continuous (no Auto Battle).
+	var plain := _attack_ready(2)
+	var pf := plain.get_friends()
+	_place(plain.get_enemies()[0], Vector2i(4, 2))
+	_place(plain.get_enemies()[1], Vector2i(6, 2))
+	plain.select_unit(pf[0])
+	plain.command_target(plain.get_enemies()[0])
+	plain.resolve_damage(pf[0], plain.get_enemies()[0], 100000)
+	plain.advance(500)
+	_check(pf[0].target == null and pf.all(func(u: CombatUnit) -> bool: return not u.attack_all_intent and u.target == null), "A plain Target / no command never picks a new enemy (no Auto Battle)")
+	# E. Retreat cancels the intent; cancelling the retreat does not restore it.
+	var retreat := _attack_ready(3)
+	retreat.attack_all()
+	_check(retreat.start_retreat() and retreat.get_friends().all(func(u: CombatUnit) -> bool: return not u.attack_all_intent and u.target == null), "E. Retreat: the continuous attack ends")
+	retreat.cancel_retreat()
+	retreat.advance(500)
+	_check(retreat.get_friends().all(func(u: CombatUnit) -> bool: return u.target == null and not u.attack_all_intent), "E. Retreat cancelled: no order comes back")
+	# A friendly death ends its own intent.
+	var death := _attack_ready(3)
+	death.attack_all()
+	death.resolve_damage(death.get_enemies()[0], death.get_friends()[2], 1000000)
+	_check(not death.get_friends()[2].attack_all_intent and death.get_friends()[0].attack_all_intent, "A dead friendly leaves the continuous attack")
+	# F. Skill priority: a casting unit is refused; a pending Skill is replaced.
+	var skills := _attack_ready(3)
+	var sf := skills.get_friends()
+	var se := skills.get_enemies()
+	skills.select_unit(sf[1])
+	skills.command_skill()
+	skills.select_unit(sf[0])
+	skills.command_skill(se[2])
+	_check(sf[1].skill_state == CombatUnit.SkillState.CASTING and sf[0].skill_state == CombatUnit.SkillState.PENDING, "F. Setup: A casting Guard, Hero approaching for Slow")
+	skills.attack_all()
+	_check(not sf[1].attack_all_intent and sf[1].skill_state == CombatUnit.SkillState.CASTING and sf[0].attack_all_intent and sf[0].skill_state == CombatUnit.SkillState.NONE and sf[0].mp == sf[0].max_mp, "F. 全體進攻: the casting unit refused (no intent), the pending Skill replaced (no MP)")
+	skills.advance(CombatConfig.SKILL_CAST_MS)
+	_check(sf[1].skill_state == CombatUnit.SkillState.NONE and sf[1].target == null and not sf[1].attack_all_intent, "F. After its cast A does not join by itself")
+	# A Skill during the continuous attack: the unit resumes and keeps going.
+	var resume := _attack_ready(3)
+	var rf := resume.get_friends()
+	var re := resume.get_enemies()
+	_place(re[0], Vector2i(3, 1))
+	resume.attack_all()
+	var first: CombatUnit = rf[1].target
+	resume.select_unit(rf[1])
+	_check(resume.command_skill() and rf[1].skill_state == CombatUnit.SkillState.CASTING and rf[1].attack_all_intent, "F. Guard during 全體進攻: the cast runs, the intent stays")
+	resume.resolve_damage(rf[0], first, 100000)
+	for step in range(CombatConfig.SKILL_CAST_MS / 25 + 2):
+		resume.advance(25)
+	_check(rf[1].skill_state == CombatUnit.SkillState.NONE and rf[1].target != null and rf[1].target != first and rf[1].target.alive, "F. Its target died during the cast: after the cast it takes the next enemy")
+	_sections_done.append("attack_all_continuous")
+
+
+# --- iPhone L3 Fix 3: navigator finger + combat finger ------------------------------------------
+
+## Sends one real touch event (screen pixels of the 720 x 1280 HUD) the way a
+## device does: through the root viewport, per finger index.
+func _touch(index: int, at: Vector2, pressed: bool) -> void:
+	var event := InputEventScreenTouch.new()
+	event.index = index
+	event.position = root.get_final_transform() * at
+	event.pressed = pressed
+	root.push_input(event)
+	await process_frame
+
+
+func _touch_drag(index: int, at: Vector2) -> void:
+	var event := InputEventScreenDrag.new()
+	event.index = index
+	event.position = root.get_final_transform() * at
+	root.push_input(event)
+	await process_frame
+
+
+## The mouse event Godot emulates from the first finger (device -1).
+func _emulated_click(at: Vector2, pressed: bool) -> void:
+	var event := InputEventMouseButton.new()
+	event.device = InputEvent.DEVICE_ID_EMULATION
+	event.button_index = MOUSE_BUTTON_LEFT
+	event.pressed = pressed
+	event.position = root.get_final_transform() * at
+	event.global_position = event.position
+	root.push_input(event)
+	await process_frame
+
+
+func _verify_multi_touch() -> void:
+	var main := Node.new()
+	var view := CombatView.new()
+	root.add_child(main)
+	main.add_child(view)
+	var battle := _fight(10, 3)
+	_toughen(battle.get_enemies())
+	view.open(battle)
+	view.set_physics_process(false)
+	await process_frame
+	var hero := battle.get_hero()
+	var merc_b := battle.get_friends()[2]
+	var nav := CombatView.NAVIGATOR_RECT
+	var nav_y := nav.position.y + nav.size.y / 2.0
+	var field_y := CombatView.FIELD_TOP + 200.0
+	# Finger 0 holds and drags the navigator.
+	await _touch(0, Vector2(nav.position.x + 10.0, nav_y), true)
+	await _touch_drag(0, Vector2(nav.position.x + 200.0, nav_y))
+	var scroll := view.get_scroll_x()
+	_check(scroll > 0.0 and view.get_navigator_pointer() == 0 and not view.is_field_pressed(), "Finger 0 drags the navigator: camera moves, no battlefield press")
+	_check(not hero.has_goal and hero.target == null and battle.get_selection() == [hero], "B. The navigator finger itself issues no command")
+	# A. Finger 1 meanwhile: portrait, then a battlefield Move.
+	await _touch(1, view.get_node("Portrait2").position + Vector2(40.0, 40.0), true)
+	await _touch(1, view.get_node("Portrait2").position + Vector2(40.0, 40.0), false)
+	_check(battle.get_selection() == [merc_b], "A. Finger 1 taps a portrait while finger 0 holds the navigator")
+	var move_at := Vector2(360.0, field_y)
+	var move_cell := view.cell_at(move_at)
+	await _touch(1, move_at, true)
+	await _touch(1, move_at, false)
+	_check(merc_b.has_goal and merc_b.goal == move_cell and not hero.has_goal, "A. Finger 1 Move on the battlefield works (only Merc B)")
+	_check(view.get_navigator_pointer() == 0 and view.get_scroll_x() == scroll, "D. Finger 1's release does not end the navigator drag")
+	# C. The navigator drag continues.
+	await _touch_drag(0, Vector2(nav.position.x + 320.0, nav_y))
+	_check(view.get_scroll_x() > scroll, "C. Finger 0 keeps dragging the navigator after finger 1")
+	view.navigator_drag(0.0, 1)
+	_check(view.get_scroll_x() > scroll, "Another pointer cannot move the navigator drag")
+	view.navigator_release(1)
+	_check(view.get_navigator_pointer() == 0, "Another pointer's release does not end the navigator drag")
+	# Buttons and Skills with finger 1: 全體, then a Skill and its target.
+	await _touch(1, (view.get_node("AllButton") as Control).position + Vector2(20.0, 20.0), true)
+	await _touch(1, (view.get_node("AllButton") as Control).position + Vector2(20.0, 20.0), false)
+	_check(battle.get_selection().size() == 3, "Finger 1 presses 全體 while the navigator is held")
+	battle.select_unit(hero)
+	view._refresh()
+	var slot := view.get_node("SkillSlot0") as Control
+	await _touch(1, slot.position + Vector2(40.0, 30.0), true)
+	await _touch(1, slot.position + Vector2(40.0, 30.0), false)
+	_check(battle.is_aiming(), "Finger 1 presses the Skill (緩速): aiming")
+	var enemy := battle.get_enemies()[0]
+	view.navigator_press((enemy.cell.x + 0.5) / CombatConfig.COLUMNS, 0)
+	var enemy_at := view.cell_center(Vector2(enemy.cell))
+	await _touch(1, enemy_at, true)
+	await _touch(1, enemy_at, false)
+	_check(hero.skill_state == CombatUnit.SkillState.PENDING and hero.skill_target == enemy, "Finger 1 picks the Skill target on the battlefield")
+	# E. Finger 0 lifts while finger 1 is pressing the battlefield: finger 1's tap still works.
+	battle.select_unit(merc_b)
+	var tap_at := Vector2(200.0, field_y)
+	var tap_cell := view.cell_at(tap_at)
+	await _touch(1, tap_at, true)
+	await _touch(0, Vector2(nav.position.x + 320.0, nav_y), false)
+	_check(view.get_navigator_pointer() == -1 and view.is_field_pressed(), "E. Navigator released; finger 1's press survives")
+	await _touch(1, tap_at, false)
+	_check(merc_b.goal == tap_cell and not view.is_field_pressed(), "E. Finger 1's tap completes after finger 0 lifted")
+	# F. Tap vs drag threshold per finger.
+	var before := view.get_scroll_x()
+	var goal := merc_b.goal
+	await _touch(2, Vector2(380.0, field_y), true)
+	await _touch_drag(2, Vector2(400.0, field_y))
+	await _touch(2, Vector2(400.0, field_y), false)
+	_check(before >= 20.0 and view.get_scroll_x() == before - 20.0 and merc_b.goal == goal, "F. A 20 px drag pans the camera and issues no command")
+	var wobble := Vector2(300.0, field_y)
+	await _touch(2, wobble, true)
+	await _touch_drag(2, wobble + Vector2(8.0, 0.0))
+	await _touch(2, wobble + Vector2(8.0, 0.0), false)
+	_check(merc_b.goal == view.cell_at(wobble + Vector2(8.0, 0.0)), "F. An 8 px wobble is still a tap")
+	# A second finger landing on the battlefield during a press is ignored.
+	await _touch(1, Vector2(200.0, field_y), true)
+	await _touch(2, Vector2(500.0, field_y), true)
+	await _touch(2, Vector2(500.0, field_y), false)
+	await _touch(1, Vector2(200.0, field_y), false)
+	_check(merc_b.goal == view.cell_at(Vector2(200.0, field_y)) and not view.is_field_pressed(), "Two fingers on the battlefield: the first press wins, no stuck state")
+	# The first finger's emulated mouse events are never handled twice.
+	view.press_group(0)
+	var portrait := (view.get_node("Portrait0") as Control).position + Vector2(40.0, 40.0)
+	await _touch(0, portrait, true)
+	await _emulated_click(portrait, true)
+	await _touch(0, portrait, false)
+	await _emulated_click(portrait, false)
+	_check(battle.get_group(0) == [hero], "Finger 0 portrait tap (touch + emulated mouse): toggled exactly once")
+	await _emulated_click(Vector2(360.0, field_y), true)
+	await _emulated_click(Vector2(360.0, field_y), false)
+	_check(not view.is_field_pressed() and battle.get_group(0) == [hero], "Emulated mouse alone does nothing (touch already handled)")
+	view.press_group(0)
+	# Gesture: finger 1 draws while finger 0 holds the navigator.
+	battle.select_unit(hero)
+	view._refresh()
+	await _touch(0, Vector2(nav.position.x + 100.0, nav_y), true)
+	var lightning := view.get_node("SkillSlot1") as Control
+	await _touch(1, lightning.position + Vector2(40.0, 30.0), true)
+	await _touch(1, lightning.position + Vector2(40.0, 30.0), false)
+	_check(battle.is_gesture_open(), "Finger 1 opens 閃電 (Gesture Window) while finger 0 holds the navigator")
+	var area := CombatView.GESTURE_AREA
+	var stroke := _ideal()
+	await _touch(1, area.position + stroke[0] * area.size.x, true)
+	await _touch(3, area.position + Vector2(10.0, 10.0), true)
+	for index in range(1, stroke.size()):
+		await _touch_drag(1, area.position + stroke[index] * area.size.x)
+		if index == 5:
+			await _touch_drag(3, area.position + Vector2(40.0, 300.0))
+	await _touch_drag(0, Vector2(nav.position.x + 300.0, nav_y))
+	await _touch(3, area.position + Vector2(40.0, 300.0), false)
+	_check(battle.is_gesture_open(), "Another finger's lift does not submit the stroke")
+	await _touch(1, area.position + stroke[-1] * area.size.x, false)
+	_check(not battle.is_gesture_open() and battle.get_last_gesture().get("grade") == GestureMatcher.Grade.PERFECT, "Finger 1's stroke is graded PERFECT (finger 0 and 3 never mixed in)")
+	await _touch(0, Vector2(nav.position.x + 300.0, nav_y), false)
+	_check(view.get_navigator_pointer() == -1 and not view.is_field_pressed(), "All fingers lifted: no pointer state left")
+	main.free()
+	_sections_done.append("multi_touch")
+
+
 # --- In game -----------------------------------------------------------------------------------
 
 func _verify_in_game() -> void:
@@ -419,7 +751,9 @@ func _verify_in_game() -> void:
 	await process_frame
 	_check(view.get_editing_group() == -1 and battle.get_selection() == [hero, merc_a] and hint.text == "再按群組①可編輯成員", "完成①: Hero + A selected (%s)" % hint.text)
 	texts.append(hint.text)
-	_check(view.press_portrait(merc_a) and battle.get_selected() == merc_a and battle.get_selection() == [hero, merc_a] and view.get_portrait_state(1)["caster"] and view.get_portrait_state(0)["selected"], "Portrait A in the group: A Active Caster, Hero + A stay")
+	# iPhone L3 Fix 1: a portrait tap after a group selection selects that unit alone.
+	_check(view.press_portrait(merc_a) and battle.get_selected() == merc_a and battle.get_selection() == [merc_a] and view.get_portrait_state(1)["caster"] and not view.get_portrait_state(0)["selected"] and battle.get_group(0) == [hero, merc_a], "Portrait A after ①: A alone selected, ① unchanged")
+	_check(view.press_group(0) and view.get_editing_group() == -1 and battle.get_selection() == [hero, merc_a], "① again: selects Hero + A (not editing)")
 	view.press_group(0)
 	_check(view.get_editing_group() == 0, "Pressing the selected ① again: editing again")
 	view.press_portrait(merc_a)
@@ -432,7 +766,8 @@ func _verify_in_game() -> void:
 	view.press_all()
 	_check(battle.get_selection() == [hero, merc_a, merc_b] and view.get_portrait_state(1)["groups"] == ["②"] and view.get_editing_group() == -1, "② = A + B; 全體 selects all")
 	view.press_portrait(merc_b)
-	_check(battle.get_selection() == [hero, merc_a, merc_b] and battle.get_selected() == merc_b, "Portrait B in 全體: caster B, all stay selected")
+	_check(battle.get_selection() == [merc_b] and battle.get_selected() == merc_b, "Portrait B after 全體: B alone selected")
+	view.press_all()
 	# Character info.
 	(view.get_node("InfoButton1") as Button).pressed.emit()
 	await process_frame

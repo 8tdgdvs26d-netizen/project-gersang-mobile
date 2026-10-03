@@ -60,14 +60,21 @@ groups and the camera are never saved). No combat value changed.
   the battlefield; the skill bar; the horizontal camera navigator. The permanent instruction line
   and the HP / MP debug text are gone; 「點敵人施放技能　點其他地方取消」 shows only while aiming
 - selection lives in `CombatBattle` (`get_selection()`; `get_selected()` is the Active Caster).
-  Tapping a friendly (portrait or battlefield) selects only it, unless it is already part of a
-  multi-selection: then it just becomes the Active Caster. Dead units leave the selection (a dead
-  Active Caster passes the role to the next selected unit and its Skill aim ends)
+  A group / 全體 command is a one-time order to each member, not a binding: tapping a friendly
+  (portrait or battlefield) selects only it, and its next Move / Target / Skill replaces only its
+  own order — the other members keep theirs (iPhone L3 corrective). The Active Caster of a
+  multi-selection is chosen from the skill bar. Dead units leave the selection (a dead Active
+  Caster passes the role to the next selected unit and its Skill aim ends)
 - Move / Target go to every selected unit through the existing per-unit commands: the same tapped
   cell for all (existing nearest-free spreading, no shared cell), each attacking from its own range;
   a casting unit refuses (C06), a pending Skill is replaced
 - 全體進攻: every alive friendly targets its nearest alive enemy (grid distance; a tie goes to the
-  earlier enemy) and ends a Skill aim. FIGHTING only (disabled in PREPARATION and while retreating)
+  earlier enemy) and ends a Skill aim. FIGHTING only (disabled in PREPARATION and while retreating).
+  It is a continuous attack (`CombatUnit.attack_all_intent`, runtime only): when a unit's target is
+  gone it takes the next nearest alive enemy, until another Move / Target order for that unit, the
+  retreat, its death or the end of the fighting. A casting unit is refused (no intent); a pending
+  Skill is replaced; a Skill used during it resumes the attack afterwards. A plain Target order
+  never picks a new enemy (no Auto Battle)
 - 全體撤退 / 取消撤退 (manual retreat, cancellable) / 強制撤退中 (time up, disabled) — the C04 / C07
   retreat itself is unchanged; the skill bar hides while retreating and after the result
 - groups ① ②: temporary, this battle only, overlapping allowed, dead members stay members but are
@@ -83,6 +90,11 @@ groups and the camera are never saved). No combat value changed.
   fits does not move) or press / drag the navigator (horizontal, shows the visible range and both
   sides as dots). Battlefield taps resolve on release; a press that moves 12 px or more is a drag
   and issues no command
+- multi-touch: every finger is its own pointer (`CombatView.pointer_event()`); the battlefield, the
+  navigator, the portraits and the Gesture Window follow only the finger that pressed them (the
+  mouse events Godot emulates from the first finger are dropped, so nothing is handled twice). One
+  hand can hold the navigator while the other selects, presses buttons, moves, targets, uses
+  Skills or draws the Gesture; the navigator finger never issues a command
 - tests: `tests/verify_c08_mobile_combat.gd`; UI-facing checks of the C03 / C04 / C06 / C07 tests
   were moved to the new HUD (gameplay assertions unchanged)
 

@@ -74,6 +74,10 @@ var slowed := false
 var resume_target: CombatUnit
 var resume_has_goal := false
 var resume_goal := Vector2i.ZERO
+## C08 全體進攻: the unit keeps attacking — when its target is gone it takes
+## the nearest alive enemy — until another Move / Target order, the retreat,
+## its death or the end of the fighting (runtime only, never saved).
+var attack_all_intent := false
 
 
 static func create(unit_id: String, unit_team: Team, stats: Dictionary, start_cell: Vector2i) -> CombatUnit:
