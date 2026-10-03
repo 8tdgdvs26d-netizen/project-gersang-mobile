@@ -47,7 +47,30 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 7 S01: Character Stat Foundation. Runtime / model only; save version stays 9; no combat
+Stage 7 S02: Combat Formula Integration. Runtime only; save version stays 9; at STR / AGI / INT 10
+(every character in the game) the C01-C08 combat values are unchanged.
+
+- S02 prerequisite correction: `CharacterStats` gains a Growth layer — Effective = Base + Growth +
+  Allocated + Equipment. Growth is 0 (hook only for S03; nothing grants it, never saved)
+- formulas (Prototype tunable constants in `CharacterConfig`; every calculation and rounding rule in
+  `CharacterStats`; "- 10" never below 0):
+  - Physical Attack = base (20 / 15 / 12) + (STR - 10); Physical Defense = floor((STR - 10) x 0.5)
+  - Magic Attack = (INT - 10) x 2; Magic Defense = floor((INT - 10) x 0.5); Max MP = Effective MP
+    + (INT - 10) x 5
+  - Attack Interval = max(300 ms, round(base x (0.30 + 0.70 x 25 / (25 + (AGI - 10))))) — base
+    1.0 s: AGI 20 0.80 s, 40 0.62 s, 100 0.45 s; Merc B keeps 1.2 s at AGI 10
+  - Move Speed = min(7.0, base x (1 + 0.8 x (AGI - 10) / ((AGI - 10) + 30))) — 4.8 / 5.6 / 6.4 at
+    AGI 20 / 40 / 100; the 7.0 cap from AGI 460
+- combat: friendly Basic Attacks deal Physical Attack; every hit on a friendly meets its defense
+  first — damage = max(1, incoming - defense) (`CharacterStats.mitigate`; a 0 hit stays 0) — then
+  the C06 Guard halves it as before. Basic Attacks are PHYSICAL; Merc B's AoE (40 + Magic Attack)
+  and the Hero's Lightning ((100 + Magic Attack) x 120 / 100 / 50 / 0 %, rounded down) are MAGIC.
+  No enemy deals magic damage yet, so Magic Defense has no live consumer in play. Slow and Guard
+  are unchanged; enemies keep their fixed values (0 defense)
+- tests: `tests/verify_s02_combat_formulas.gd`; three S01 checks that asserted "no formula yet"
+  now assert the S02 values
+
+Previous: Stage 7 S01: Character Stat Foundation. Runtime / model only; save version stays 9; no combat
 value changed (C01-C08 behaviour preserved).
 
 - `CharacterStats` is the one stat model per character (Hero, Merc A, Merc B): HP (Max), MP (Max),

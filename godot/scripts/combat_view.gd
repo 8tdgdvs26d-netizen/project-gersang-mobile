@@ -1027,7 +1027,7 @@ class Field extends Control:
 			for cell: Vector2i in aoe["cells"]:
 				draw_rect(Rect2(origin + Vector2(cell) * cell_size, cell_size), Color(1.0, 0.55, 0.15, 0.5))
 			var center: Vector2i = aoe["cells"][0]
-			draw_string(get_theme_default_font(), _p(view.cell_center(Vector2(center))) + Vector2(-40.0, -40.0), CombatView.AOE_TEXT % CombatConfig.AOE_DAMAGE, HORIZONTAL_ALIGNMENT_CENTER, 80.0, 18, Color(1.0, 0.85, 0.4))
+			draw_string(get_theme_default_font(), _p(view.cell_center(Vector2(center))) + Vector2(-40.0, -40.0), CombatView.AOE_TEXT % int(aoe.get("damage", CombatConfig.AOE_DAMAGE)), HORIZONTAL_ALIGNMENT_CENTER, 80.0, 18, Color(1.0, 0.85, 0.4))
 		# C07: the last Gesture's targets, while its result shows.
 		if view.get_gesture_result_text() != "" and battle.get_last_gesture().has("targets"):
 			for unit: CombatUnit in battle.get_last_gesture()["targets"]:

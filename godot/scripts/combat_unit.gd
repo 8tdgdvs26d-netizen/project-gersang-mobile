@@ -31,6 +31,11 @@ var attack_range := 1
 var attack_interval_ms := 1000
 ## Cells per second.
 var move_speed := 1.0
+## Stage 7 S02 (friendly units, from CharacterStats at battle start; enemies
+## keep 0): Magic Attack (AoE / Lightning) and damage reduction per hit.
+var magic_attack := 0
+var physical_defense := 0
+var magic_defense := 0
 
 var alive := true
 ## The cell the unit stands on (while stepping: the cell it left).
@@ -90,6 +95,9 @@ static func create(unit_id: String, unit_team: Team, stats: Dictionary, start_ce
 	unit.attack_range = int(stats["attack_range"])
 	unit.attack_interval_ms = int(stats["attack_interval_ms"])
 	unit.move_speed = float(stats["move_speed"])
+	unit.magic_attack = int(stats.get("magic_attack", 0))
+	unit.physical_defense = int(stats.get("physical_defense", 0))
+	unit.magic_defense = int(stats.get("magic_defense", 0))
 	unit.cell = start_cell
 	unit.next_cell = start_cell
 	unit.claim = start_cell
