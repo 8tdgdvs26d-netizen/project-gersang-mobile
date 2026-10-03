@@ -480,13 +480,13 @@ func _verify_world_lifecycle() -> void:
 	_check(battle.get_phase() == CombatBattle.Phase.PREPARATION and not retreat_button.visible, "PREPARATION: no 撤退 button")
 	battle.advance(CombatConfig.PREPARATION_MS)
 	await process_frame
-	_check(retreat_button.visible and retreat_button.text == "撤退" and status.text == "戰鬥", "FIGHTING: 撤退 button")
+	_check(retreat_button.visible and retreat_button.text == "全體撤退" and status.text == "戰鬥", "FIGHTING: 全體撤退 button (C08 label)")
 	retreat_button.pressed.emit()
 	await process_frame
 	_check(battle.is_retreating() and retreat_button.text == "取消撤退" and status.text == "撤退中", "Pressed: 撤退中, button 取消撤退")
 	retreat_button.pressed.emit()
 	await process_frame
-	_check(not battle.is_retreating() and retreat_button.text == "撤退" and status.text == "戰鬥", "Pressed again: cancelled")
+	_check(not battle.is_retreating() and retreat_button.text == "全體撤退" and status.text == "戰鬥", "Pressed again: cancelled")
 	retreat_button.pressed.emit()
 	var spot := player.global_position
 	var group_2 := main.get_node(NODES[1]) as WorldMonster

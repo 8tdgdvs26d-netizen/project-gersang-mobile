@@ -47,7 +47,58 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C07: Minimum Gesture Skill. Runtime only; save version stays 9 (nothing about the Gesture or
+Combat C08: Mobile Combat Controls & Integration. Runtime only; save version stays 9 (selection,
+groups and the camera are never saved). No combat value changed.
+
+- HUD (top to bottom): 全體撤退 (left) / Combat Clock / 全體進攻 (right); the phase line; two
+  independent aggregate HP bars (「我方 N%」 shrinks from the centre to the left, 「敵方 N%」 from
+  the centre to the right; each is current HP over the side's total fixed at battle start, never
+  shown as 100% while damaged or 0% while anyone lives); 群組① 群組② 全體; up to 4 portraits (party
+  of 3 now) with HP / 魔力 bars, ①② marks, 陣亡, a white frame for selected units and a gold frame
+  and diamond for the Active Caster, and an ⓘ button that opens a closable info panel (name, HP,
+  魔力, attack, range, interval, move speed, level, EXP, skills and cooldowns — existing data only);
+  the battlefield; the skill bar; the horizontal camera navigator. The permanent instruction line
+  and the HP / MP debug text are gone; 「點敵人施放技能　點其他地方取消」 shows only while aiming
+- selection lives in `CombatBattle` (`get_selection()`; `get_selected()` is the Active Caster).
+  A group / 全體 command is a one-time order to each member, not a binding: tapping a friendly
+  (portrait or battlefield) selects only it, and its next Move / Target / Skill replaces only its
+  own order — the other members keep theirs (iPhone L3 corrective). The Active Caster of a
+  multi-selection is chosen from the skill bar. Dead units leave the selection (a dead Active
+  Caster passes the role to the next selected unit and its Skill aim ends)
+- Move / Target go to every selected unit through the existing per-unit commands: the same tapped
+  cell for all (existing nearest-free spreading, no shared cell), each attacking from its own range;
+  a casting unit refuses (C06), a pending Skill is replaced
+- 全體進攻: every alive friendly targets its nearest alive enemy (grid distance; a tie goes to the
+  earlier enemy) and ends a Skill aim. FIGHTING only (disabled in PREPARATION and while retreating).
+  It is a continuous attack (`CombatUnit.attack_all_intent`, runtime only): when a unit's target is
+  gone it takes the next nearest alive enemy, until another Move / Target order for that unit, the
+  retreat, its death or the end of the fighting. A casting unit is refused (no intent); a pending
+  Skill is replaced; a Skill used during it resumes the attack afterwards. A plain Target order
+  never picks a new enemy (no Auto Battle)
+- 全體撤退 / 取消撤退 (manual retreat, cancellable) / 強制撤退中 (time up, disabled) — the C04 / C07
+  retreat itself is unchanged; the skill bar hides while retreating and after the result
+- groups ① ②: temporary, this battle only, overlapping allowed, dead members stay members but are
+  skipped when selecting. Empty group: tap to edit (button shows 完成①, portrait taps add / remove),
+  tap 完成① to finish and select. Non-empty group: tap selects it; tapping the already selected
+  group again edits it (hint 「再按群組①可編輯成員」). 全體 selects every alive friendly
+- skill bar: one selected unit shows full entries (「普通技能：緩速　魔力 25」, the Hero also
+  「特殊技能：閃電　魔力 50」, plus a state line); several selected units show compact drawn icons
+  (緩 / 守 / 爆 / 雷) with the owner's name. Pressing an entry makes its owner the Active Caster (the
+  selection stays) and runs the existing C06 aim / C07 Gesture flow. The old 技能 / 閃電 buttons are
+  replaced
+- camera (`CombatCamera`): follows nobody. Drag the battlefield (both axes, clamped; an axis that
+  fits does not move) or press / drag the navigator (horizontal, shows the visible range and both
+  sides as dots). Battlefield taps resolve on release; a press that moves 12 px or more is a drag
+  and issues no command
+- multi-touch: every finger is its own pointer (`CombatView.pointer_event()`); the battlefield, the
+  navigator, the portraits and the Gesture Window follow only the finger that pressed them (the
+  mouse events Godot emulates from the first finger are dropped, so nothing is handled twice). One
+  hand can hold the navigator while the other selects, presses buttons, moves, targets, uses
+  Skills or draws the Gesture; the navigator finger never issues a command
+- tests: `tests/verify_c08_mobile_combat.gd`; UI-facing checks of the C03 / C04 / C06 / C07 tests
+  were moved to the new HUD (gameplay assertions unchanged)
+
+Previous: Combat C07: Minimum Gesture Skill. Runtime only; save version stays 9 (nothing about the Gesture or
 the Combat Clock is saved).
 
 - Hero only, one symbol: Lightning (⚡). The Hero's MP is 200 (shared with its Normal Skill, still
