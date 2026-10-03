@@ -309,7 +309,10 @@ func _verify_in_game() -> void:
 		battle.resolve_damage(f[0], enemy, 1000)
 	await process_frame
 	var reward := (view.get_node("RewardLabel") as Label)
-	_check(reward.visible and reward.text == "主角 經驗 +50　傭兵B 經驗 +50", "Result screen: 主角 經驗 +50　傭兵B 經驗 +50 (%s)" % reward.text)
+	# Stage 7 corrective: a VICTORY shows its reward in the Victory Result
+	# Modal (the C05 result line stays for DEFEAT / RETREAT).
+	_check(not reward.visible and reward.text == "主角 經驗 +50　傭兵B 經驗 +50", "Result screen: 主角 經驗 +50　傭兵B 經驗 +50 (%s)" % reward.text)
+	_check(view.is_result_modal_open() and view.get_victory_lines() == ["擊敗敵人 10 名", "主角　經驗 +50", "傭兵B（術法）　經驗 +50"], "Victory Result Modal: 10 defeated, 主角 +50, 傭兵B（術法） +50 (%s)" % str(view.get_victory_lines()))
 	_check(main.progression.get_exp("hero") == 0, "Nothing applied before the commit")
 	_delete(TEST_SAVE)
 	(view.get_node("ExitButton") as Button).pressed.emit()
@@ -334,6 +337,7 @@ func _verify_in_game() -> void:
 	await process_frame
 	# S04: the Level Up line also states the Stat Points it brought (was "主角 升至 2 級").
 	_check(reward.text == "主角 經驗 +100\n主角 升至 2 級（屬性點 +3）", "Result screen shows the Level Up and its Stat Points (%s)" % reward.text)
+	_check(view.get_victory_lines() == ["擊敗敵人 10 名", "主角　經驗 +100", "主角 升至 2 級（屬性點 +3）"], "Victory Result Modal shows the Level Up and its Stat Points (%s)" % str(view.get_victory_lines()))
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(main.progression.get_level("hero") == 2 and main.progression.get_exp("hero") == 50, "Hero Lv2 with 50 overflow")
 	await _destroy(main)

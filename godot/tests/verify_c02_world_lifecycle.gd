@@ -52,8 +52,13 @@ func _verify_static() -> void:
 			_check(not code.contains(word), "%s knows nothing about %s" % [path.get_file(), word])
 	for path in ["res://scripts/battle_result.gd", "res://scripts/main.gd", "res://scripts/encounter_handoff.gd", "res://scripts/encounter_session.gd"]:
 		var code := _code_only(path).to_lower()
-		# C04 brought Retreat into scope ("retreat" left the list).
-		for word in ["reward", "loot", "exp ", "experience", "hospital", "revive", "penalty", "respawn"]:
+		# C04 brought Retreat into scope ("retreat" left the list); the Stage 7
+		# corrective brought the Prototype group respawn into scope for
+		# main.gd and encounter_handoff.gd (verify_s07_gate_corrective).
+		var words := ["reward", "loot", "exp ", "experience", "hospital", "revive", "penalty"]
+		if path.get_file() not in ["main.gd", "encounter_handoff.gd"]:
+			words.append("respawn")
+		for word in words:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_check(main.combat_enabled, "Combat is on in the game")
@@ -146,15 +151,19 @@ func _verify_victory() -> void:
 	_check(_commits.size() == 1 and _removed.size() == 2 and not FileAccess.file_exists(TEST_SAVE), "Repeats change nothing: no second commit, removal or save")
 	_check(session.get_protection_remaining_ms() == 4000, "Protection not restarted by a repeat (%d)" % session.get_protection_remaining_ms())
 	_write(TEST_SAVE, saved_text)
-	# Same session: world transitions never bring the groups back.
+	# Same session: world transitions never bring the groups back (Stage 7
+	# corrective: only the GROUP_RESPAWN_MS respawn does, so everything below
+	# stays inside it; verify_s07_gate_corrective covers the respawn).
 	player.global_position = WorldLayout.CITY_A
 	await _settle()
 	_check(main.try_enter_city() and main.leave_city(), "Enter and leave City A")
 	await _settle()
 	_check(not main.has_node(NODES[0]) and not main.has_node(NODES[2]) and main._world_monsters.size() == 1 and group_2.is_threat_active(), "After a city visit groups 1 and 3 are still gone")
 	player.global_position = PASSIVE_ONLY
-	main.time_source.advance_ms(10000)
+	# Past the 5 s protection, still before the respawn (1 s + 6 s < 10 s).
+	main.time_source.advance_ms(6000)
 	await _settle()
+	_check(not session.is_protection_active() and main.get_group_respawn().get_remaining_ms(IDS[2], main.time_source.now_ms()) == 3000, "Protection over, 3 s before the respawn")
 	_check(handoff.get_challengeable_group() == null and not session.challenge(), "Removed passive group 3 can no longer be challenged")
 	var frames := 0
 	while frames < 180:

@@ -413,13 +413,13 @@ func _verify_in_game() -> void:
 	await process_frame
 	# C08: per-unit HP moved from the always-on HUD text to the portraits /
 	# ⓘ info; the camera no longer follows the selected unit.
-	_check(view.get_info_text(friends[0]).contains("生命 300 / 300") and view.get_info_text(friends[1]).contains("生命 200 / 200") and view.get_info_text(friends[2]).contains("生命 150 / 150") and view.get_portrait_unit(2) == friends[2], "Each friendly unit's HP is shown (portrait / info)")
+	_check(view.get_info_text(friends[0]).contains("血量 300 / 300") and view.get_info_text(friends[1]).contains("血量 200 / 200") and view.get_info_text(friends[2]).contains("血量 150 / 150") and view.get_portrait_unit(2) == friends[2], "Each friendly unit's HP is shown (portrait / info)")
 	var scroll := view.get_scroll_x()
 	_check(view.tap_at(view.cell_center(Vector2(friends[2].cell))) and battle.get_selected() == friends[2] and view.get_scroll_x() == scroll, "Tap Merc B on screen: selected, the camera does not move (C08)")
 	battle.advance(CombatConfig.PREPARATION_MS)
 	battle.resolve_damage(battle.get_enemies()[0], friends[0], 1000)
 	await process_frame
-	_check(battle.get_phase() == CombatBattle.Phase.FIGHTING and not (view.get_node("ExitButton") as Button).visible and view.get_portrait_state(0)["dead"] and view.get_info_text(friends[0]).contains("生命 0 / 300"), "Hero dead in game: portrait 陣亡, still fighting, no exit")
+	_check(battle.get_phase() == CombatBattle.Phase.FIGHTING and not (view.get_node("ExitButton") as Button).visible and view.get_portrait_state(0)["dead"] and view.get_info_text(friends[0]).contains("血量 0 / 300"), "Hero dead in game: portrait 陣亡, still fighting, no exit")
 	_check(session.get_phase() == EncounterSession.Phase.LOCKED and main.get_combat() == battle, "The encounter stays LOCKED")
 	battle.resolve_damage(battle.get_enemies()[0], friends[1], 1000)
 	battle.resolve_damage(battle.get_enemies()[0], friends[2], 1000)

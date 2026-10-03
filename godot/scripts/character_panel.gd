@@ -12,24 +12,27 @@ extends CanvasLayer
 ## (CharacterStats.confirm_allocation). - only removes points of the current
 ## preview; no Stat Reset. Closing, switching character or an encounter
 ## discards the preview. Nothing here is saved (S05).
+## Stage 7 corrective: characters carry their Prototype role labels
+## (CharacterConfig.DISPLAY_NAMES) and the selected one is named at the top;
+## HP reads 血量 and MP 魔力 as plain values, with no formula / instruction
+## copy (the HP +10 per point and the not-allocatable MP rules are unchanged).
 
 signal opened
 signal closed
 signal allocation_confirmed(character_id: String)
 
 const ORDER := ["hero", "merc_a", "merc_b"]
-const NAMES := {"hero": "主角", "merc_a": "傭兵A", "merc_b": "傭兵B"}
+const NAMES := CharacterConfig.DISPLAY_NAMES
 ## Allocation rows (CharacterConfig.ALLOCATABLE order) and their labels.
 const ROWS := ["hp", "str", "agi", "int"]
-const ROW_NAMES := {"hp": "生命上限", "str": "力量", "agi": "敏捷", "int": "智力"}
+const ROW_NAMES := {"hp": "血量", "str": "力量", "agi": "敏捷", "int": "智力"}
 const OPEN_TEXT := "角色"
 const OPEN_POINTS_TEXT := "角色（屬性點 %d）"
 const TITLE_TEXT := "角色"
 const LEVEL_TEXT := "等級 %d　經驗 %d / %d"
 const LEVEL_MAX_TEXT := "等級 %d（最高等級）"
 const POINTS_TEXT := "未分配屬性點 %s"
-const HP_POINT_TEXT := "每點生命 +%d 生命上限"
-const MP_TEXT := "魔力上限 %s（不可直接分配）"
+const MP_TEXT := "魔力 %s"
 const DERIVED_TITLE := "能力"
 const CONFIRM_TEXT := "確認分配"
 const CLOSE_TEXT := "關閉"
@@ -76,10 +79,15 @@ func _ready() -> void:
 		var id: String = ORDER[index]
 		var tab := _button("Tab_" + id, NAMES[id], Vector2(24.0 + index * 228.0, 110.0), Vector2(216.0, 72.0), 28)
 		tab.pressed.connect(select_character.bind(id))
+		# The selected (disabled) tab reads gold, not greyed out.
+		tab.add_theme_color_override("font_disabled_color", Color(1.0, 0.85, 0.4))
 		_panel.add_child(tab)
 		_tabs[id] = tab
 	for index in range(3):
 		var info := _label("Info%d" % index, "", Vector2(32.0, 196.0 + index * 40.0), Vector2(656.0, 40.0), 26)
+		if index == 0:
+			# The selected character's name, so it is never in doubt.
+			info.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
 		_panel.add_child(info)
 		_info_labels.append(info)
 	for index in range(ROWS.size()):
@@ -225,12 +233,12 @@ func get_lines() -> Array[String]:
 		return lines
 	var after := get_preview_stats()
 	var level := progression.get_level(_selected) if progression != null else ProgressionState.START_LEVEL
+	lines.append(NAMES[_selected])
 	if level >= ProgressionState.MAX_LEVEL:
 		lines.append(LEVEL_MAX_TEXT % level)
 	else:
 		lines.append(LEVEL_TEXT % [level, progression.get_exp(_selected) if progression != null else 0, ProgressionState.required_exp(level)])
 	lines.append(POINTS_TEXT % _pair(stats.get_unspent_points(), after.get_unspent_points()))
-	lines.append(HP_POINT_TEXT % int(CharacterConfig.ALLOCATION_VALUE["hp"]))
 	for stat in ROWS:
 		lines.append("%s %s" % [ROW_NAMES[stat], _pair(_row_value(stats, stat), _row_value(after, stat))])
 	lines.append(MP_TEXT % _pair(stats.get_max_mp(), after.get_max_mp()))

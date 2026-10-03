@@ -76,6 +76,11 @@ const LEVEL_UP_TEXT := "%s 升至 %d 級（屬性點 +%d）"
 const NO_REWARD_TEXT := "本場沒有獲得經驗"
 ## C03: friendly unit names and colours (Prototype presentation).
 const ROLE_NAMES := {CombatUnit.Role.HERO: "主角", CombatUnit.Role.MERC_A: "傭兵A", CombatUnit.Role.MERC_B: "傭兵B"}
+## Stage 7 corrective: the full Prototype role labels (CharacterConfig) where
+## there is room (info panel, Victory result); the short names above stay on
+## the battlefield and compact skill icons, and portraits add the role tag.
+const ROLE_LABELS := {CombatUnit.Role.HERO: CharacterConfig.DISPLAY_NAMES["hero"], CombatUnit.Role.MERC_A: CharacterConfig.DISPLAY_NAMES["merc_a"], CombatUnit.Role.MERC_B: CharacterConfig.DISPLAY_NAMES["merc_b"]}
+const ROLE_TAGS := {CombatUnit.Role.HERO: "", CombatUnit.Role.MERC_A: "守護", CombatUnit.Role.MERC_B: "術法"}
 const ROLE_COLORS := {CombatUnit.Role.HERO: Color(0.95, 0.78, 0.3), CombatUnit.Role.MERC_A: Color(0.35, 0.65, 0.95), CombatUnit.Role.MERC_B: Color(0.55, 0.85, 0.5)}
 ## C06 / C07 Skills (C08 skill bar; MP is shown as 魔力).
 const SKILL_NAMES := {"slow": "緩速", "guard": "守護", "aoe": "範圍攻擊", "lightning": "閃電"}
@@ -99,8 +104,21 @@ const AOE_TEXT := "範圍 -%d"
 ## How long the AoE cells stay marked (battle time).
 const AOE_MARK_MS := 600
 const EXIT_TEXT := "返回世界"
+## Stage 7 corrective: the Victory Result Modal (functional Prototype). A
+## panel inside the 720 x 1280 canvas (inside the iPhone safe area) over a
+## dim layer that takes every touch; its lines wrap and scroll inside the
+## panel and 返回世界 (the same ExitButton, same lifecycle) sits on the panel's
+## bottom edge, never under the scroll. Shows only data the battle and the
+## progression preview already have: enemies defeated, each survivor's EXP,
+## Level Ups with their Stat Points. DEFEAT / RETREAT keep the C05 result line.
+const RESULT_PANEL_RECT := Rect2(40.0, 240.0, 640.0, 800.0)
+const RESULT_SCROLL_RECT := Rect2(32.0, 116.0, 576.0, 540.0)
+const RESULT_EXIT_RECT := Rect2(190.0, 240.0 + 800.0 - 112.0, 340.0, 88.0)
+const EXIT_RECT := Rect2(190.0, SKILL_BAR_TOP + 86.0, 340.0, 80.0)
+const DEFEATED_TEXT := "擊敗敵人 %d 名"
+const RESULT_EXP_TEXT := "%s　經驗 +%d"
 ## C08 character info (only values the systems already have).
-const INFO_TEXT := "%s\n生命 %d / %d　魔力 %d / %d\n攻擊 %d　攻擊距離 %d 格\n攻擊間隔 %.1f 秒　移動速度 %.1f 格／秒"
+const INFO_TEXT := "%s\n血量 %d / %d　魔力 %d / %d\n攻擊 %d　攻擊距離 %d 格\n攻擊間隔 %.1f 秒　移動速度 %.1f 格／秒"
 const INFO_PROGRESS_TEXT := "\n等級 %d　經驗 %d"
 const INFO_SKILL_TEXT := "\n%s（%s）"
 const INFO_GUARD_TEXT := "\n守護中 %.1f 秒"
@@ -138,6 +156,10 @@ var _reward_label: Label
 ## EXP preview and the info panel's Level / EXP; the world lifecycle applies it.
 var progression: ProgressionState
 var _exit_button: Button
+var _result_modal: Control
+var _result_title: Label
+var _result_scroll: ScrollContainer
+var _result_lines: VBoxContainer
 var _retreat_button: Button
 var _attack_all_button: Button
 var _clock_label: Label
@@ -246,7 +268,7 @@ func _ready() -> void:
 	_hint_label = _label("HintLabel", 1186.0, 22, Color(0.85, 0.85, 0.95))
 	_reward_label = _label("RewardLabel", SKILL_BAR_TOP + 4.0, 24, Color(0.95, 0.85, 0.5))
 	_reward_label.offset_bottom = _reward_label.offset_top + 76.0
-	_exit_button = _button("ExitButton", EXIT_TEXT, Rect2(190.0, SKILL_BAR_TOP + 86.0, 340.0, 80.0), 30)
+	_exit_button = _button("ExitButton", EXIT_TEXT, EXIT_RECT, 30)
 	_exit_button.pressed.connect(func() -> void: exit_requested.emit())
 	_gesture_result_label = _label("GestureResultLabel", FIELD_TOP + 10.0, 34, Color(1.0, 0.9, 0.4))
 	# Character info: a closable panel (only values the systems already have).
@@ -292,7 +314,52 @@ func _ready() -> void:
 		remove_child(label)
 		_gesture_overlay.add_child(label)
 	title.text = GESTURE_TITLE_TEXT
+	_build_result_modal()
 	_refresh()
+
+
+## The Victory Result Modal (see RESULT_PANEL_RECT); the ExitButton is moved
+## above it so it stays the one 返回世界.
+func _build_result_modal() -> void:
+	_result_modal = ColorRect.new()
+	_result_modal.name = "ResultModal"
+	(_result_modal as ColorRect).color = Color(0.0, 0.0, 0.0, 0.6)
+	_result_modal.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_result_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	_result_modal.visible = false
+	add_child(_result_modal)
+	var panel := Panel.new()
+	panel.name = "ResultPanel"
+	panel.position = RESULT_PANEL_RECT.position
+	panel.size = RESULT_PANEL_RECT.size
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.1, 0.1, 0.13)
+	style.border_color = Color(0.95, 0.8, 0.45)
+	style.set_border_width_all(3)
+	panel.add_theme_stylebox_override("panel", style)
+	_result_modal.add_child(panel)
+	_result_title = Label.new()
+	_result_title.name = "ResultTitle"
+	_result_title.text = VICTORY_TEXT
+	_result_title.position = Vector2(0.0, 24.0)
+	_result_title.size = Vector2(RESULT_PANEL_RECT.size.x, 72.0)
+	_result_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_result_title.add_theme_font_size_override("font_size", 48)
+	_result_title.add_theme_color_override("font_color", Color(0.95, 0.8, 0.45))
+	panel.add_child(_result_title)
+	_result_scroll = ScrollContainer.new()
+	_result_scroll.name = "ResultScroll"
+	_result_scroll.position = RESULT_SCROLL_RECT.position
+	_result_scroll.size = RESULT_SCROLL_RECT.size
+	_result_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	panel.add_child(_result_scroll)
+	_result_lines = VBoxContainer.new()
+	_result_lines.name = "ResultLines"
+	_result_lines.custom_minimum_size = Vector2(RESULT_SCROLL_RECT.size.x - 16.0, 0.0)
+	_result_lines.add_theme_constant_override("separation", 14)
+	_result_scroll.add_child(_result_lines)
+	move_child(_exit_button, get_child_count() - 1)
 
 
 func _label(label_name: String, top: float, font_size: int, color: Color) -> Label:
@@ -646,7 +713,7 @@ func get_info_unit() -> CombatUnit:
 func get_info_text(unit: CombatUnit) -> String:
 	if _battle == null or unit == null:
 		return ""
-	var text: String = INFO_TEXT % [ROLE_NAMES[unit.role], unit.hp, unit.max_hp, unit.mp, unit.max_mp, unit.attack_damage, unit.attack_range, unit.attack_interval_ms / 1000.0, unit.move_speed]
+	var text: String = INFO_TEXT % [ROLE_LABELS[unit.role], unit.hp, unit.max_hp, unit.mp, unit.max_mp, unit.attack_damage, unit.attack_range, unit.attack_interval_ms / 1000.0, unit.move_speed]
 	if progression != null:
 		text += INFO_PROGRESS_TEXT % [progression.get_level(unit.id), progression.get_exp(unit.id)]
 	for entry in _skill_entries_for(unit, false):
@@ -781,6 +848,55 @@ func get_reward_text() -> String:
 	return "　".join(gains) + ("\n" + "　".join(levels) if not levels.is_empty() else "")
 
 
+## Stage 7 corrective: the Victory Result Modal's lines ([] when no VICTORY
+## is shown): enemies defeated, then each survivor's EXP and each Level Up
+## with its Stat Points (the same progression preview as get_reward_text()),
+## or 本場沒有獲得經驗.
+func get_victory_lines() -> Array[String]:
+	var lines: Array[String] = []
+	if _battle == null or _battle.get_phase() != CombatBattle.Phase.VICTORY or _battle.get_result() == null or progression == null:
+		return lines
+	lines.append(DEFEATED_TEXT % _battle.get_enemies().filter(func(enemy: CombatUnit) -> bool: return not enemy.alive).size())
+	var shares := progression.preview(_battle.get_result())
+	if shares.is_empty():
+		lines.append(NO_REWARD_TEXT)
+		return lines
+	var levels: Array[String] = []
+	for unit in _battle.get_friends():
+		if shares.has(unit.id):
+			lines.append(RESULT_EXP_TEXT % [ROLE_LABELS[unit.role], shares[unit.id]["exp"]])
+			if shares[unit.id]["leveled"]:
+				var gained: int = int(shares[unit.id]["level"]) - progression.get_level(unit.id)
+				levels.append(LEVEL_UP_TEXT % [ROLE_LABELS[unit.role], shares[unit.id]["level"], gained * CharacterConfig.STAT_POINTS_PER_LEVEL])
+	lines.append_array(levels)
+	return lines
+
+
+func is_result_modal_open() -> bool:
+	return _result_modal != null and _result_modal.visible
+
+
+## One wrapping label per line (rebuilt only when the lines change).
+func _show_result_lines(lines: Array[String]) -> void:
+	var current: Array[String] = []
+	for child in _result_lines.get_children():
+		current.append((child as Label).text)
+	if current == lines:
+		return
+	for child in _result_lines.get_children():
+		_result_lines.remove_child(child)
+		child.queue_free()
+	for index in range(lines.size()):
+		var label := Label.new()
+		label.name = "ResultLine%d" % index
+		label.text = lines[index]
+		label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+		label.custom_minimum_size = Vector2(RESULT_SCROLL_RECT.size.x - 16.0, 0.0)
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		label.add_theme_font_size_override("font_size", 30)
+		_result_lines.add_child(label)
+
+
 ## C07: the 閃電 button (selected Hero only): opens the Gesture Window.
 func press_gesture() -> bool:
 	if _battle == null or not _battle.open_gesture():
@@ -888,6 +1004,12 @@ func _refresh() -> void:
 		return
 	var active := _battle != null and not _battle.is_over()
 	_exit_button.visible = _battle != null and _battle.is_over()
+	var victory := _battle != null and _battle.get_phase() == CombatBattle.Phase.VICTORY
+	_result_modal.visible = victory
+	_exit_button.position = RESULT_EXIT_RECT.position if victory else EXIT_RECT.position
+	_exit_button.size = RESULT_EXIT_RECT.size if victory else EXIT_RECT.size
+	if victory:
+		_show_result_lines(get_victory_lines())
 	if _battle == null:
 		_gesture_overlay.visible = false
 		_clock_label.visible = false
@@ -928,7 +1050,7 @@ func _refresh() -> void:
 		_portraits[index].visible = unit != null
 		_info_buttons[index].visible = unit != null
 		_portraits[index].queue_redraw()
-	_info_panel.visible = _info_unit != null
+	_info_panel.visible = _info_unit != null and not victory
 	if _info_unit != null:
 		_info_text.text = get_info_text(_info_unit)
 	_refresh_skill_bar()
@@ -941,7 +1063,7 @@ func _refresh() -> void:
 		_gesture_clock_label.text = GESTURE_CLOCK_TEXT % [seconds / 60, seconds % 60]
 		_gesture_overlay.queue_redraw()
 	_gesture_result_label.visible = get_gesture_result_text() != ""
-	_reward_label.visible = _battle.is_over()
+	_reward_label.visible = _battle.is_over() and not victory
 	_reward_label.text = get_reward_text() if _battle.is_over() else ""
 	_field.queue_redraw()
 	_navigator.queue_redraw()
@@ -1122,6 +1244,7 @@ class Portrait extends Control:
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.13, 0.13, 0.16) if unit.alive else Color(0.08, 0.08, 0.09))
 		draw_circle(Vector2(30.0, 34.0), 20.0, color if unit.alive else Color(0.3, 0.3, 0.3))
 		draw_string(font, Vector2(58.0, 34.0), CombatView.ROLE_NAMES[unit.role], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 20, Color.WHITE if unit.alive else Color(0.5, 0.5, 0.5))
+		draw_string(font, Vector2(58.0, 56.0), CombatView.ROLE_TAGS[unit.role], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, color if unit.alive else Color(0.5, 0.5, 0.5))
 		if unit.alive:
 			draw_rect(Rect2(10.0, 64.0, size.x - 20.0, 10.0), Color(0.2, 0.05, 0.05))
 			draw_rect(Rect2(10.0, 64.0, (size.x - 20.0) * unit.hp / unit.max_hp, 10.0), Color(0.3, 0.9, 0.35))

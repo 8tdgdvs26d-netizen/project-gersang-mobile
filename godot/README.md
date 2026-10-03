@@ -47,7 +47,33 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 7 S05: Save Migration + Full Integration. Save version 10.
+Stage 7 Gate corrective: Player Clarity + Victory UI + World Monster Respawn. Save version stays
+10 (unchanged schema).
+
+- character labels (`CharacterConfig.DISPLAY_NAMES`, one source): 主角 / 傭兵A（守護） /
+  傭兵B（術法） — TEMPORARY Prototype functional labels from the approved combat roles, not
+  Canonical names. Character UI tabs and a gold name line at the top (the selected tab reads
+  gold), combat ⓘ info and the Victory result use them; battlefield labels and compact skill
+  icons keep 主角 / 傭兵A / 傭兵B (space) and the portraits add 守護 / 術法
+- copy: HP reads 血量 (Character UI and combat ⓘ), MP 魔力, as plain values (血量 300,
+  魔力 200); no 「每點生命 +10 生命上限」, 「上限」 or 「不可直接分配」 copy. The rules behind them are
+  unchanged (1 HP point = +10, MP not allocatable, INT feeds MP)
+- respawn (`GroupRespawn`, PROTOTYPE TUNABLE `WorldLayout.GROUP_RESPAWN_MS` = 10 s): a group
+  removed by a committed VICTORY is scheduled when the player presses 返回世界 and comes back
+  10 s later (TimeSource time) as the same fixed Prototype group at its home, IDLE, its patrol
+  from the start, its disposition, under the current protection; once per group. It waits while
+  the player is not in the world or an encounter / battle / result screen is running. Runtime
+  only: nothing saved, a relaunch rebuilds the scene's groups as before. 5 s protection, aggro
+  radius, challenge range, join window and group composition unchanged
+- Victory Result Modal (`CombatView`): a panel inside the 720 x 1280 canvas over a dim layer that
+  takes every touch: 勝利, 擊敗敵人 N 名, each survivor's 經驗, Level Ups with their Stat Points
+  (the same progression preview), lines wrapping inside a vertical-only scroll; 返回世界 (the same
+  ExitButton and C02 lifecycle) on the panel's bottom edge. DEFEAT / RETREAT keep the C05 line
+- tests: `tests/verify_s07_gate_corrective.gd`; C02 (respawn now allowed in main.gd /
+  encounter_handoff.gd; its "still gone" checks run before the 10 s), C03 / C08 (血量), C05
+  (VICTORY reward in the modal) and S04 (血量 / 魔力 lines) follow the corrective
+
+Previous: Stage 7 S05: Save Migration + Full Integration. Save version 10.
 
 - Save v10 = v9 + `allocation`: `{hero | merc_a | merc_b: {hp, str, agi, int}}`, the confirmed
   Stat Point counts (HP counts points, not Max HP: `CharacterConfig.ALLOCATION_VALUE` still

@@ -136,7 +136,7 @@ func _verify_panel() -> void:
 	var hero: CharacterStats = party["hero"]
 	var lines := panel.get_lines()
 	var text := " | ".join(lines)
-	for word in ["等級 3", "經驗 40 / 200", "未分配屬性點 6", "生命上限 340", "魔力上限", "力量 12", "敏捷 12", "智力 12", "物理攻擊 22", "魔法攻擊 4", "物理防禦 1", "魔法防禦 1", "攻擊間隔", "移動速度", "負重容量 118"]:
+	for word in ["等級 3", "經驗 40 / 200", "未分配屬性點 6", "血量 340", "魔力 220", "力量 12", "敏捷 12", "智力 12", "物理攻擊 22", "魔法攻擊 4", "物理防禦 1", "魔法防禦 1", "攻擊間隔", "移動速度", "負重容量 118"]:
 		_check(text.contains(word), "AC18 Shows %s (%s)" % [word, text])
 	# AC06 / AC19: preview only, before -> after.
 	var before_capacity := hero.get_max_capacity()
@@ -146,7 +146,7 @@ func _verify_panel() -> void:
 	_check(hero.get_allocated_points("str") == 0 and hero.get_effective("str") == 12 and hero.get_max_capacity() == before_capacity and hero.get_unspent_points() == 6, "AC06 The preview changes nothing real")
 	_check(CombatBattle.create(1, CombatBattle.PartyFixture.PROTOTYPE, party).get_hero().attack_damage == 22, "AC06 A battle during the preview uses the confirmed stats only")
 	panel.press_plus("hp")
-	_check(" | ".join(panel.get_lines()).contains("生命上限 340 → 350"), "AC02 HP +1 previews Max HP +10")
+	_check(" | ".join(panel.get_lines()).contains("血量 340 → 350"), "AC02 HP +1 previews Max HP +10")
 	# AC07: - removes preview points.
 	_check(panel.press_minus("hp") and panel.get_pending() == {"str": 1}, "AC07 - removes the preview HP point")
 	for count in range(10):

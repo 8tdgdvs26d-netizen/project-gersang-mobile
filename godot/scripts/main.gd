@@ -96,6 +96,10 @@ var _character_panel: CharacterPanel
 ## off to keep observing the bare LOCKED phase. Always true in the game.
 var combat_enabled := true
 var _last_award := {}
+## Stage 7 corrective: groups removed by a VICTORY come back GROUP_RESPAWN_MS
+## after the commit (runtime only, never saved).
+const WORLD_MONSTER_SCENE := preload("res://scenes/world_monster.tscn")
+var _group_respawn := GroupRespawn.new()
 
 
 func _ready() -> void:
@@ -154,6 +158,7 @@ func _process(_delta: float) -> void:
 		update_journey()
 	elif location.is_in_world():
 		_autosave_world_position()
+		_respawn_due_groups()
 	_update_enter_city_button()
 
 
@@ -640,7 +645,8 @@ func _on_combat_exit_requested() -> void:
 ##   6. C05: EXP to the slots alive at settlement (ProgressionState; none on
 ##      DEFEAT), close the battle, world input back, 7. save once.
 ## A failed save does not undo the committed result. No reward, EXP, loot,
-## penalty, hospital or respawn happens here.
+## penalty or hospital happens here; a removed group's later return is
+## scheduled by _on_group_removed (Stage 7 corrective).
 func commit_battle_result(result: BattleResult) -> bool:
 	var battle := get_combat()
 	if result == null or battle == null or battle.get_result() != result or result.is_committed():
@@ -666,7 +672,36 @@ func commit_battle_result(result: BattleResult) -> bool:
 	return true
 
 
-## C02: a group removed by a VICTORY leaves the world list (session only), so
-## no world transition reactivates it.
+## C02: a group removed by a VICTORY leaves the world list, so no world
+## transition reactivates it. Stage 7 corrective: it is scheduled to come
+## back GROUP_RESPAWN_MS from now (the player is returning to the world).
 func _on_group_removed(monster: WorldMonster) -> void:
 	_world_monsters.erase(monster)
+	_group_respawn.schedule(monster, time_source.now_ms())
+
+
+## Stage 7 corrective: brings back every due group (GroupRespawn) as a fresh
+## instance of its fixed Prototype group at its home, IDLE, watched again
+## under the current protection. Only in the world with no encounter or
+## battle running (a due group otherwise waits); never while the result
+## screen is up.
+func _respawn_due_groups() -> void:
+	if not location.is_in_world() or _combat_view.is_open() or _encounter_session.get_phase() != EncounterSession.Phase.NONE:
+		return
+	for entry in _group_respawn.take_due(time_source.now_ms()):
+		var monster := WORLD_MONSTER_SCENE.instantiate() as WorldMonster
+		monster.group_index = entry["group_index"]
+		monster.name = entry["node_name"]
+		$Actors.add_child(monster)
+		$Actors.move_child(monster, _player.get_index())
+		monster.set_chase_target(_player)
+		if not _encounter_handoff.watch_monster(monster):
+			monster.queue_free()
+			continue
+		_world_monsters.append(monster)
+		print("Myrial: group ", monster.monster_id, " respawned at its home")
+
+
+## Stage 7 corrective (tests / diagnostics): the respawn schedule.
+func get_group_respawn() -> GroupRespawn:
+	return _group_respawn
