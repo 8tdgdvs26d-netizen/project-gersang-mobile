@@ -13,9 +13,9 @@ extends RefCounted
 ##              itself
 ##   Allocated  S04: the Stat Points the player confirmed per stat (HP / STR /
 ##              AGI / INT; MP is not allocatable) x CharacterConfig.
-##              ALLOCATION_VALUE (1 HP point = +10 Max HP); runtime only, not
-##              saved before S05 (an application restart gives the points
-##              back)
+##              ALLOCATION_VALUE (1 HP point = +10 Max HP); S05: the point
+##              counts are saved (Save v10 `allocation`) and restored after
+##              apply_level() on load
 ##   Equipment  future equipment bonuses (Stage 9); 0, runtime only
 ##   Effective  Base + Growth + Allocated + Equipment — what every consumer
 ##              reads (each layer counted once)
@@ -101,12 +101,51 @@ func apply_level(level: int) -> void:
 	var per_level: Dictionary = CharacterConfig.GROWTH_PER_LEVEL[character_id]
 	for stat in CharacterConfig.STATS:
 		_growth[stat] = gained * int(per_level.get(stat, 0))
-	_earned_points = gained * CharacterConfig.STAT_POINTS_PER_LEVEL
+	_earned_points = earned_points_for(level)
 
 
 ## S04: Stat Points earned by the Level (spent ones included).
 func get_earned_points() -> int:
 	return _earned_points
+
+
+## S05: Stat Points a character at `level` has earned ((level - 1) x 3).
+static func earned_points_for(level: int) -> int:
+	return (clampi(level, ProgressionState.START_LEVEL, ProgressionState.MAX_LEVEL) - ProgressionState.START_LEVEL) * CharacterConfig.STAT_POINTS_PER_LEVEL
+
+
+## S05: {hp, str, agi, int} with 0 points each.
+static func zero_allocation() -> Dictionary:
+	var points := {}
+	for stat in CharacterConfig.ALLOCATABLE:
+		points[stat] = 0
+	return points
+
+
+## S05: the confirmed point counts {hp, str, agi, int} (what Save v10 keeps).
+func get_allocation_points() -> Dictionary:
+	var points := {}
+	for stat in CharacterConfig.ALLOCATABLE:
+		points[stat] = get_allocated_points(stat)
+	return points
+
+
+## S05: replaces (never adds to) the confirmed point counts with saved ones,
+## after apply_level(). Refused (nothing changes) unless exactly the four
+## allocatable stats, whole numbers >= 0, within the earned points.
+func restore_allocation(points: Dictionary) -> bool:
+	if points.size() != CharacterConfig.ALLOCATABLE.size() or not points.has_all(CharacterConfig.ALLOCATABLE):
+		return false
+	var spent := 0
+	for stat in CharacterConfig.ALLOCATABLE:
+		if typeof(points[stat]) != TYPE_INT or points[stat] < 0:
+			return false
+		spent += points[stat]
+	if spent > _earned_points:
+		return false
+	for stat in CharacterConfig.ALLOCATABLE:
+		_allocated[stat] = points[stat]
+	return true
 
 
 ## S04: Stat Points already allocated (confirmed), all stats.

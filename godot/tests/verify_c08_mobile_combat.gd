@@ -46,7 +46,7 @@ func _initialize() -> void:
 # --- Static ------------------------------------------------------------------------------------
 
 func _verify_static() -> void:
-	_check(SaveStore.VERSION == 9 and SaveStore.V9_KEYS.size() == 9, "Save stays v9")
+	_check(SaveStore.VERSION == 10 and SaveStore.V9_KEYS.size() == 9, "Save v10 (S05 adds only the allocation)")
 	for path in ["res://scripts/save_store.gd", "res://scripts/progression_state.gd", "res://scripts/main.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("group(") and not code.contains("selection") and not code.contains("camera"), "%s knows nothing about groups / selection / camera" % path.get_file())
@@ -809,7 +809,7 @@ func _verify_in_game() -> void:
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	await process_frame
 	var saved := FileAccess.get_file_as_string(TEST_SAVE)
-	_check(main.get_combat() == null and session.is_protection_active() and int(JSON.parse_string(saved)["version"]) == 9 and not saved.to_lower().contains("group") and not saved.to_lower().contains("selection") and main.progression.get_exp("hero") > 0, "Committed: C02 lifecycle, protection (#104 recheck path), C05 EXP, Save v9 without groups / selection")
+	_check(main.get_combat() == null and session.is_protection_active() and int(JSON.parse_string(saved)["version"]) == 10 and not saved.to_lower().contains("group") and not saved.to_lower().contains("selection") and main.progression.get_exp("hero") > 0, "Committed: C02 lifecycle, protection (#104 recheck path), C05 EXP, Save v9 without groups / selection")
 	var approved := RegEx.new()
 	approved.compile("(?<![A-Za-z])[ABE](?![A-Za-z])")
 	var latin := RegEx.new()

@@ -137,6 +137,7 @@ func _ready() -> void:
 	add_child(_character_panel)
 	_character_panel.opened.connect(_on_character_panel_opened)
 	_character_panel.closed.connect(_on_character_panel_closed)
+	_character_panel.allocation_confirmed.connect(_on_allocation_confirmed)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
 	# save: the saved anchor + stock rebuild the same result on every reload.
 	update_market_recovery(false)
@@ -358,6 +359,12 @@ func _load_saved_session() -> void:
 		market_recovery = loaded["market_recovery"]
 		cost_ledger = loaded["cost_ledger"]
 		progression = loaded["progression"]
+		# S05: Level growth first, then the saved confirmed allocation
+		# (replaced, never added to).
+		_apply_level_growth()
+		var party := get_party_stats()
+		for slot in ProgressionState.SLOTS:
+			(party[slot] as CharacterStats).restore_allocation(loaded["allocation"][slot])
 
 
 ## Puts the scene into the loaded location: the world (at the last city's
@@ -385,7 +392,7 @@ func _save_session() -> void:
 func _persist() -> bool:
 	if location.is_in_world() and is_node_ready() and not location.set_world_position(_player.global_position):
 		return false
-	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression)
+	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats())
 	if saved:
 		_saved_world_position = location.get_world_position()
 	return saved
@@ -574,6 +581,12 @@ func _on_character_panel_opened() -> void:
 	_joystick.set_process_input(false)
 	_player.movement_locked = true
 	_player.velocity = Vector2.ZERO
+
+
+## S05: a confirmed allocation is saved at once (like a committed trade: a
+## failed save does not undo it), so quitting right after keeps it.
+func _on_allocation_confirmed(_character_id: String) -> void:
+	_save_session()
 
 
 func _on_character_panel_closed() -> void:
