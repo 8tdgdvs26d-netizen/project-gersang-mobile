@@ -157,7 +157,7 @@ func _verify_save_v9() -> void:
 	stats.set_equipment_bonus("str", 5)
 	var inventory := CharacterInventory.new("player", stats)
 	var data := SaveStore.serialize(Wallet.new(), inventory, MarketState.create_default())
-	_check(SaveStore.VERSION == 9 and data["version"] == 9, "Save stays v9")
+	_check(SaveStore.VERSION == 10 and data["version"] == 10, "Save v10 (S05 adds only the allocation)")
 	_check(data["character"]["stats"] == {"strength": 13}, "character.stats is exactly {strength: Base STR} (no allocation / equipment saved)")
 	_check(SaveStore.STATS_KEYS == ["strength"], "Saved stats keys unchanged")
 	var path := "user://s01_character_stats_save.json"

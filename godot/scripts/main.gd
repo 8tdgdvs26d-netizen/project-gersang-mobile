@@ -358,6 +358,12 @@ func _load_saved_session() -> void:
 		market_recovery = loaded["market_recovery"]
 		cost_ledger = loaded["cost_ledger"]
 		progression = loaded["progression"]
+		# S05: Level growth first, then the saved confirmed allocation
+		# (replaced, never added to).
+		_apply_level_growth()
+		var party := get_party_stats()
+		for slot in ProgressionState.SLOTS:
+			(party[slot] as CharacterStats).restore_allocation(loaded["allocation"][slot])
 
 
 ## Puts the scene into the loaded location: the world (at the last city's
@@ -385,7 +391,7 @@ func _save_session() -> void:
 func _persist() -> bool:
 	if location.is_in_world() and is_node_ready() and not location.set_world_position(_player.global_position):
 		return false
-	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression)
+	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats())
 	if saved:
 		_saved_world_position = location.get_world_position()
 	return saved

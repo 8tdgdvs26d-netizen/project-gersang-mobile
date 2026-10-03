@@ -75,7 +75,7 @@ func _verify_static() -> void:
 		# (verify_e03_disposition_challenge).
 		for word in ["battle", "damage", "health", "reward", "loot", "retreat", "randi", "randf", "navigation"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
-	_check(not _code_only("res://scripts/save_store.gd").to_lower().contains("group") and SaveStore.VERSION == 9, "Save version 9; the save knows nothing about groups")
+	_check(not _code_only("res://scripts/save_store.gd").to_lower().contains("group") and SaveStore.VERSION == 10, "Save version 10; the save knows nothing about groups")
 	_sections_done.append("static")
 
 
@@ -289,7 +289,7 @@ func _verify_reload() -> void:
 	_check(context.get_group_count() == 3 and main.save_world_position(), "Saved during a three-group JOINING")
 	var text := FileAccess.get_file_as_string(TEST_SAVE)
 	var lower := text.to_lower()
-	_check(int(JSON.parse_string(text)["version"]) == 9 and not lower.contains("group") and not lower.contains("encounter") and not lower.contains("monster"), "Save version 9; no groups, encounter or monster saved")
+	_check(int(JSON.parse_string(text)["version"]) == 10 and not lower.contains("group") and not lower.contains("encounter") and not lower.contains("monster"), "Save version 10; no groups, encounter or monster saved")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase
@@ -454,7 +454,7 @@ func _verify_protection() -> void:
 	# Reload during protection restores none of it.
 	_check(main.save_world_position(), "Saved during protection")
 	var text := FileAccess.get_file_as_string(TEST_SAVE)
-	_check(int(JSON.parse_string(text)["version"]) == 9 and not text.to_lower().contains("protect"), "Save version 9; no protection saved")
+	_check(int(JSON.parse_string(text)["version"]) == 10 and not text.to_lower().contains("protect"), "Save version 10; no protection saved")
 	main.time_source.advance_ms(1)
 	await process_frame
 	await process_frame

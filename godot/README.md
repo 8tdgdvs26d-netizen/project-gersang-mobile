@@ -47,7 +47,23 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 7 S04: Stat Allocation & Character UI. Save version stays 9 (unchanged schema).
+Stage 7 S05: Save Migration + Full Integration. Save version 10.
+
+- Save v10 = v9 + `allocation`: `{hero | merc_a | merc_b: {hp, str, agi, int}}`, the confirmed
+  Stat Point counts (HP counts points, not Max HP: `CharacterConfig.ALLOCATION_VALUE` still
+  converts). Nothing derived is saved — Growth, Effective stats, Max HP / MP, attack / defense /
+  interval / speed, Capacity, earned and unspent points are all rebuilt from Level and the counts
+- load: Level / EXP (C05 banked EXP still normalised through the S03 curve) -> `apply_level()` ->
+  `CharacterStats.restore_allocation()` (replaces, never adds) -> everything recalculated, so a
+  restart keeps the Build, the combat values and the backpack Capacity. Previews are never saved
+- v1-v9 saves load with every allocation 0 (no history invented; the saved strength stays the
+  Hero's Base STR); the next normal save writes v10
+- a v10 allocation is valid only as exactly three characters x the four counts, each a whole
+  number >= 0, within (Level - 1) x 3 of the normalised Level; anything else rejects the whole save
+  (the existing invalid-save behaviour: the file is left untouched, the game starts fresh)
+- tests: `tests/verify_s05_save_migration.gd`; every test that pinned Save v9 now expects v10
+
+Previous: Stage 7 S04: Stat Allocation & Character UI. Save version stays 9 (unchanged schema).
 
 - Stat Points: earned = (Level - 1) x 3; spent = the points allocated; unspent = earned - spent
   (never below 0). `apply_level()` only changes the earned side, so Level recalculation (load,
@@ -66,9 +82,8 @@ Stage 7 S04: Stat Allocation & Character UI. Save version stays 9 (unchanged sch
   (before → after); - only removes this preview's points; 確認分配 applies it; closing,
   switching character or an encounter discards it. The joystick pauses while it is open
 - the result screen's Level Up line says the points: 「主角 升至 2 級（屬性點 +3）」
-- persistence: confirmed allocations last for the running session (UI, battles, settlements);
-  an application restart keeps Level / EXP but not the allocation — the points are free again.
-  Persisting allocations is S05 (Save v10)
+- persistence (S04): confirmed allocations lasted for the running session only; S05 saves them
+  (Save v10)
 - tests: `tests/verify_s04_stat_allocation.gd`; the C05 Level Up text check and two S01 HP
   allocation checks follow the S04 rules
 

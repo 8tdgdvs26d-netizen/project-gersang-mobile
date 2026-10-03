@@ -195,10 +195,11 @@ func _verify_save_and_scope() -> void:
 	stats.confirm_allocation({"str": 4, "hp": 2})
 	var progression := ProgressionState.from_dict({"hero": {"level": 3, "exp": 0}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})
 	var data := SaveStore.serialize(Wallet.new(), CharacterInventory.new("player", stats), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression)
-	_check(SaveStore.VERSION == 9 and data["version"] == 9, "AC23 SaveStore.VERSION is exactly 9")
-	_check(data["character"]["stats"] == {"strength": 10} and SaveStore.STATS_KEYS == ["strength"] and data["progression"]["hero"] == {"level": 3, "exp": 0}, "AC24 No allocation in the save (stats {strength: Base STR}, progression {level, exp})")
+	_check(SaveStore.VERSION == 10 and data["version"] == 10, "AC23 SaveStore.VERSION (S05: 10)")
+	# S05 superseded AC24: the save now holds the allocation point counts (only).
+	_check(data["character"]["stats"] == {"strength": 10} and SaveStore.STATS_KEYS == ["strength"] and data["progression"]["hero"] == {"level": 3, "exp": 0} and data["allocation"]["hero"] == {"hp": 0, "str": 0, "agi": 0, "int": 0}, "AC24 (S05) stats {strength: Base STR}, progression {level, exp}; allocation counts in their own section")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()
-	_check(not save_code.contains("allocat") and not save_code.contains("unspent") and not save_code.contains("earned"), "AC24 Save code knows nothing of allocation")
+	_check(not save_code.contains("unspent") and not save_code.contains("get_earned_points"), "AC24 (S05) Save code stores no unspent / earned points")
 	var code := ""
 	for path in ["res://scripts/character_panel.gd", "res://scripts/character_stats.gd", "res://scripts/main.gd"]:
 		code += _code_only(path).to_lower()
@@ -260,12 +261,12 @@ func _verify_in_game() -> void:
 		(view.get_node("ExitButton") as Button).pressed.emit()
 		await process_frame
 	_check(hero.get_allocated_points("str") == 2 and hero.get_spent_points() == 2, "AC13 After the settlement the allocation stands")
-	# AC25: an application restart does not keep the allocation (S05).
+	# AC25 superseded by S05: an application restart keeps the confirmed allocation.
 	var level: int = main.progression.get_level("hero")
 	await _destroy(main)
 	main = await _new_main()
 	var reloaded: CharacterStats = main.character_stats
-	_check(main.progression.get_level("hero") == level and reloaded.get_allocated_points("str") == 0 and reloaded.get_unspent_points() == reloaded.get_earned_points(), "AC25 Restart: Level kept, allocation not (S05 persists it); the points are available again")
+	_check(main.progression.get_level("hero") == level and reloaded.get_allocated_points("str") == 2 and reloaded.get_unspent_points() == reloaded.get_earned_points() - 2, "AC25 (S05) Restart: Level and the confirmed STR +2 kept; unspent derived")
 	await _destroy(main)
 	_delete(TEST_SAVE)
 	_sections_done.append("in_game")
