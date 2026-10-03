@@ -77,7 +77,8 @@ static func serialize(wallet: Wallet, inventory: CharacterInventory, market: Mar
 		"money": wallet.get_balance(),
 		"character": {
 			"id": inventory.character_id,
-			"stats": {"strength": inventory.get_stats().get_strength()},
+			# S01: the Hero's Base STR (Allocated / Equipment are not saved).
+			"stats": {"strength": inventory.get_stats().get_base_strength()},
 			"inventory": {"items": saved_items},
 		},
 		"market": market.get_snapshot(),

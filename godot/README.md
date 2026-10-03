@@ -47,7 +47,31 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Combat C08: Mobile Combat Controls & Integration. Runtime only; save version stays 9 (selection,
+Stage 7 S01: Character Stat Foundation. Runtime / model only; save version stays 9; no combat
+value changed (C01-C08 behaviour preserved).
+
+- `CharacterStats` is the one stat model per character (Hero, Merc A, Merc B): HP (Max), MP (Max),
+  STR, AGI, INT, each Base + Allocated + Equipment = Effective. Base values live in
+  `CharacterConfig` (Prototype placeholder config, not Canonical balance: STR / AGI / INT 10 for
+  all three; HP 300 / 200 / 150 and MP 200 / 100 / 100 as before). Allocated (MP not allocatable)
+  and Equipment are hooks only: 0 in the game, never saved
+- Carrying Capacity = 10 + Effective STR x 9 (equipment STR will count). The Hero's stats are the
+  player backpack's stats; existing over-capacity rules unchanged
+- battles build each friendly unit from its character's stats (`CombatBattle.create(...,
+  party_stats)`; the game passes `main.get_party_stats()`): Max HP = Effective HP, Max MP =
+  Effective MP. Current HP / MP stay battle-runtime state on `CombatUnit` (full at every battle
+  start). Attack / range / interval / move speed are S01 compatibility values
+  (`CharacterConfig.COMBAT_COMPAT`); magic attack and defenses are 0 placeholders read by no
+  combat code. S02 integrates the real formulas
+- `CombatConfig.HERO` / `MERC_A` / `MERC_B` / `HERO_MAX_MP` / `MAX_MP` are legacy compatibility
+  names built from `CharacterConfig` (same values, not a second source; removal path S02)
+- Save v9 `character.stats.strength` is the Hero's Base STR (schema unchanged)
+- known gap: the approved design gives every character an independent backpack / capacity; the
+  current Godot implementation has only the Hero / player backpack (Merc capacity exists in the
+  stat model only). `main.merc_stats` is a minimal runtime holder, replaced by the Stage 8 model
+- tests: `tests/verify_s01_character_stats.gd`
+
+Previous: Combat C08: Mobile Combat Controls & Integration. Runtime only; save version stays 9 (selection,
 groups and the camera are never saved). No combat value changed.
 
 - HUD (top to bottom): 全體撤退 (left) / Combat Clock / 全體進攻 (right); the phase line; two
