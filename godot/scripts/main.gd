@@ -137,6 +137,7 @@ func _ready() -> void:
 	add_child(_character_panel)
 	_character_panel.opened.connect(_on_character_panel_opened)
 	_character_panel.closed.connect(_on_character_panel_closed)
+	_character_panel.allocation_confirmed.connect(_on_allocation_confirmed)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
 	# save: the saved anchor + stock rebuild the same result on every reload.
 	update_market_recovery(false)
@@ -580,6 +581,12 @@ func _on_character_panel_opened() -> void:
 	_joystick.set_process_input(false)
 	_player.movement_locked = true
 	_player.velocity = Vector2.ZERO
+
+
+## S05: a confirmed allocation is saved at once (like a committed trade: a
+## failed save does not undo it), so quitting right after keeps it.
+func _on_allocation_confirmed(_character_id: String) -> void:
+	_save_session()
 
 
 func _on_character_panel_closed() -> void:

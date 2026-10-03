@@ -260,6 +260,9 @@ func _verify_preview_exclusion() -> void:
 	panel.press_plus("str")
 	panel.press_plus("str")
 	_check(panel.confirm(), "STR +2 confirmed")
+	# Codex review on #110: the confirmation itself is saved (no move, no other save).
+	var confirmed_save: Variant = JSON.parse_string(_read())
+	_check(confirmed_save != null and _ints(confirmed_save["allocation"]["hero"]) == {"hp": 0, "str": 2, "agi": 0, "int": 0}, "Confirming saves at once (STR 2 on disk before any other save)")
 	panel.press_plus("int")
 	_check(panel.get_pending() == {"int": 1}, "INT +1 still a preview")
 	_check(main.save_world_position(), "A save happens during the preview")
