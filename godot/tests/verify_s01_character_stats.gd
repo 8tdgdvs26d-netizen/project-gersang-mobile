@@ -45,7 +45,7 @@ func _verify_layers() -> void:
 	_check(hero.set_equipment_bonus("str", 5) and hero.get_equipment_bonus("str") == 5, "3. Equipment STR 5")
 	# 4. Effective = Base + Allocated + Equipment (brief example: 10 + 4 + 5 = 19).
 	_check(hero.get_effective("str") == 19 and hero.get_strength() == 19 and hero.get_base_strength() == 10, "4. Effective STR 19 = 10 + 4 + 5 (get_strength() is Effective)")
-	_check(hero.set_equipment_bonus("int", 6) and hero.get_effective("int") == 10 + 3 + 6 and hero.set_equipment_bonus("mp", 20) and hero.get_max_mp() == 220, "4. Equipment INT / MP count toward Effective")
+	_check(hero.set_equipment_bonus("int", 6) and hero.get_effective("int") == 10 + 3 + 6 and hero.set_equipment_bonus("mp", 20) and hero.get_max_mp() == 200 + 20 + (19 - 10) * 5, "4. Equipment INT / MP count toward Effective (S02: Max MP also + (INT - 10) x 5)")
 	_check(not hero.set_equipment_bonus("luck", 1) and not hero.set_equipment_bonus("str", -2) and hero.get_equipment_bonus("str") == 5, "3. Invalid equipment bonus refused")
 	_check(hero.set_strength(12) and hero.get_base("str") == 12 and hero.get_effective("str") == 21 and not hero.set_strength(-1) and not hero.set_strength(CharacterConfig.MAX_STAT + 1), "set_strength() sets Base STR (M2-08 API), range-checked")
 	_sections_done.append("layers")
@@ -142,8 +142,9 @@ func _verify_combat_compatibility() -> void:
 	strong.set_allocated("agi", 50)
 	strong.set_allocated("int", 50)
 	var unit := CombatBattle.create(10, CombatBattle.PartyFixture.PROTOTYPE, {"hero": strong}).get_hero()
-	_check(unit.attack_damage == 20 and unit.attack_interval_ms == 1000 and unit.move_speed == 4.0 and unit.max_mp == 200 and strong.get_physical_attack() == 20, "STR / AGI / INT feed no combat formula yet (S02)")
-	_check(strong.get_magic_attack() == 0 and strong.get_physical_defense() == 0 and strong.get_magic_defense() == 0, "Magic attack / defenses: 0 placeholders, read by no combat code")
+	# S02 integrated the formulas (S01 expected 20 / 1000 / 4.0 / 200 / 0 here).
+	_check(unit.attack_damage == 20 + 50 and unit.attack_interval_ms == CharacterStats.attack_interval_for(1000, 50) and unit.attack_interval_ms < 1000 and unit.move_speed == CharacterStats.move_speed_for(4.0, 50) and unit.move_speed > 4.0 and unit.max_mp == 200 + 50 * 5 and strong.get_physical_attack() == 70, "S02: STR / AGI / INT now feed the combat formulas")
+	_check(strong.get_magic_attack() == 100 and strong.get_physical_defense() == 25 and strong.get_magic_defense() == 25 and unit.magic_attack == 100 and unit.physical_defense == 25, "S02: Magic Attack / defenses from INT / STR (were 0 placeholders in S01)")
 	_sections_done.append("combat_compatibility")
 
 

@@ -26,9 +26,9 @@ const BASE := {
 	"merc_b": {"hp": 150, "mp": 100, "str": 10, "agi": 10, "int": 10},
 }
 
-## S01 combat compatibility table (until S02 integrates the Stage 7
-## formulas): the C01-C08 Basic Attack values of each character, unchanged.
-## They do not depend on STR / AGI / INT yet.
+## Each character's base combat profile: the values at STR / AGI / INT 10
+## (the C01-C08 Basic Attack values). S02: the formulas below start from
+## these (base Physical Attack, range, base Attack Interval, base Move Speed).
 const COMBAT_COMPAT := {
 	"hero": {"physical_attack": 20, "attack_range": 1, "attack_interval_ms": 1000, "move_speed": 4.0},
 	"merc_a": {"physical_attack": 15, "attack_range": 1, "attack_interval_ms": 1000, "move_speed": 4.0},
@@ -42,3 +42,31 @@ const BASE_CAPACITY := 10
 const CAPACITY_PER_STR := 9
 ## Upper bound of any single stat layer value.
 const MAX_STAT := 1000000
+
+## Stage 7 S02 combat formulas — PROTOTYPE TUNABLE PARAMETERS, not final
+## balance. Every formula counts only the stat above STAT_BASELINE (10), so a
+## character at STR / AGI / INT 10 keeps its base profile; nothing below 10
+## penalises. All rounding lives in CharacterStats (see there).
+const STAT_BASELINE := 10
+## Physical Attack = base + (STR - 10) x 1.
+const PHYSICAL_ATTACK_PER_STR := 1
+## Physical / Magic Defense = floor((STR / INT - 10) x 0.5), as
+## DEFENSE_PER_STAT_NUM / DEFENSE_PER_STAT_DEN (integer, floor).
+const DEFENSE_PER_STAT_NUM := 1
+const DEFENSE_PER_STAT_DEN := 2
+## Magic Attack = (INT - 10) x 2; Max MP = Effective MP + (INT - 10) x 5.
+const MAGIC_ATTACK_PER_INT := 2
+const MP_PER_INT := 5
+## Attack Interval = max(MIN_ATTACK_INTERVAL_MS, round(base x f)), with
+## f = FLOOR + (1 - FLOOR) x HALF / (HALF + (AGI - 10)): 1 at AGI 10,
+## diminishing towards FLOOR (base 1.0 s: AGI 20 0.80 s, 40 0.62 s, 100 0.45 s).
+const ATTACK_INTERVAL_FLOOR_FACTOR := 0.30
+const ATTACK_INTERVAL_AGI_HALF := 25.0
+const MIN_ATTACK_INTERVAL_MS := 300
+## Move Speed = min(MAX_MOVE_SPEED, base x (1 + BONUS x a / (a + HALF))),
+## a = AGI - 10 (base 4.0: AGI 20 4.8, 40 5.6, 100 6.4; the cap from AGI 460).
+const MOVE_SPEED_MAX_BONUS := 0.8
+const MOVE_SPEED_AGI_HALF := 30.0
+const MAX_MOVE_SPEED := 7.0
+## Percent values (Gesture grade multipliers) are divided by this.
+const PERCENT_DIVISOR := 100

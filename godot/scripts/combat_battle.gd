@@ -102,6 +102,9 @@ enum Phase { PREPARATION, FIGHTING, VICTORY, DEFEAT, RETREAT }
 enum SkillReadiness { READY, UNAVAILABLE, CASTING, COOLDOWN, NO_MP }
 ## C07: whether the Gesture Window could be opened now.
 enum GestureReadiness { READY, UNAVAILABLE, OPEN, CASTING, COOLDOWN, NO_MP }
+## S02: which defense a hit meets. Basic Attacks are PHYSICAL; the AoE and
+## Lightning are MAGIC (both hit enemies only, whose defenses are 0).
+enum DamageKind { PHYSICAL, MAGIC }
 
 ## The locked encounter this battle came from ("" when built directly).
 var encounter_id := ""
@@ -495,14 +498,15 @@ func _resolve_gesture(grade: GestureMatcher.Grade, match_score: int, timeout: bo
 	var cost := CombatConfig.GESTURE_FAIL_MP_COST if failed else CombatConfig.GESTURE_MP_COST
 	hero.mp -= cost
 	_gesture_ready_at_ms = _elapsed_ms + CombatConfig.GESTURE_COOLDOWN_MS
-	var damage: int = CombatConfig.GESTURE_BASE_DAMAGE * CombatConfig.GESTURE_DAMAGE_PERCENT[grade] / 100
+	# S02: (100 + the Hero's Magic Attack) x the grade's percent.
+	var damage := CharacterStats.gesture_damage(hero.magic_attack, CombatConfig.GESTURE_DAMAGE_PERCENT[grade])
 	var targets: Array[CombatUnit] = []
 	if not failed:
 		targets = GestureTargets.pick(_enemies, CombatConfig.GESTURE_MAX_TARGETS, gesture_rng)
 	_last_gesture = {"grade": grade, "score": match_score, "damage": damage, "targets": targets, "mp_cost": cost, "timeout": timeout}
 	print("Myrial: combat gesture ", GestureMatcher.Grade.keys()[grade], " (", match_score, ") at clock ", _combat_clock_ms, " ms: ", targets.size(), " x ", damage)
 	for enemy in targets:
-		resolve_damage(hero, enemy, damage)
+		resolve_damage(hero, enemy, damage, DamageKind.MAGIC)
 	gesture_resolved.emit(_last_gesture)
 	return _last_gesture
 
@@ -931,13 +935,15 @@ func _resolve_skill(unit: CombatUnit) -> void:
 			unit.guard_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
 		"aoe":
 			var cells := aoe_cells(center)
-			_last_aoe = {"cells": cells, "at_ms": _tick_end_ms}
+			# S02: AoE damage = AOE_DAMAGE + the caster's Magic Attack.
+			var damage := CombatConfig.AOE_DAMAGE + unit.magic_attack
+			_last_aoe = {"cells": cells, "at_ms": _tick_end_ms, "damage": damage}
 			var hits: Array[CombatUnit] = []
 			for enemy in _enemies:
 				if enemy.alive and cells.has(enemy.cell):
 					hits.append(enemy)
 			for enemy in hits:
-				resolve_damage(unit, enemy, CombatConfig.AOE_DAMAGE)
+				resolve_damage(unit, enemy, damage, DamageKind.MAGIC)
 	_end_skill(unit, true)
 	skill_resolved.emit(unit)
 
@@ -1037,9 +1043,12 @@ func _best_free_cell_in(unit: CombatUnit, center: Vector2i, reach: int, first_co
 ## The one Combat damage path (Basic Attacks now; later Skills): 100% hit, no
 ## crit / dodge / element. Lowers HP, evaluates death and the battle result.
 ## Returns the damage dealt (0 when refused).
-func resolve_damage(attacker: CombatUnit, target: CombatUnit, amount: int) -> int:
+func resolve_damage(attacker: CombatUnit, target: CombatUnit, amount: int, kind: DamageKind = DamageKind.PHYSICAL) -> int:
 	if _phase != Phase.FIGHTING or attacker == null or target == null or not attacker.alive or not target.alive or amount <= 0:
 		return 0
+	# S02: the target's Physical / Magic Defense first (every damaging hit
+	# still deals >= 1; CharacterStats.mitigate), then the C06 Guard.
+	amount = CharacterStats.mitigate(amount, target.magic_defense if kind == DamageKind.MAGIC else target.physical_defense)
 	# C06 Guard: floor(damage x 0.5).
 	if target.guard_until_ms > _elapsed_ms:
 		amount /= CombatConfig.GUARD_DIVISOR
