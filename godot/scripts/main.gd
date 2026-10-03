@@ -89,6 +89,8 @@ var _world_monsters: Array[WorldMonster] = []
 @onready var _encounter_session := $EncounterSession as EncounterSession
 ## Combat C01: a LOCKED encounter starts its battle here (runtime only).
 var _combat_view: CombatView
+## S04: the Character UI (Stat Point allocation).
+var _character_panel: CharacterPanel
 ## Combat C01 TEST SEAM ONLY (never saved, no player setting, no gameplay
 ## path): the E01–E03 encounter tests, written before Combat existed, turn it
 ## off to keep observing the bare LOCKED phase. Always true in the game.
@@ -126,6 +128,15 @@ func _ready() -> void:
 	_combat_view.progression = progression
 	add_child(_combat_view)
 	_combat_view.exit_requested.connect(_on_combat_exit_requested)
+	# S04: the Character UI (Stat Point allocation), from the world only.
+	_character_panel = CharacterPanel.new()
+	_character_panel.name = "CharacterPanel"
+	_character_panel.party_provider = get_party_stats
+	_character_panel.progression = progression
+	_character_panel.can_open = _can_open_character_panel
+	add_child(_character_panel)
+	_character_panel.opened.connect(_on_character_panel_opened)
+	_character_panel.closed.connect(_on_character_panel_closed)
 	# Offline recovery (capped by MarketRecovery). Loading never rewrites the
 	# save: the saved anchor + stock rebuild the same result on every reload.
 	update_market_recovery(false)
@@ -547,6 +558,22 @@ func _apply_level_growth() -> void:
 	var party := get_party_stats()
 	for slot in ProgressionState.SLOTS:
 		(party[slot] as CharacterStats).apply_level(progression.get_level(slot))
+
+
+## S04: the Character UI may open in the world while no encounter runs.
+func _can_open_character_panel() -> bool:
+	return location.is_in_world() and not _combat_view.is_open() and _encounter_session.get_phase() == EncounterSession.Phase.NONE
+
+
+## S04: no walking while the Character UI is open (the joystick reads every
+## touch); back when it closes.
+func _on_character_panel_opened() -> void:
+	_joystick.release()
+	_joystick.set_process_input(false)
+
+
+func _on_character_panel_closed() -> void:
+	_joystick.set_process_input(location.is_in_world() and not _combat_view.is_open())
 
 
 ## S01: character id -> CharacterStats of the fixed combat party (the Hero is

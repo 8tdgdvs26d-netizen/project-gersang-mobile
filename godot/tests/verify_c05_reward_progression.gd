@@ -331,7 +331,8 @@ func _verify_in_game() -> void:
 	for enemy in battle.get_enemies():
 		battle.resolve_damage(f[0], enemy, 1000)
 	await process_frame
-	_check(reward.text == "主角 經驗 +100\n主角 升至 2 級", "Result screen shows the Level Up (%s)" % reward.text)
+	# S04: the Level Up line also states the Stat Points it brought (was "主角 升至 2 級").
+	_check(reward.text == "主角 經驗 +100\n主角 升至 2 級（屬性點 +3）", "Result screen shows the Level Up and its Stat Points (%s)" % reward.text)
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(main.progression.get_level("hero") == 2 and main.progression.get_exp("hero") == 50, "Hero Lv2 with 50 overflow")
 	await _destroy(main)

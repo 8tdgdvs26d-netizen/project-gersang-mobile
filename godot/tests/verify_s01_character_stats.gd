@@ -38,7 +38,8 @@ func _verify_layers() -> void:
 	_check(hero.get_base("str") == 10 and hero.get_base("agi") == 10 and hero.get_base("int") == 10 and hero.get_base("hp") == 300 and hero.get_base("mp") == 200, "Hero placeholders STR 10 / AGI 10 / INT 10, HP 300, MP 200")
 	# 2. Allocated contribution (hook; MP is not allocatable).
 	_check(hero.set_allocated("str", 4) and hero.get_allocated("str") == 4 and hero.get_effective("str") == 14, "2. Allocated STR 4: Effective 14")
-	_check(hero.set_allocated("hp", 50) and hero.get_effective("hp") == 350 and hero.set_allocated("agi", 2) and hero.set_allocated("int", 3), "2. HP / AGI / INT allocatable")
+	# S04: allocation counts Stat Points (1 HP point = +10 Max HP); was set_allocated("hp", 50).
+	_check(hero.set_allocated("hp", 5) and hero.get_effective("hp") == 350 and hero.set_allocated("agi", 2) and hero.set_allocated("int", 3), "2. HP / AGI / INT allocatable")
 	_check(not hero.set_allocated("mp", 10) and hero.get_allocated("mp") == 0 and hero.get_effective("mp") == 200, "2. MP is not player-allocatable")
 	_check(not hero.set_allocated("str", -1) and not hero.set_allocated("str", 1.5) and not hero.set_allocated("luck", 1) and hero.get_allocated("str") == 4, "2. Invalid allocation refused, nothing changes")
 	# 3. Equipment contribution (hook; any stat, MP / INT included).
@@ -97,7 +98,8 @@ func _verify_capacity() -> void:
 # 6-7: Current vs Max HP / MP.
 func _verify_hp_mp() -> void:
 	var stats := CharacterStats.for_character("hero")
-	stats.set_allocated("hp", 40)
+	# S04: 4 HP points = +40 Max HP (was set_allocated("hp", 40)).
+	stats.set_allocated("hp", 4)
 	var battle := CombatBattle.create(10, CombatBattle.PartyFixture.PROTOTYPE, {"hero": stats})
 	var hero := battle.get_hero()
 	_check(hero.max_hp == 340 and hero.hp == 340 and hero.max_mp == 200 and hero.mp == 200, "6/7. A battle starts at Max HP = Effective HP, Max MP = Effective MP, both full")
