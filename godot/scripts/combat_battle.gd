@@ -159,21 +159,17 @@ enum PartyFixture { PROTOTYPE, HERO_ONLY }
 ## A battle with the friendly party and `enemy_count` Prototype enemies. The
 ## friendly order (Hero, Merc A, Merc B) also breaks enemy target ties. The
 ## Hero starts selected.
-static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYPE) -> CombatBattle:
+## Stage 7 S01: each friendly unit starts from its character's stats
+## (`party_stats`: character id -> CharacterStats; a missing id gets the
+## Prototype stats): Max HP / Max MP and the Basic Attack profile. Current HP /
+## MP are this battle's runtime state, full at the start.
+static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYPE, party_stats: Dictionary = {}) -> CombatBattle:
 	var battle := CombatBattle.new()
-	var hero := CombatUnit.create("hero", CombatUnit.Team.FRIEND, CombatConfig.HERO, CombatConfig.HERO_START_CELL)
-	hero.role = CombatUnit.Role.HERO
-	_give_skill(hero, CombatConfig.HERO_SKILL, CombatConfig.HERO_MAX_MP)
+	var hero := _friend("hero", CombatUnit.Role.HERO, CombatConfig.HERO_START_CELL, CombatConfig.HERO_SKILL, party_stats)
 	battle._friends.append(hero)
 	if party == PartyFixture.PROTOTYPE:
-		var merc_a := CombatUnit.create("merc_a", CombatUnit.Team.FRIEND, CombatConfig.MERC_A, CombatConfig.MERC_A_START_CELL)
-		merc_a.role = CombatUnit.Role.MERC_A
-		_give_skill(merc_a, CombatConfig.MERC_A_SKILL)
-		battle._friends.append(merc_a)
-		var merc_b := CombatUnit.create("merc_b", CombatUnit.Team.FRIEND, CombatConfig.MERC_B, CombatConfig.MERC_B_START_CELL)
-		merc_b.role = CombatUnit.Role.MERC_B
-		_give_skill(merc_b, CombatConfig.MERC_B_SKILL)
-		battle._friends.append(merc_b)
+		battle._friends.append(_friend("merc_a", CombatUnit.Role.MERC_A, CombatConfig.MERC_A_START_CELL, CombatConfig.MERC_A_SKILL, party_stats))
+		battle._friends.append(_friend("merc_b", CombatUnit.Role.MERC_B, CombatConfig.MERC_B_START_CELL, CombatConfig.MERC_B_SKILL, party_stats))
 	var cells := enemy_spawn_cells(enemy_count)
 	for index in range(cells.size()):
 		battle._enemies.append(CombatUnit.create("enemy_%02d" % (index + 1), CombatUnit.Team.ENEMY, CombatConfig.ENEMY, cells[index]))
@@ -186,8 +182,20 @@ static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYP
 	return battle
 
 
+## S01: one friendly unit built from its character's stats.
+static func _friend(id: String, role: CombatUnit.Role, cell: Vector2i, skill: Dictionary, party_stats: Dictionary) -> CombatUnit:
+	var stats: CharacterStats = party_stats.get(id)
+	if stats == null:
+		stats = CharacterStats.for_character(id)
+	var unit := CombatUnit.create(id, CombatUnit.Team.FRIEND, stats.get_combat_profile(), cell)
+	unit.role = role
+	_give_skill(unit, skill, stats.get_max_mp())
+	return unit
+
+
 ## C06: a friendly unit's Normal Skill and full MP (every battle starts full;
-## nothing carries over). C07: the Hero's pool is HERO_MAX_MP.
+## nothing carries over). C07: the Hero's pool is HERO_MAX_MP. S01: Max MP is
+## the character's Effective MP.
 static func _give_skill(unit: CombatUnit, skill: Dictionary, max_mp: int = CombatConfig.MAX_MP) -> void:
 	unit.skill = skill
 	unit.max_mp = max_mp
@@ -197,10 +205,10 @@ static func _give_skill(unit: CombatUnit, skill: Dictionary, max_mp: int = Comba
 ## The battle for a LOCKED encounter: 1 / 2 / 3 World Enemy Groups -> 10 / 15
 ## / 20 enemies (EncounterContext.PLANNED_COMBAT_ENEMIES). Null when the
 ## context has no valid group count.
-static func from_encounter(context: EncounterContext) -> CombatBattle:
+static func from_encounter(context: EncounterContext, party_stats: Dictionary = {}) -> CombatBattle:
 	if context == null or context.get_planned_combat_enemy_count() <= 0:
 		return null
-	var battle := create(context.get_planned_combat_enemy_count())
+	var battle := create(context.get_planned_combat_enemy_count(), PartyFixture.PROTOTYPE, party_stats)
 	battle.encounter_id = context.encounter_id
 	battle.group_monster_ids = context.group_monster_ids.duplicate()
 	return battle

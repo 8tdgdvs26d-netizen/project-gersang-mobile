@@ -35,28 +35,32 @@ const EXP_PER_KILL := 10
 ## Prototype stats. attack_range is in cells (8-direction / Chebyshev
 ## distance), attack_interval_ms in milliseconds, move_speed in cells per
 ## second.
+## Stage 7 S01: the friendly characters' stats now come from CharacterStats
+## (authoritative values in CharacterConfig). HERO / MERC_A / MERC_B are
+## LEGACY COMPATIBILITY NAMES built from CharacterConfig (one value, no
+## second source); battles read CharacterStats, not these. Removal path: S02.
 const HERO := {
-	"max_hp": 300,
-	"attack_damage": 20,
-	"attack_range": 1,
-	"attack_interval_ms": 1000,
-	"move_speed": 4.0,
+	"max_hp": CharacterConfig.BASE["hero"]["hp"],
+	"attack_damage": CharacterConfig.COMBAT_COMPAT["hero"]["physical_attack"],
+	"attack_range": CharacterConfig.COMBAT_COMPAT["hero"]["attack_range"],
+	"attack_interval_ms": CharacterConfig.COMBAT_COMPAT["hero"]["attack_interval_ms"],
+	"move_speed": CharacterConfig.COMBAT_COMPAT["hero"]["move_speed"],
 }
 ## C03: fixed Prototype Mercenaries (test data only: not recruitable, not
 ## saved, not balance). Merc A fights in melee, Merc B from 3 cells.
 const MERC_A := {
-	"max_hp": 200,
-	"attack_damage": 15,
-	"attack_range": 1,
-	"attack_interval_ms": 1000,
-	"move_speed": 4.0,
+	"max_hp": CharacterConfig.BASE["merc_a"]["hp"],
+	"attack_damage": CharacterConfig.COMBAT_COMPAT["merc_a"]["physical_attack"],
+	"attack_range": CharacterConfig.COMBAT_COMPAT["merc_a"]["attack_range"],
+	"attack_interval_ms": CharacterConfig.COMBAT_COMPAT["merc_a"]["attack_interval_ms"],
+	"move_speed": CharacterConfig.COMBAT_COMPAT["merc_a"]["move_speed"],
 }
 const MERC_B := {
-	"max_hp": 150,
-	"attack_damage": 12,
-	"attack_range": 3,
-	"attack_interval_ms": 1200,
-	"move_speed": 4.0,
+	"max_hp": CharacterConfig.BASE["merc_b"]["hp"],
+	"attack_damage": CharacterConfig.COMBAT_COMPAT["merc_b"]["physical_attack"],
+	"attack_range": CharacterConfig.COMBAT_COMPAT["merc_b"]["attack_range"],
+	"attack_interval_ms": CharacterConfig.COMBAT_COMPAT["merc_b"]["attack_interval_ms"],
+	"move_speed": CharacterConfig.COMBAT_COMPAT["merc_b"]["move_speed"],
 }
 ## The single C01 Prototype enemy archetype.
 const ENEMY := {
@@ -73,7 +77,9 @@ const ENEMY := {
 ## begins, casts for SKILL_CAST_MS (no movement, no Basic Attack) and starts
 ## SKILL_COOLDOWN_MS of cooldown when it resolves. Buff / Debuff effects last
 ## SKILL_EFFECT_MS; re-applying one refreshes it (never stacks).
-const MAX_MP := 100
+## S01: legacy compatibility name of the Mercenaries' Base MP
+## (CharacterConfig.BASE; Max MP = Effective MP from CharacterStats).
+const MAX_MP: int = CharacterConfig.BASE["merc_a"]["mp"]
 const SKILL_MP_COST := 25
 const SKILL_CAST_MS := 1000
 const SKILL_COOLDOWN_MS := 8000
@@ -93,7 +99,8 @@ const MERC_B_SKILL := {"kind": "aoe", "range": 5}
 ## C07 Minimum Gesture Skill (Prototype values approved for C07, not final
 ## balance). Only the Hero has it (one symbol: Lightning). The Hero's MP pool
 ## is HERO_MAX_MP (shared with its Normal Skill); the Mercenaries keep MAX_MP.
-const HERO_MAX_MP := 200
+## S01: legacy compatibility name of the Hero's Base MP (CharacterConfig).
+const HERO_MAX_MP: int = CharacterConfig.BASE["hero"]["mp"]
 ## Opening the Gesture Window needs GESTURE_MP_COST MP; the MP is paid when
 ## the Gesture resolves: GESTURE_MP_COST for Perfect / Success / Partial,
 ## GESTURE_FAIL_MP_COST for Fail or the window timeout. Either way the

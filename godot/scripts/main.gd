@@ -42,6 +42,11 @@ var cargo: CharacterInventory:
 		inventory = value
 		if value != null:
 			character_stats = value.get_stats()
+## Stage 7 S01: the two Prototype Mercenaries' stats for battles (the Hero's
+## are character_stats). A minimal runtime holder only, not saved (fixed
+## Prototype values) and not the Party / Mercenary model, which Stage 8
+## replaces it with.
+var merc_stats := {"merc_a": CharacterStats.for_character("merc_a"), "merc_b": CharacterStats.for_character("merc_b")}
 ## C05: Level / EXP of the three fixed Prototype combat slots (saved, v9).
 var progression := ProgressionState.new()
 ## Session-owned player money, with the same lifetime as the cargo.
@@ -531,10 +536,16 @@ func _on_encounter_phase_changed(phase: int) -> void:
 		_close_combat()
 
 
+## S01: character id -> CharacterStats of the fixed combat party (the Hero is
+## the backpack's character_stats).
+func get_party_stats() -> Dictionary:
+	return {"hero": character_stats, "merc_a": merc_stats["merc_a"], "merc_b": merc_stats["merc_b"]}
+
+
 ## Combat C01: LOCKED -> battlefield. The world stays exactly as LOCKED left
 ## it (player locked, groups held, nothing new can trigger) under the battle.
 func _start_combat() -> void:
-	var battle := CombatBattle.from_encounter(_encounter_session.get_context())
+	var battle := CombatBattle.from_encounter(_encounter_session.get_context(), get_party_stats())
 	if battle == null or _combat_view.is_open():
 		return
 	print("Myrial: combat started for ", battle.encounter_id, " with ", battle.get_enemies().size(), " enemies")
