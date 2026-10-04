@@ -119,6 +119,7 @@ func _ready() -> void:
 	_city_hub.withdraw_requested.connect(_on_withdraw_requested)
 	_city_hub.warehouse_city_selected.connect(_on_warehouse_city_selected)
 	_city_hub.facility_changed.connect(_on_hub_facility_changed)
+	_city_hub.recruit_requested.connect(_on_recruit_requested)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	for child in $Actors.get_children():
 		if child is WorldMonster:
@@ -455,6 +456,31 @@ func _refresh_hub_summary() -> void:
 	if not warehouses.has_city(view_city):
 		view_city = current_city_id
 	_city_hub.show_warehouse(get_warehouse_view(view_city), inventory.get_items(), inventory.get_used_capacity(), inventory.get_max_capacity(), _next_request_id())
+	_refresh_mercenary_view()
+
+
+## Stage 8 P02: the Mercenary Center's held count and owned list.
+func _refresh_mercenary_view() -> void:
+	var labels := []
+	for mercenary in mercenary_roster.get_owned():
+		labels.append(RecruitmentService.label(mercenary))
+	_city_hub.show_mercenaries(labels, mercenary_roster.get_owned_count(), MercenaryRoster.MAX_OWNED)
+
+
+## Stage 8 P02: recruits one Mercenary of `type` in the current city: paid,
+## owned and saved as one transaction (RecruitmentService); a failure changes
+## nothing (money, roster and next_serial restored).
+func recruit_mercenary(type: Variant) -> Dictionary:
+	if not is_in_city():
+		return {"success": false, "reason": "ERR_NOT_IN_CITY", "mercenary_id": "", "type": type if typeof(type) == TYPE_STRING else "", "price": RecruitmentService.PRICE}
+	var result := RecruitmentService.recruit(wallet, mercenary_roster, type, _persist)
+	_refresh_hub_summary()
+	return result
+
+
+func _on_recruit_requested(type: String) -> void:
+	var result := recruit_mercenary(type)
+	_city_hub.show_recruit_feedback(result)
 
 
 func _refresh_market_view() -> void:

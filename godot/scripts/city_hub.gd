@@ -1,9 +1,9 @@
 class_name CityHub
 extends CanvasLayer
 
-## Shared prototype City Hub overlay used by every active city, with three
-## minimal facilities (market, passenger transport and the city's own item
-## warehouse) and a traveling view
+## Shared prototype City Hub overlay used by every active city, with four
+## minimal facilities (market, passenger transport, the city's own item
+## warehouse and, Stage 8 P02, the Mercenary Center) and a traveling view
 ## shown during a journey. The hub only displays the quotes and state it is
 ## given and forwards button presses as requests; every trade and journey runs
 ## in main.gd. All player-facing text here is Traditional Chinese.
@@ -19,11 +19,33 @@ signal facility_changed(facility: String)
 signal deposit_requested(city_id: String, item_id: String, request_id: String)
 signal withdraw_requested(city_id: String, item_id: String, request_id: String)
 signal warehouse_city_selected(city_id: String)
+## Stage 8 P02: a 招聘 press (the recruitment itself runs in main.gd).
+signal recruit_requested(type: String)
 
 const FACILITY_MARKET := "market"
 const FACILITY_TRANSPORT := "transport"
 const FACILITY_WAREHOUSE := "warehouse"
-const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE]
+const FACILITY_MERCENARY := "mercenary"
+const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE, FACILITY_MERCENARY]
+## Stage 8 P02: Mercenary Center (傭兵中心) texts. Types, names, role lines
+## and the price come from RecruitmentService.
+const MERCENARY_NOTE := "開發原型：每名傭兵 $1,000；同一類型可重複招聘"
+const MERCENARY_COUNT_TEXT := "持有傭兵：%d / %d"
+const MERCENARY_NONE_TEXT := "尚未持有傭兵"
+const MERCENARY_PRICE_TEXT := "招聘費用：$%s"
+const RECRUIT_BUTTON_TEXT := "招聘"
+const RECRUIT_BUTTON_SIZE := Vector2(140, 96)
+const RECRUIT_INFO_WIDTH := 480.0
+const RECRUIT_SUCCESS_TEXT := "成功招聘%s"
+const RECRUIT_FAILURE_MESSAGES := {
+	"ERR_INSUFFICIENT_FUNDS": "金錢不足",
+	"ERR_ROSTER_FULL": "傭兵人數已達上限",
+	"ERR_INVALID_TYPE": "傭兵類型無效",
+	"ERR_RECRUIT_FAILED": "招聘失敗",
+	"ERR_SAVE_FAILED": "無法儲存，招聘已取消",
+	"ERR_NOT_IN_CITY": "需要在城市內招聘",
+}
+const RECRUIT_GENERIC_FAILURE := "招聘失敗"
 const WAREHOUSE_NOTE := "開發原型：每次存入或取出 1 件；倉庫只存物品"
 const WAREHOUSE_LOCAL_STATUS := "%s 城倉庫・本地倉庫（每次存入或取出 1 件）"
 const WAREHOUSE_REMOTE_STATUS := "%s 城倉庫・遠端查看：只可在所在城市存取倉庫物品"
@@ -101,6 +123,10 @@ var _warehouse_local := false
 var _warehouse_city_buttons := {}
 var _facility := FACILITY_MARKET
 var _traveling := false
+## Stage 8 P02: type -> Mercenary Center row.
+var _recruit_rows := {}
+var _mercenary_count_label: Label
+var _mercenary_owned_label: Label
 
 @onready var _city_label := $Center/Content/CityLabel as Label
 @onready var _leave_button := $Center/Content/LeaveButton as Button
@@ -113,6 +139,8 @@ var _traveling := false
 @onready var _market_tab := $Center/Content/FacilityTabs/MarketTabButton as Button
 @onready var _transport_tab := $Center/Content/FacilityTabs/TransportTabButton as Button
 @onready var _warehouse_tab := $Center/Content/FacilityTabs/WarehouseTabButton as Button
+@onready var _mercenary_tab := $Center/Content/FacilityTabs/MercenaryTabButton as Button
+@onready var _mercenary_panel := $Center/Content/MercenaryPanel as VBoxContainer
 @onready var _warehouse_summary_label := $Center/Content/WarehouseSummaryLabel as Label
 @onready var _warehouse_status_label := $Center/Content/WarehouseStatusLabel as Label
 @onready var _warehouse_city_tabs := $Center/Content/WarehouseCityTabs as HBoxContainer
@@ -130,7 +158,9 @@ func _ready() -> void:
 	_market_tab.pressed.connect(show_facility.bind(FACILITY_MARKET))
 	_transport_tab.pressed.connect(show_facility.bind(FACILITY_TRANSPORT))
 	_warehouse_tab.pressed.connect(show_facility.bind(FACILITY_WAREHOUSE))
+	_mercenary_tab.pressed.connect(show_facility.bind(FACILITY_MERCENARY))
 	_build_market_rows()
+	_build_mercenary_panel()
 	_build_warehouse_rows()
 	_build_warehouse_city_tabs()
 
@@ -333,6 +363,45 @@ func show_money(balance: int) -> void:
 	_money_label.text = "金錢：%d" % balance
 
 
+## Stage 8 P02: the owned Mercenaries (display labels, e.g. "法師 #2") and
+## how many of the maximum are held. The hub only shows what it is given.
+func show_mercenaries(labels: Array, count: int, max_count: int) -> void:
+	_mercenary_count_label.text = MERCENARY_COUNT_TEXT % [count, max_count]
+	_mercenary_owned_label.text = "　".join(labels) if not labels.is_empty() else MERCENARY_NONE_TEXT
+
+
+## Stage 8 P02: the result of a 招聘 press.
+func show_recruit_feedback(result: Dictionary) -> void:
+	if result.get("success", false):
+		_feedback_label.text = RECRUIT_SUCCESS_TEXT % RecruitmentService.TYPE_NAMES.get(result.get("type", ""), "")
+	else:
+		_feedback_label.text = RECRUIT_FAILURE_MESSAGES.get(result.get("reason", ""), RECRUIT_GENERIC_FAILURE)
+
+
+func get_mercenary_count_text() -> String:
+	return _mercenary_count_label.text
+
+
+func get_mercenary_owned_text() -> String:
+	return _mercenary_owned_label.text
+
+
+func get_recruit_button(type: String) -> Button:
+	return _recruit_rows[type].find_child("RecruitButton", true, false) as Button if _recruit_rows.has(type) else null
+
+
+## A recruit row's name / role, hint and price lines.
+func get_recruit_row_texts(type: String) -> Dictionary:
+	if not _recruit_rows.has(type):
+		return {}
+	var row: Node = _recruit_rows[type]
+	return {
+		"name": (row.find_child("NameLabel", true, false) as Label).text,
+		"hint": (row.find_child("HintLabel", true, false) as Label).text,
+		"price": (row.find_child("PriceLabel", true, false) as Label).text,
+	}
+
+
 ## Refreshes every market row from the quotes computed by the market; the hub
 ## never calculates prices or stock itself. Holdings are a copy of the cargo.
 ## `previews` (good_id -> order size -> sale terms) comes from the trade
@@ -494,6 +563,49 @@ func _build_market_rows() -> void:
 		_rows[good_id] = row
 
 
+## Stage 8 P02: the Mercenary Center: held count, owned list, one row per
+## recruitable type (name and role, a short hint, the price, 招聘).
+func _build_mercenary_panel() -> void:
+	_mercenary_count_label = _make_label("MercenaryCountLabel", "", NAME_FONT_SIZE + 2)
+	_mercenary_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mercenary_panel.add_child(_mercenary_count_label)
+	_mercenary_owned_label = _make_label("MercenaryOwnedLabel", MERCENARY_NONE_TEXT, DETAIL_FONT_SIZE)
+	_mercenary_owned_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mercenary_owned_label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+	_mercenary_owned_label.custom_minimum_size = Vector2(RECRUIT_INFO_WIDTH + RECRUIT_BUTTON_SIZE.x, 0)
+	_mercenary_panel.add_child(_mercenary_owned_label)
+	for type in RecruitmentService.TYPES:
+		var row := HBoxContainer.new()
+		row.name = "Recruit" + type
+		row.add_theme_constant_override("separation", 16)
+		var info := VBoxContainer.new()
+		info.name = "Info"
+		info.custom_minimum_size = Vector2(RECRUIT_INFO_WIDTH, 0)
+		info.add_theme_constant_override("separation", 0)
+		info.add_child(_make_label("NameLabel", "%s　%s" % [RecruitmentService.TYPE_NAMES[type], RecruitmentService.ROLE_TEXT[type]], NAME_FONT_SIZE + 2))
+		info.add_child(_make_label("HintLabel", RecruitmentService.HINT_TEXT[type], DETAIL_FONT_SIZE - 2))
+		info.add_child(_make_label("PriceLabel", MERCENARY_PRICE_TEXT % _thousands(RecruitmentService.PRICE), DETAIL_FONT_SIZE))
+		row.add_child(info)
+		var button := _make_button("RecruitButton", RECRUIT_BUTTON_TEXT, _on_recruit_pressed.bind(type))
+		button.custom_minimum_size = RECRUIT_BUTTON_SIZE
+		row.add_child(button)
+		_mercenary_panel.add_child(row)
+		_recruit_rows[type] = row
+
+
+static func _thousands(value: int) -> String:
+	var digits := str(value)
+	var grouped := ""
+	while digits.length() > 3:
+		grouped = "," + digits.substr(digits.length() - 3) + grouped
+		digits = digits.substr(0, digits.length() - 3)
+	return digits + grouped
+
+
+func _on_recruit_pressed(type: String) -> void:
+	recruit_requested.emit(type)
+
+
 func _make_line(node_name: String, label_names: Array, width: float = INFO_WIDTH, font_size: int = DETAIL_FONT_SIZE) -> HBoxContainer:
 	var line := HBoxContainer.new()
 	line.name = node_name
@@ -592,12 +704,13 @@ func _apply_view(facility: String) -> void:
 	var in_city := not _traveling
 	var transport := in_city and facility == FACILITY_TRANSPORT
 	var warehouse := in_city and facility == FACILITY_WAREHOUSE
-	var market := in_city and not transport and not warehouse
+	var mercenary := in_city and facility == FACILITY_MERCENARY
+	var market := in_city and not transport and not warehouse and not mercenary
 	# The warehouse view trades the title, money and note lines for its own
 	# status line and city selector so the portrait layout keeps its height.
 	# The market view drops the prototype title for its T05 expected-result
 	# lines (prototype UI adjustment).
-	_title_label.visible = in_city and not warehouse and not market
+	_title_label.visible = in_city and not warehouse and not market and not mercenary
 	_money_label.visible = not warehouse
 	_facility_tabs.visible = in_city
 	_note_label.visible = in_city and not warehouse
@@ -609,12 +722,14 @@ func _apply_view(facility: String) -> void:
 	_warehouse_rows_box.visible = warehouse
 	_warehouse_summary_label.visible = warehouse
 	# The warehouse view shows carrying capacity in its own summary line.
-	_cargo_label.visible = not warehouse
+	_cargo_label.visible = not warehouse and not mercenary
+	_mercenary_panel.visible = mercenary
 	_travel_panel.visible = _traveling
-	_note_label.text = TRANSPORT_NOTE if transport else (WAREHOUSE_NOTE if warehouse else MARKET_NOTE)
+	_note_label.text = TRANSPORT_NOTE if transport else (WAREHOUSE_NOTE if warehouse else (MERCENARY_NOTE if mercenary else MARKET_NOTE))
 	_market_tab.disabled = market
 	_transport_tab.disabled = transport
 	_warehouse_tab.disabled = warehouse
+	_mercenary_tab.disabled = mercenary
 
 
 static func _seconds(ms: int) -> int:

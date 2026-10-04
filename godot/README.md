@@ -47,7 +47,22 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 8 P01.5: Mercenary Roster Save Persistence. Save version 11.
+Stage 8 P02: Mercenary Center & Recruitment. Save version stays 11 (unchanged schema).
+
+- City Hub fourth facility 傭兵中心 (tabs narrowed 180 -> 156 px so four fit the 720 layout):
+  money, 持有傭兵：X / 5, the owned list (守衛 #1 法師 #2 ...), one row per type with its role
+  line, a short hint and 招聘費用：$1,000, and a 招聘 button
+- `RecruitmentService.recruit()`: types GUARDIAN / MAGE / STRATEGIST (守衛 / 法師 / 軍師), $1,000
+  each, duplicates allowed, 5 owned at most. Checks (type, capacity, money) before any change;
+  then pay, `create_mercenary()`, save (`main._persist`). A refused roster add or a failed save
+  restores the money and the whole roster exactly (`MercenaryRoster.get_snapshot()` /
+  `restore_snapshot()`: next_serial and retired ids included), so no money and no id are used up
+- feedback: 成功招聘法師 / 金錢不足 / 傭兵人數已達上限 / 無法儲存，招聘已取消
+- not here: deployment, dismissal, compare, combat use of the roster (P03 / P04)
+- tests: `tests/verify_p02_mercenary_recruitment.gd`; S04's "no recruit" scope check now covers the
+  Character UI and stats only (recruitment lives in main.gd)
+
+Previous: Stage 8 P01.5: Mercenary Roster Save Persistence. Save version 11.
 
 - Save v11 = v10 + `mercenaries`: `MercenaryRoster.to_dict()` = `{owned: [{id, type, level, exp,
   allocation: {hp, str, agi, int}}], deployed: [ids], next_serial}`. Nothing derived is saved
