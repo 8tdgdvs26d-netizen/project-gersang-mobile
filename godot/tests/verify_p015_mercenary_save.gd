@@ -32,9 +32,10 @@ func _initialize() -> void:
 	_verify_invalid()
 	await _verify_game()
 	_verify_rollback()
+	_verify_serial_boundary()
 	_verify_stress()
 	_delete(TEST_SAVE)
-	_check(_sections_done.size() == 8, "Every test section must run to completion (%s)" % str(_sections_done))
+	_check(_sections_done.size() == 9, "Every test section must run to completion (%s)" % str(_sections_done))
 	if _failures == 0:
 		print("P01.5 mercenary save verification passed (%d checks)" % _checks)
 	quit(1 if _failures > 0 else 0)
@@ -324,6 +325,49 @@ func _verify_rollback() -> void:
 	restored.get_mercenary("merc_1").add_exp(1000)
 	_check(roster.get_mercenary("merc_1").get_level() == 5, "The restored roster shares no instance with the original")
 	_sections_done.append("rollback")
+
+
+# --- ID issuance boundary (GPT L1 corrective) -----------------------------------------------------
+
+## next_serial may never pass MAX_SERIAL: the last issuable id is
+## merc_<MAX_SERIAL - 1> (next_serial becomes MAX_SERIAL, still saveable);
+## after that create_mercenary() refuses, changing nothing.
+func _verify_serial_boundary() -> void:
+	var max_serial := MercenaryRoster.MAX_SERIAL
+	_check(max_serial == 9007199254740992, "MAX_SERIAL is 2^53")
+	# Highest valid issuable state: next_serial MAX - 1 (loaded from a save).
+	var roster := MercenaryRoster.from_dict(_json({"owned": [_m("merc_1", "MAGE")], "deployed": ["merc_1"], "next_serial": max_serial - 1}))
+	_check(roster != null and roster.get_next_serial() == max_serial - 1, "A save at next_serial MAX - 1 loads")
+	var last := roster.create_mercenary("GUARDIAN")
+	_check(last != null and last.get_id() == "merc_%d" % (max_serial - 1) and roster.get_next_serial() == max_serial, "Create at the boundary: the last id merc_%d, next_serial becomes MAX" % (max_serial - 1))
+	var saved := _file_round_trip(roster)
+	_check(saved != null and saved.get_next_serial() == max_serial and saved.get_owned_count() == 2 and saved.get_mercenary(last.get_id()) != null, "The roster after the last id is still Save v11 serializable (saved and loaded)")
+	# Exhaustion: no persistable serial remains.
+	var before := JSON.stringify(roster.to_dict())
+	_check(roster.create_mercenary("MAGE") == null, "Exhausted: create_mercenary() refuses")
+	_check(JSON.stringify(roster.to_dict()) == before and roster.get_owned_count() == 2 and roster.get_next_serial() == max_serial, "A refused create changes nothing (no instance, next_serial still MAX)")
+	_check(_file_round_trip(roster) != null and saved.create_mercenary("STRATEGIST") == null, "Still saveable; the reloaded roster refuses too")
+	# A save already at MAX loads, refuses to create, and stays saveable.
+	var at_max := MercenaryRoster.from_dict(_json({"owned": [], "deployed": [], "next_serial": max_serial}))
+	_check(at_max != null and at_max.create_mercenary("MAGE") == null and at_max.get_owned_count() == 0 and at_max.get_next_serial() == max_serial and _file_round_trip(at_max) != null, "A save at next_serial MAX: loads, creates nothing, stays saveable")
+	# Skipping a used id at the boundary: merc_<MAX-1> owned (from outside),
+	# next_serial MAX - 1... add() already moved it to MAX, so nothing is left.
+	var skip := MercenaryRoster.from_dict(_json({"owned": [], "deployed": [], "next_serial": max_serial - 2}))
+	_check(skip.add(Mercenary.create("merc_%d" % (max_serial - 1), "MAGE")) and skip.get_next_serial() == max_serial, "add(merc_<MAX-1>) moves next_serial to MAX")
+	_check(skip.create_mercenary("MAGE") == null and skip.get_next_serial() == max_serial and _file_round_trip(skip) != null, "Then create refuses (merc_<MAX-2> is below the mark and never issued); still saveable")
+	# add() never pushes next_serial past MAX either.
+	var outside := MercenaryRoster.new()
+	var count_before := outside.get_owned_count()
+	_check(not outside.add(Mercenary.create("merc_%d" % max_serial, "MAGE")) and outside.get_next_serial() == 1 and outside.get_owned_count() == count_before, "add(merc_<MAX>) is refused (it would need next_serial MAX + 1); nothing changes")
+	_check(not outside.add(Mercenary.create("merc_9999999999999999", "MAGE")) and outside.get_next_serial() == 1, "add() of a larger issued-form id is refused too")
+	_check(outside.add(Mercenary.create("merc_12345678901234567", "MAGE")) and outside.get_next_serial() == 1 and _file_round_trip(outside) != null, "A 17-digit id is not issued-form: accepted, next_serial unchanged, saveable")
+	# A failed create (full roster) never moves next_serial.
+	var full := MercenaryRoster.new()
+	for index in range(5):
+		full.create_mercenary(TYPES[index % 3])
+	var serial := full.get_next_serial()
+	_check(full.create_mercenary("MAGE") == null and full.get_next_serial() == serial, "A refused create (roster full) leaves next_serial unchanged")
+	_sections_done.append("serial_boundary")
 
 
 # --- Stress (seeded, deterministic) --------------------------------------------------------------

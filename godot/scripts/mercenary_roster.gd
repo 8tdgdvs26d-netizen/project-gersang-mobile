@@ -52,21 +52,26 @@ static func build(mercenaries: Array, deployed: Array = []) -> MercenaryRoster:
 
 
 ## A new Lv1 instance of `type` with a freshly issued id, owned at once;
-## null when the roster is full or the type is not supported.
+## null when the roster is full, the type is not supported or no persistable
+## serial is left (add() refuses merc_<n> with n >= MAX_SERIAL, since owning it
+## would move next_serial past MAX_SERIAL). A refused call changes nothing,
+## next_serial included (only add() moves it, after every check).
 func create_mercenary(type: Variant) -> Mercenary:
 	if is_full() or not Mercenary.is_valid_type(type):
 		return null
-	var id := _issue_id()
-	var mercenary := Mercenary.create(id, type)
+	var mercenary := Mercenary.create(ID_PREFIX + str(_free_serial()), type)
 	if mercenary == null or not add(mercenary):
 		return null
 	return mercenary
 
 
-## Owns `mercenary`. Refused when the roster is full, or its id is owned or
-## was ever owned here.
+## Owns `mercenary`. Refused when the roster is full, its id is owned or
+## was ever owned here, or it is an issued-form merc_<n> with n >= MAX_SERIAL
+## (next_serial would have to pass MAX_SERIAL).
 func add(mercenary: Mercenary) -> bool:
 	if mercenary == null or is_full() or not Mercenary.is_valid_id(mercenary.get_id()) or _used_ids.has(mercenary.get_id()):
+		return false
+	if issued_serial(mercenary.get_id()) >= MAX_SERIAL:
 		return false
 	_owned.append(mercenary)
 	_used_ids[mercenary.get_id()] = true
@@ -199,10 +204,10 @@ static func issued_serial(id: String) -> int:
 	return int(found.get_string(1)) if found != null else 0
 
 
-func _issue_id() -> String:
-	var id := ID_PREFIX + str(_next_serial)
-	while _used_ids.has(id):
-		_next_serial += 1
-		id = ID_PREFIX + str(_next_serial)
-	_next_serial += 1
-	return id
+## The serial create_mercenary() would issue: the first from next_serial
+## whose id is not used (nothing changes here; add() moves next_serial).
+func _free_serial() -> int:
+	var serial := _next_serial
+	while _used_ids.has(ID_PREFIX + str(serial)):
+		serial += 1
+	return serial
