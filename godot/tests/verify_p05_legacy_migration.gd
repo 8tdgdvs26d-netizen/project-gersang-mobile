@@ -272,6 +272,10 @@ func _verify_claim_service() -> void:
 	_check(failing.create_mercenary("MAGE").get_id() == "merc_5" and failing.get_pending_mercenary("merc_b") != null, "Retired merc_4 stays retired after the rollback")
 	for id in [null, "", "merc_1", "merc_9", "hero"]:
 		_check(not PartyService.claim_pending(failing, id)["success"], "Unknown pending id %s refused" % str(id))
+	# A pending one is not owned: no deployment, dismissal, points or battle.
+	var waiting := JSON.stringify(failing.get_snapshot())
+	_check(not PartyService.set_deployed(failing, "merc_a", true)["success"] and not PartyService.dismiss(failing, "merc_a")["success"] and not PartyService.allocate(failing, "merc_a", {"hp": 1})["success"] and not failing.set_deployment(["merc_a"]) and JSON.stringify(failing.get_snapshot()) == waiting, "AC17 Pending: cannot be deployed, dismissed or given points; nothing changes")
+	_check(CombatBattle.create_party(10, null, failing.get_deployed()).get_friends().all(func(u: CombatUnit) -> bool: return u.id != "merc_a" and u.id != "merc_b") and failing.get_owned_count() == 4, "AC17 Pending never fights and takes no owned place")
 	# Claimed then dismissed: never back, also after save / load.
 	var gone := _recruited(1)
 	gone.pend_legacy(_legacy("merc_a", 2))
