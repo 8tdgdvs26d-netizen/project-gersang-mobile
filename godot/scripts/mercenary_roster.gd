@@ -66,20 +66,28 @@ func create_mercenary(type: Variant) -> Mercenary:
 
 
 ## Owns `mercenary`. Refused when the roster is full, its id is owned or
-## was ever owned here, or it is an issued-form merc_<n> with n >= MAX_SERIAL
-## (next_serial would have to pass MAX_SERIAL).
+## was ever owned here, or it is an issued-form merc_<n> that is retired
+## (n below next_serial: issued before, also across a restart) or n >=
+## MAX_SERIAL (next_serial would have to pass MAX_SERIAL).
 func add(mercenary: Mercenary) -> bool:
 	if mercenary == null or is_full() or not Mercenary.is_valid_id(mercenary.get_id()) or _used_ids.has(mercenary.get_id()):
 		return false
-	if issued_serial(mercenary.get_id()) >= MAX_SERIAL:
+	var serial := issued_serial(mercenary.get_id())
+	if serial >= MAX_SERIAL or (serial > 0 and serial < _next_serial):
 		return false
+	_append(mercenary)
+	return true
+
+
+## Owns a checked `mercenary` (add(), or from_dict() for saved ids below the
+## saved next_serial).
+func _append(mercenary: Mercenary) -> void:
 	_owned.append(mercenary)
 	_used_ids[mercenary.get_id()] = true
 	# P01.5: an issued-form id given from outside moves the high-water mark
 	# past it, so next_serial stays above every owned "merc_<n>" (the saved
 	# roster always validates; the issuer never reaches it).
 	_next_serial = maxi(_next_serial, issued_serial(mercenary.get_id()) + 1)
-	return true
 
 
 ## Gives up the owned `id` (and its deployment). The id is never reused.
@@ -180,17 +188,18 @@ static func from_dict(data: Variant) -> MercenaryRoster:
 		serial = int(serial)
 	if typeof(serial) != TYPE_INT or serial < 1 or serial > MAX_SERIAL:
 		return null
-	var mercenaries := []
+	# Owned ids sit below the saved next_serial (retired for add()), so they
+	# are appended directly, with add()'s other checks.
+	var roster := MercenaryRoster.new()
 	for entry in data["owned"]:
 		var mercenary := Mercenary.from_dict(entry)
-		if mercenary == null or issued_serial(mercenary.get_id()) >= serial:
+		if mercenary == null or roster.is_full() or roster._used_ids.has(mercenary.get_id()) or issued_serial(mercenary.get_id()) >= serial:
 			return null
-		mercenaries.append(mercenary)
+		roster._append(mercenary)
 	for id in data["deployed"]:
 		if typeof(id) != TYPE_STRING:
 			return null
-	var roster := build(mercenaries, data["deployed"])
-	if roster == null:
+	if not roster.set_deployment(data["deployed"]):
 		return null
 	roster._next_serial = serial
 	return roster

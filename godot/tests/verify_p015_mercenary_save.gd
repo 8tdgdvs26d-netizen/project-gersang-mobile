@@ -157,6 +157,25 @@ func _verify_ids() -> void:
 	var fresh := loaded.create_mercenary("MAGE")
 	_check(fresh.get_id() != "merc_2" and fresh.get_id() == "merc_3", "AC11 After save / load the next id is merc_3, never merc_2 (%s)" % fresh.get_id())
 	_check(not loaded.add(Mercenary.create("merc_1", "MAGE")), "The owned merc_1 is still refused as a duplicate")
+	# Codex review: a removed issued id is refused after a reload as before it
+	# (every merc_<n> below next_serial is retired).
+	var retired := MercenaryRoster.new()
+	retired.create_mercenary("MAGE")
+	retired.remove("merc_1")
+	_check(not retired.add(Mercenary.create("merc_1", "MAGE")), "Same session: the removed merc_1 is refused")
+	var retired_back := _file_round_trip(retired)
+	_check(not retired_back.add(Mercenary.create("merc_1", "MAGE")) and retired_back.get_owned_count() == 0 and retired_back.get_next_serial() == 2, "After save / load: merc_1 is still refused, nothing changes")
+	var snapshot := MercenaryRoster.from_dict(retired.to_dict())
+	_check(not snapshot.add(Mercenary.create("merc_1", "GUARDIAN")) and snapshot.create_mercenary("MAGE").get_id() == "merc_2", "from_dict(to_dict()) behaves as the original (merc_1 refused, next is merc_2)")
+	var below := MercenaryRoster.from_dict(_json({"owned": [], "deployed": [], "next_serial": 10}))
+	var refused := true
+	for n in range(1, 10):
+		refused = refused and not below.add(Mercenary.create("merc_%d" % n, "MAGE"))
+	_check(refused and below.get_owned_count() == 0 and below.add(Mercenary.create("merc_10", "MAGE")) and below.add(Mercenary.create("merc_a", "MAGE")), "Every merc_1..merc_9 below next_serial 10 is refused; merc_10 and non-issued ids are accepted")
+	# Owned ids below the mark (any order) still load.
+	var unordered := MercenaryRoster.from_dict(_json({"owned": [_m("merc_4", "MAGE"), _m("merc_1", "GUARDIAN"), _m("merc_3", "MAGE")], "deployed": ["merc_1", "merc_4"], "next_serial": 7}))
+	_check(unordered != null and unordered.get_owned().map(func(m: Mercenary) -> String: return m.get_id()) == ["merc_4", "merc_1", "merc_3"] and unordered.get_deployed_ids() == ["merc_1", "merc_4"] and unordered.get_next_serial() == 7, "Owned merc_4, merc_1, merc_3 below next_serial 7 load in their order")
+	_check(not unordered.add(Mercenary.create("merc_2", "MAGE")) and not unordered.add(Mercenary.create("merc_6", "MAGE")) and unordered.create_mercenary("MAGE").get_id() == "merc_7", "Retired merc_2 / merc_6 refused; the issuer continues at merc_7")
 	# Removing everything still keeps the mark.
 	var empty := MercenaryRoster.new()
 	for index in range(5):

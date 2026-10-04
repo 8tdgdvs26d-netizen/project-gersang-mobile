@@ -75,6 +75,8 @@ func _verify_identity() -> void:
 		issued[mercenary.get_id()] = true
 	issued[a.get_id()] = true
 	_check(not roster.add(_merc(a.get_id(), "MAGE")), "A removed id is never accepted again")
+	var outside := MercenaryRoster.new()
+	_check(outside.add(_merc("merc_a", "GUARDIAN")) and outside.remove("merc_a") and not outside.add(_merc("merc_a", "GUARDIAN")), "A removed non-issued id (merc_a) is never accepted again either")
 	for round in range(20):
 		var fresh := roster.create_mercenary(TYPES[round % 3])
 		_check(fresh != null and not issued.has(fresh.get_id()), "Issued id %s is new" % (fresh.get_id() if fresh != null else "-"))
