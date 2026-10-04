@@ -47,8 +47,10 @@ func _verify_static() -> void:
 	_check(CombatConfig.PREPARATION_FIRST_COLUMN == 1 and CombatConfig.PREPARATION_COLUMNS == 3 and CombatConfig.PREPARATION_MS == 3000, "Preparation: columns 1-3, 3000 ms")
 	_check(CombatConfig.EXP_PER_KILL == 10, "1 enemy killed = 10 EXP")
 	# S03: was MAX_LEVEL 2 / LEVEL_THRESHOLDS {1: 100} (the C05 Lv2 ceiling).
-	_check(ProgressionState.SLOTS == SLOTS and ProgressionState.START_LEVEL == 1 and ProgressionState.MAX_LEVEL == 100 and ProgressionState.required_exp(1) == 100 and ProgressionState.required_exp(2) == 150, "Three fixed slots, Lv1 -> Lv2 at 100 (S03 curve, Lv100 cap)")
-	_check(SaveStore.VERSION == 11 and SaveStore.V9_KEYS == SaveStore.V8_KEYS + ["progression"], "Save v9 = v8 + progression")
+	# Stage 8 P05: the three fixed slots became the Hero's slot + the roster
+	# (merc_a / merc_b are legacy save slots only; FixtureParty below).
+	_check(ProgressionState.LEGACY_SLOTS == SLOTS and ProgressionState.SLOTS == ["hero"] and ProgressionState.START_LEVEL == 1 and ProgressionState.MAX_LEVEL == 100 and ProgressionState.required_exp(1) == 100 and ProgressionState.required_exp(2) == 150, "Three fixed slots, Lv1 -> Lv2 at 100 (S03 curve, Lv100 cap)")
+	_check(SaveStore.VERSION == 12 and SaveStore.V9_KEYS == SaveStore.V8_KEYS + ["progression"], "Save v9 = v8 + progression")
 	_check(CombatConfig.HERO["max_hp"] == 300 and CombatConfig.HERO["attack_damage"] == 20 and CombatConfig.ENEMY["move_speed"] == 2.0 and CombatConfig.MERC_B["attack_range"] == 3, "Combat stats unchanged")
 	var progression_code := _code_only("res://scripts/progression_state.gd").to_lower()
 	for word in ["hp", "attack", "damage", "speed", "range", "strength", "capacity", "skill", "loot", "money", "wallet", "item", "rand", "talent", "point"]:
@@ -142,7 +144,7 @@ func _verify_distribution() -> void:
 		["1 EXP over 3", BattleResult.Outcome.VICTORY, 1, ["hero", "merc_a", "merc_b"], {}],
 	]
 	for case in cases:
-		var progression := ProgressionState.new()
+		var progression := FixtureParty.new()
 		var result := _result(case[1], case[2], case[3])
 		var shares := progression.apply(result)
 		var got := {}
@@ -170,7 +172,7 @@ func _verify_battle_settlement() -> void:
 		won.resolve_damage(wf[0], enemy, 1000)
 	var result := won.get_result()
 	_check(result.is_victory() and result.exp_pool == 100 and result.survivor_ids == ["hero", "merc_b"], "VICTORY: pool 100, survivors Hero and Merc B")
-	var progression := ProgressionState.new()
+	var progression := FixtureParty.new()
 	progression.apply(result)
 	_check(progression.get_exp("hero") == 50 and progression.get_exp("merc_b") == 50 and progression.get_exp("merc_a") == 0, "Hero 50, Merc B 50, dead Merc A 0")
 	# RETREAT: 4 kills; Merc B dead; the Hero escapes while Merc A is far away.
@@ -186,7 +188,7 @@ func _verify_battle_settlement() -> void:
 	result = fled.get_result()
 	_check(fled.get_phase() == CombatBattle.Phase.RETREAT and ff[0].cell.x == 0 and ff[1].cell.x > 20, "RETREAT by the Hero while Merc A is still far from the zone")
 	_check(result.is_retreat() and result.exp_pool == 40 and result.survivor_ids == ["hero", "merc_a"], "RETREAT: pool 40 (4 kills), survivors Hero and Merc A (alive, not in the zone)")
-	progression = ProgressionState.new()
+	progression = FixtureParty.new()
 	progression.apply(result)
 	_check(progression.get_exp("hero") == 20 and progression.get_exp("merc_a") == 20 and progression.get_exp("merc_b") == 0, "Hero 20, Merc A 20, dead Merc B 0")
 	# DEFEAT: 5 kills, then a Full Party Wipe.
@@ -198,7 +200,7 @@ func _verify_battle_settlement() -> void:
 	for friend in lf:
 		lost.resolve_damage(lost.get_enemies()[9], friend, 1000)
 	result = lost.get_result()
-	progression = ProgressionState.new()
+	progression = FixtureParty.new()
 	var shares := progression.apply(result)
 	_check(lost.get_phase() == CombatBattle.Phase.DEFEAT and result.exp_pool == 50 and result.survivor_ids.is_empty() and shares.is_empty() and SLOTS.all(func(s: String) -> bool: return progression.get_exp(s) == 0 and progression.get_level(s) == 1), "DEFEAT: 5 kills earned 50, but nothing is awarded")
 	# The pool and survivors are frozen at settlement.
@@ -215,10 +217,10 @@ func _verify_battle_settlement() -> void:
 # --- Levels -----------------------------------------------------------------------------------------
 
 func _verify_levels() -> void:
-	var progression := ProgressionState.new()
+	var progression := FixtureParty.new()
 	var shares := progression.apply(_result(BattleResult.Outcome.VICTORY, 100, ["hero"]))
 	_check(progression.get_level("hero") == 2 and progression.get_exp("hero") == 0 and shares["hero"]["leveled"] and shares["hero"]["level"] == 2, "Lv1 + 100 -> Lv2")
-	var p2 := ProgressionState.from_dict({"hero": {"level": 1, "exp": 80}, "merc_a": {"level": 1, "exp": 99}, "merc_b": {"level": 1, "exp": 0}})
+	var p2 := FixtureParty.with_levels({"hero": [1, 80], "merc_a": [1, 99], "merc_b": [1, 0]})
 	p2.apply(_result(BattleResult.Outcome.VICTORY, 50, ["hero"]))
 	_check(p2.get_level("hero") == 2 and p2.get_exp("hero") == 30, "Lv1 80 + 50 -> Lv2 with 30 overflow")
 	# S03: C05 kept 530 EXP at the Lv2 ceiling; the S03 curve passes Lv3 (150)
@@ -228,12 +230,12 @@ func _verify_levels() -> void:
 	# S03: C05 stopped at Lv2 with 999; now 1099 passes Lv1-Lv5 (100+150+200+250+300) and keeps 99.
 	p2.apply(_result(BattleResult.Outcome.VICTORY, 1000, ["merc_a"]))
 	_check(p2.get_level("merc_a") == 6 and p2.get_exp("merc_a") == 99, "Lv1 99 + 1000 -> Lv6 99 (S03 multi-Level; was Lv2 999)")
-	var preview_only := ProgressionState.new()
+	var preview_only := FixtureParty.new()
 	var preview := preview_only.preview(_result(BattleResult.Outcome.VICTORY, 100, ["merc_b"]))
 	_check(preview["merc_b"]["leveled"] and preview_only.get_level("merc_b") == 1 and preview_only.get_exp("merc_b") == 0, "preview() changes nothing")
 	# A Level changes no combat stat: a battle after Level Up is identical.
 	var before := CombatBattle.create(10)
-	var levelled := ProgressionState.new()
+	var levelled := FixtureParty.new()
 	levelled.apply(_result(BattleResult.Outcome.VICTORY, 300, ["hero", "merc_a", "merc_b"]))
 	var after := CombatBattle.create(10)
 	var same := true
@@ -248,10 +250,12 @@ func _verify_levels() -> void:
 # --- Persistence (Save v9) ----------------------------------------------------------------------------
 
 func _verify_persistence() -> void:
-	var progression := ProgressionState.from_dict({"hero": {"level": 2, "exp": 30}, "merc_a": {"level": 1, "exp": 40}, "merc_b": {"level": 2, "exp": 0}})
+	# Stage 8 P05 (Save v12): the progression section holds the Hero only (the
+	# Mercenaries' Level / EXP live on their roster instances).
+	var progression := ProgressionState.from_dict({"hero": {"level": 2, "exp": 30}})
 	_check(SaveStore.save(TEST_SAVE, Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression), "v9 save writes")
 	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(raw["version"]) == 11 and raw.keys().size() == 11 and raw["progression"] == {"hero": {"level": 2.0, "exp": 30.0}, "merc_a": {"level": 1.0, "exp": 40.0}, "merc_b": {"level": 2.0, "exp": 0.0}} or raw["progression"] == {"hero": {"level": 2, "exp": 30}, "merc_a": {"level": 1, "exp": 40}, "merc_b": {"level": 2, "exp": 0}}, "v10 progression holds exactly the three slots' {level, exp}")
+	_check(int(raw["version"]) == 12 and raw.keys().size() == 12 and raw["progression"] == {"hero": {"level": 2.0, "exp": 30.0}} or raw["progression"] == {"hero": {"level": 2, "exp": 30}}, "v12 progression holds exactly the Hero's {level, exp}")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["progression"].to_dict() == progression.to_dict(), "Level / EXP survive save -> load")
 	# A v8 save (no progression) loads with the defaults; the file is untouched.
@@ -259,11 +263,12 @@ func _verify_persistence() -> void:
 	v8.erase("progression")
 	v8.erase("allocation")  # S05: nor the v10 allocation
 	v8.erase("mercenaries")  # P01.5: nor the v11 roster
+	v8.erase("pending_legacy_mercenaries")  # P05: nor the v12 pending list
 	v8["version"] = 8
 	_write_json(v8)
 	var text := FileAccess.get_file_as_string(TEST_SAVE)
 	loaded = SaveStore.load_session(TEST_SAVE)
-	_check(not loaded.is_empty() and SLOTS.all(func(s: String) -> bool: return loaded["progression"].get_level(s) == 1 and loaded["progression"].get_exp(s) == 0), "v8 save: every slot Lv1, 0 EXP in memory")
+	_check(not loaded.is_empty() and loaded["progression"].get_level("hero") == 1 and loaded["progression"].get_exp("hero") == 0 and SLOTS.slice(1).all(func(s: String) -> bool: return (loaded["mercenaries"] as MercenaryRoster).get_mercenary(s).get_level() == 1 and (loaded["mercenaries"] as MercenaryRoster).get_mercenary(s).get_exp() == 0), "v8 save: every slot Lv1, 0 EXP in memory (P05: Merc A / B as roster merc_a / merc_b)")
 	_check(FileAccess.get_file_as_string(TEST_SAVE) == text, "Loading a v8 save does not rewrite it")
 	# Malformed progression rejects the whole save (existing convention).
 	var good: Dictionary = raw.duplicate(true)
@@ -271,10 +276,10 @@ func _verify_persistence() -> void:
 		"v9 without progression": _without(good, "progression"),
 		"v8 carrying progression": _with(good, {"version": 8}),
 		"progression not dict": _with(good, {"progression": [1, 2]}),
-		"missing slot": _with(good, {"progression": {"hero": {"level": 1, "exp": 0}, "merc_a": {"level": 1, "exp": 0}}}),
-		"extra slot": _with(good, {"progression": {"hero": {"level": 1, "exp": 0}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}, "merc_c": {"level": 1, "exp": 0}}}),
-		"extra field": _with(good, {"progression": {"hero": {"level": 1, "exp": 0, "hp": 999}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}}}),
-		"missing exp": _with(good, {"progression": {"hero": {"level": 1}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}}}),
+		"missing slot": _with(good, {"progression": {}}),
+		"extra slot": _with(good, {"progression": {"hero": {"level": 1, "exp": 0}, "merc_c": {"level": 1, "exp": 0}}}),
+		"extra field": _with(good, {"progression": {"hero": {"level": 1, "exp": 0, "hp": 999}}}),
+		"missing exp": _with(good, {"progression": {"hero": {"level": 1}}}),
 		"level 0": _with_progression_slot({"level": 0, "exp": 0}),
 		# S03: Lv3 is valid now (was rejected above the C05 Lv2 ceiling).
 		"level 101": _with_progression_slot({"level": 101, "exp": 0}),
@@ -287,9 +292,9 @@ func _verify_persistence() -> void:
 		_write_json(broken[label])
 		var before := FileAccess.get_file_as_string(TEST_SAVE)
 		_check(SaveStore.load_session(TEST_SAVE).is_empty() and FileAccess.get_file_as_string(TEST_SAVE) == before, "Rejected as a whole, file untouched: %s" % label)
-	_check(ProgressionState.from_dict({"hero": {"level": 2, "exp": 999999}, "merc_a": {"level": 1, "exp": 99}, "merc_b": {"level": 1, "exp": 0.0}}) != null, "Valid edge values load (Lv2 high EXP, Lv1 99, whole float 0.0)")
+	_check(ProgressionState.parse_legacy({"hero": {"level": 2, "exp": 999999}, "merc_a": {"level": 1, "exp": 99}, "merc_b": {"level": 1, "exp": 0.0}}).size() == 3 and ProgressionState.from_dict({"hero": {"level": 1, "exp": 0.0}}) != null, "Valid edge values load (Lv2 high EXP, Lv1 99, whole float 0.0)")
 	# S03: EXP at the requirement (C05 rejected Lv1 at 100) is carried through the curve.
-	var carried := ProgressionState.from_dict({"hero": {"level": 1, "exp": 100}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})
+	var carried := ProgressionState.from_dict({"hero": {"level": 1, "exp": 100}})
 	_check(carried != null and carried.get_level("hero") == 2 and carried.get_exp("hero") == 0, "Lv1 at the requirement loads as Lv2 0 (S03; C05 rejected it)")
 	_delete(TEST_SAVE)
 	_sections_done.append("persistence")
@@ -321,9 +326,9 @@ func _verify_in_game() -> void:
 	_check(main.progression.get_exp("hero") == 0, "Nothing applied before the commit")
 	_delete(TEST_SAVE)
 	(view.get_node("ExitButton") as Button).pressed.emit()
-	_check(main.progression.get_exp("hero") == 50 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 50 and main.mercenary_roster.get_mercenary("merc_1").get_exp() == 0 and main.get_last_award().size() == 2 and main.progression.get_exp("merc_a") == 0 and main.progression.get_exp("merc_b") == 0, "Committed: Hero 50, Merc B (法師 #2) 50, Merc A (守衛 #1) 0; legacy slots untouched")
+	_check(main.progression.get_exp("hero") == 50 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 50 and main.mercenary_roster.get_mercenary("merc_1").get_exp() == 0 and main.get_last_award().size() == 2 and main.progression.get_level("merc_a") == 0 and main.progression.get_level("merc_b") == 0, "Committed: Hero 50, Merc B (法師 #2) 50, Merc A (守衛 #1) 0; no legacy slots (P05)")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 11 and int(saved["progression"]["hero"]["exp"]) == 50 and int(saved["progression"]["merc_a"]["exp"]) == 0 and int(saved["mercenaries"]["owned"][1]["exp"]) == 50 and int(saved["mercenaries"]["owned"][0]["exp"]) == 0, "Saved once with the commit: v9 progression (P04: and the roster's EXP)")
+	_check(int(saved["version"]) == 12 and int(saved["progression"]["hero"]["exp"]) == 50 and saved["progression"].keys() == ["hero"] and int(saved["mercenaries"]["owned"][1]["exp"]) == 50 and int(saved["mercenaries"]["owned"][0]["exp"]) == 0, "Saved once with the commit: v9 progression (P04: and the roster's EXP)")
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(main.progression.get_exp("hero") == 50, "A repeated commit adds nothing")
 	# Battle 2 (relaunched, the group was defeated this session): the Hero
@@ -475,6 +480,38 @@ func _destroy(main: Node) -> void:
 	root.remove_child(main)
 	main.free()
 	await process_frame
+
+
+## Stage 8 P05: the C05 fixture party settled the way the game settles it now
+## (PartyProgression): the Hero's ProgressionState slot + roster instances
+## merc_a (GUARDIAN) / merc_b (MAGE). get_exp / get_level read either.
+class FixtureParty:
+	var progression := ProgressionState.new()
+	var roster := MercenaryRoster.build([Mercenary.create("merc_a", "GUARDIAN"), Mercenary.create("merc_b", "MAGE")])
+
+	static func with_levels(levels: Dictionary) -> FixtureParty:
+		var party := FixtureParty.new()
+		party.progression = ProgressionState.from_hero(levels["hero"][0], levels["hero"][1])
+		party.roster = MercenaryRoster.build([Mercenary.create("merc_a", "GUARDIAN", levels["merc_a"][0], levels["merc_a"][1]), Mercenary.create("merc_b", "MAGE", levels["merc_b"][0], levels["merc_b"][1])])
+		return party
+
+	func apply(result: BattleResult) -> Dictionary:
+		return _strip(PartyProgression.apply(result, progression, roster))
+
+	func preview(result: BattleResult) -> Dictionary:
+		return _strip(PartyProgression.preview(result, progression, roster))
+
+	func get_exp(slot: String) -> int:
+		return progression.get_exp(slot) if slot == "hero" else roster.get_mercenary(slot).get_exp()
+
+	func get_level(slot: String) -> int:
+		return progression.get_level(slot) if slot == "hero" else roster.get_mercenary(slot).get_level()
+
+	## The C05 share shape {slot: {exp, level, leveled}}.
+	func _strip(shares: Dictionary) -> Dictionary:
+		for id in shares:
+			shares[id].erase("from_level")
+		return shares
 
 
 func _with_progression_slot(entry: Dictionary) -> Dictionary:

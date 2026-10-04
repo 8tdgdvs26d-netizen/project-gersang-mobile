@@ -50,7 +50,7 @@ func _verify_static() -> void:
 	_check(CombatConfig.GESTURE_BASE_DAMAGE == 100 and CombatConfig.GESTURE_DAMAGE_PERCENT == [120, 100, 50, 0] and CombatConfig.GESTURE_MAX_TARGETS == 10, "Damage 120 / 100 / 50 / 0, at most 10 targets")
 	_check(CombatConfig.COMBAT_TIME_LIMIT_MS == 300000 and CombatConfig.PREPARATION_MS == 3000, "Combat Clock limit 05:00, preparation 3 s")
 	_check(CombatConfig.SKILL_COOLDOWN_MS == 8000 and CombatConfig.SKILL_CAST_MS == 1000 and CombatConfig.MERC_B_SKILL == {"kind": "aoe", "range": 5}, "C06 values unchanged")
-	_check(SaveStore.VERSION == 11 and SaveStore.V9_KEYS.size() == 9, "Save v11 (S05 adds only the allocation)")
+	_check(SaveStore.VERSION == 12 and SaveStore.V9_KEYS.size() == 9, "Save v12 (P05) (S05 adds only the allocation)")
 	for path in ["res://scripts/save_store.gd", "res://scripts/progression_state.gd", "res://scripts/main.gd", "res://scripts/battle_result.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("gesture") and not code.contains("clock_ms") and not code.contains("time_limit"), "%s knows nothing about the Gesture / Combat Clock" % path.get_file())

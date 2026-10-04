@@ -24,6 +24,8 @@ signal recruit_requested(type: String)
 ## Stage 8 P03: 設為出戰 / 取消出戰 and a confirmed 解僱 (run in main.gd).
 signal deployment_requested(mercenary_id: String, deployed: bool)
 signal dismiss_requested(mercenary_id: String)
+## Stage 8 P05: 領取 pressed on a pending legacy Mercenary.
+signal claim_requested(mercenary_id: String)
 
 const FACILITY_MARKET := "market"
 const FACILITY_TRANSPORT := "transport"
@@ -77,9 +79,20 @@ const PARTY_FAILURE_MESSAGES := {
 	"ERR_ALREADY_DEPLOYED": "此傭兵已在出戰名單",
 	"ERR_NOT_DEPLOYED": "此傭兵未在出戰名單",
 	"ERR_NOT_IN_CITY": "需要在城市內操作",
+	"ERR_ROSTER_FULL": ROSTER_FULL_CLAIM_TEXT,
 }
 const DEPLOY_SAVE_FAILED_TEXT := "無法儲存，隊伍變更已取消"
 const DISMISS_SAVE_FAILED_TEXT := "無法儲存，解僱已取消"
+## Stage 8 P05: the pending legacy Mercenaries (我的傭兵, above the roster).
+const PENDING_TITLE_TEXT := "暫存傳承傭兵"
+const PENDING_ROW_TEXT := "%s　Lv.%d"
+const CLAIM_TEXT := "領取"
+const ROSTER_FULL_CLAIM_TEXT := "傭兵人數已達上限，請先解僱一名傭兵"
+const CLAIM_SUCCESS_TEXT := "已領取%s"
+const CLAIM_SAVE_FAILED_TEXT := "無法儲存，領取已取消"
+## Stage 8 P05: the roster list scrolls past this height (five rows fit
+## without scrolling; the pending rows may push it past).
+const ROSTER_SCROLL_MAX_HEIGHT := 780.0
 const PARTY_GENERIC_FAILURE := "操作失敗"
 const WAREHOUSE_NOTE := "開發原型：每次存入或取出 1 件；倉庫只存物品"
 const WAREHOUSE_LOCAL_STATUS := "%s 城倉庫・本地倉庫（每次存入或取出 1 件）"
@@ -170,6 +183,10 @@ var _recruit_view_button: Button
 var _roster_view_button: Button
 var _recruit_box: VBoxContainer
 var _roster_box: VBoxContainer
+## Stage 8 P05: scrolls the pending section + roster rows.
+var _roster_scroll: ScrollContainer
+var _pending_box: VBoxContainer
+var _pending_rows := {}
 var _roster_rows := {}
 var _roster_entries := {}
 var _roster_empty_label: Label
@@ -419,11 +436,15 @@ func show_money(balance: int) -> void:
 ## how many of the maximum are held. The hub only shows what it is given.
 ## Stage 8 P03: `entries` are the roster rows ({id, label, title, hint,
 ## progress, allocation, deployed}) and the deployed count of the maximum.
-func show_mercenaries(labels: Array, count: int, max_count: int, entries: Array = [], deployed_count: int = 0, max_deployed: int = 3) -> void:
+## P05: `pending` [{id, label, level}] are the pending legacy Mercenaries
+## (領取 only while count < max_count).
+func show_mercenaries(labels: Array, count: int, max_count: int, entries: Array = [], deployed_count: int = 0, max_deployed: int = 3, pending: Array = []) -> void:
 	_mercenary_count_label.text = MERCENARY_COUNT_TEXT % [count, max_count]
 	_mercenary_owned_label.text = "　".join(labels) if not labels.is_empty() else MERCENARY_NONE_TEXT
 	_deployed_count_label.text = DEPLOYED_COUNT_TEXT % [deployed_count, max_deployed]
+	_rebuild_pending_rows(pending, count >= max_count)
 	_rebuild_roster_rows(entries)
+	_fit_roster_scroll()
 	if _dismiss_id != "" and not _roster_entries.has(_dismiss_id):
 		close_dismiss_confirm()
 
@@ -436,6 +457,7 @@ func show_mercenary_view(view: String) -> void:
 	_recruit_box.visible = view == MERCENARY_VIEW_RECRUIT
 	_mercenary_owned_label.visible = view == MERCENARY_VIEW_RECRUIT
 	_roster_box.visible = view == MERCENARY_VIEW_ROSTER
+	_roster_scroll.visible = view == MERCENARY_VIEW_ROSTER
 	_recruit_view_button.disabled = view == MERCENARY_VIEW_RECRUIT
 	_roster_view_button.disabled = view == MERCENARY_VIEW_ROSTER
 
@@ -499,10 +521,10 @@ func close_dismiss_confirm() -> void:
 ## 解僱 ("dismiss") for the Mercenary shown as `label`.
 func show_party_feedback(action: String, result: Dictionary, label: String) -> void:
 	if result.get("success", false):
-		var success := {"deploy": DEPLOY_SUCCESS_TEXT, "undeploy": UNDEPLOY_SUCCESS_TEXT, "dismiss": DISMISS_SUCCESS_TEXT}
+		var success := {"deploy": DEPLOY_SUCCESS_TEXT, "undeploy": UNDEPLOY_SUCCESS_TEXT, "dismiss": DISMISS_SUCCESS_TEXT, "claim": CLAIM_SUCCESS_TEXT}
 		_feedback_label.text = success.get(action, "%s") % label
 	elif result.get("reason", "") == "ERR_SAVE_FAILED":
-		_feedback_label.text = DISMISS_SAVE_FAILED_TEXT if action == "dismiss" else DEPLOY_SAVE_FAILED_TEXT
+		_feedback_label.text = {"dismiss": DISMISS_SAVE_FAILED_TEXT, "claim": CLAIM_SAVE_FAILED_TEXT}.get(action, DEPLOY_SAVE_FAILED_TEXT)
 	else:
 		_feedback_label.text = PARTY_FAILURE_MESSAGES.get(result.get("reason", ""), PARTY_GENERIC_FAILURE)
 
@@ -729,10 +751,20 @@ func _build_mercenary_panel() -> void:
 	_recruit_box.name = "RecruitBox"
 	_recruit_box.add_theme_constant_override("separation", 12)
 	_mercenary_panel.add_child(_recruit_box)
+	_roster_scroll = ScrollContainer.new()
+	_roster_scroll.name = "RosterScroll"
+	_roster_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_roster_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_mercenary_panel.add_child(_roster_scroll)
 	_roster_box = VBoxContainer.new()
 	_roster_box.name = "RosterBox"
 	_roster_box.add_theme_constant_override("separation", 10)
-	_mercenary_panel.add_child(_roster_box)
+	_roster_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_roster_scroll.add_child(_roster_box)
+	_pending_box = VBoxContainer.new()
+	_pending_box.name = "PendingBox"
+	_pending_box.add_theme_constant_override("separation", 6)
+	_roster_box.add_child(_pending_box)
 	_roster_empty_label = _make_label("RosterEmptyLabel", MERCENARY_NONE_TEXT, DETAIL_FONT_SIZE)
 	_roster_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_roster_box.add_child(_roster_empty_label)
@@ -759,6 +791,75 @@ func _build_mercenary_panel() -> void:
 
 ## Stage 8 P03: one row per owned Mercenary: its lines, 設為出戰 / 取消出戰 and
 ## 解僱 (a deployed one says so instead of opening the confirmation).
+## Stage 8 P05: the pending legacy section: its title, one row per pending
+## Mercenary (name, Level, 領取) and, while the roster is full, the hint.
+func _rebuild_pending_rows(pending: Array, full: bool) -> void:
+	for child in _pending_box.get_children():
+		_pending_box.remove_child(child)
+		child.queue_free()
+	_pending_rows.clear()
+	_pending_box.visible = not pending.is_empty()
+	if pending.is_empty():
+		return
+	var title := _make_label("PendingTitle", PENDING_TITLE_TEXT, NAME_FONT_SIZE)
+	title.add_theme_color_override("font_color", Color(0.88, 0.75, 0.36))
+	_pending_box.add_child(title)
+	for entry in pending:
+		var id: String = entry["id"]
+		var row := HBoxContainer.new()
+		row.name = "Pending_" + id
+		row.add_theme_constant_override("separation", 12)
+		var info := _make_label("PendingInfo", PENDING_ROW_TEXT % [entry["label"], entry["level"]], NAME_FONT_SIZE)
+		info.custom_minimum_size = Vector2(ROSTER_ROW_INFO_WIDTH + DISMISS_BUTTON_SIZE.x + 12, 0)
+		row.add_child(info)
+		var claim := _make_button("ClaimButton", CLAIM_TEXT, _on_claim_pressed.bind(id))
+		claim.custom_minimum_size = ROSTER_BUTTON_SIZE
+		claim.disabled = full
+		row.add_child(claim)
+		_pending_box.add_child(row)
+		_pending_rows[id] = row
+	if full:
+		var hint := _make_label("PendingFullHint", ROSTER_FULL_CLAIM_TEXT, DETAIL_FONT_SIZE - 2)
+		hint.add_theme_color_override("font_color", Color(1.0, 0.6, 0.5))
+		_pending_box.add_child(hint)
+
+
+## Stage 8 P05: one claim per press; the button waits for the next rebuild.
+func _on_claim_pressed(mercenary_id: String) -> void:
+	if not _pending_rows.has(mercenary_id):
+		return
+	var button := get_claim_button(mercenary_id)
+	if button == null or button.disabled:
+		return
+	button.disabled = true
+	claim_requested.emit(mercenary_id)
+
+
+func get_pending_ids() -> Array:
+	return _pending_rows.keys()
+
+
+func get_claim_button(mercenary_id: String) -> Button:
+	return _pending_rows[mercenary_id].find_child("ClaimButton", true, false) as Button if _pending_rows.has(mercenary_id) else null
+
+
+## The pending section's texts: {"title", "rows": {id: text}, "hint"}.
+func get_pending_texts() -> Dictionary:
+	var rows := {}
+	for id in _pending_rows:
+		rows[id] = (_pending_rows[id].find_child("PendingInfo", true, false) as Label).text
+	var hint := _pending_box.find_child("PendingFullHint", true, false) as Label
+	var title := _pending_box.find_child("PendingTitle", true, false) as Label
+	return {"title": title.text if title != null else "", "rows": rows, "hint": hint.text if hint != null else ""}
+
+
+## Stage 8 P05: the list keeps its natural height up to
+## ROSTER_SCROLL_MAX_HEIGHT, then scrolls.
+func _fit_roster_scroll() -> void:
+	var needed := _roster_box.get_combined_minimum_size()
+	_roster_scroll.custom_minimum_size = Vector2(needed.x, minf(needed.y, ROSTER_SCROLL_MAX_HEIGHT))
+
+
 func _rebuild_roster_rows(entries: Array) -> void:
 	for row in _roster_rows.values():
 		_roster_box.remove_child(row)

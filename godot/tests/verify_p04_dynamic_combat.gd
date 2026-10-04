@@ -227,7 +227,8 @@ func _verify_settlement() -> void:
 	_check(roster.get_mercenary("merc_2").get_exp() == 90 and progression.get_exp("hero") == 0, "preview changes nothing")
 	var applied := PartyProgression.apply(victory, progression, roster)
 	_check(applied == shares and progression.get_exp("hero") == 50 and roster.get_mercenary("merc_1").get_exp() == 50 and roster.get_mercenary("merc_2").get_level() == 2 and roster.get_mercenary("merc_2").get_exp() == 40 and roster.get_mercenary("merc_3").get_exp() == 50, "AC09 Applied: Hero slot 50, each Mercenary its own EXP (法師 #2 Lv2 40)")
-	_check(progression.get_exp("merc_a") == 0 and progression.get_exp("merc_b") == 0 and progression.get_level("merc_a") == 1, "AC10 Legacy Merc A / B slots get nothing")
+	# Stage 8 P05: the legacy slots are gone from the runtime progression.
+	_check(progression.get_level("merc_a") == 0 and progression.get_level("merc_b") == 0 and progression.to_dict().keys() == ["hero"], "AC10 Legacy Merc A / B slots get nothing (P05: none exist)")
 	_check(roster.get_mercenary("merc_2").get_unspent_points() == 3, "Level Up brings the instance its 3 points")
 	var dead := _result(BattleResult.Outcome.VICTORY, 100, ["hero", "merc_3"])
 	var before_1 := roster.get_mercenary("merc_1").get_exp()
@@ -246,13 +247,13 @@ func _verify_settlement() -> void:
 	# A roster instance whose id is a legacy slot name feeds the instance only.
 	var legacy_named := MercenaryRoster.new()
 	legacy_named.add(Mercenary.create("merc_a", "GUARDIAN"))
-	var p := ProgressionState.from_dict({"hero": {"level": 1, "exp": 0}, "merc_a": {"level": 3, "exp": 5}, "merc_b": {"level": 1, "exp": 0}})
+	var p := ProgressionState.from_dict({"hero": {"level": 1, "exp": 0}})
 	var named_shares := PartyProgression.apply(_result(BattleResult.Outcome.VICTORY, 60, ["hero", "merc_a"]), p, legacy_named)
-	_check(named_shares["merc_a"]["from_level"] == 1 and legacy_named.get_mercenary("merc_a").get_exp() == 30 and p.get_exp("merc_a") == 5 and p.get_level("merc_a") == 3 and p.get_exp("hero") == 30, "Roster before legacy slot: merc_a instance (Lv1) 30, legacy slot (Lv3 5) untouched")
-	# Without a roster (the C01-C08 fixture) the legacy slots settle as C05.
+	_check(named_shares["merc_a"]["from_level"] == 1 and legacy_named.get_mercenary("merc_a").get_exp() == 30 and p.get_level("merc_a") == 0 and p.get_exp("hero") == 30, "Roster instance merc_a (the migrated Merc A) gets its 30; P05: no legacy slot exists")
+	# Without a roster (the C01-C08 fixture) only the Hero has a place (P05).
 	var fixture := ProgressionState.new()
-	PartyProgression.apply(_result(BattleResult.Outcome.VICTORY, 90, ["hero", "merc_a", "merc_b"]), fixture, null)
-	_check(fixture.get_exp("hero") == 30 and fixture.get_exp("merc_a") == 30 and fixture.get_exp("merc_b") == 30, "Fixture party: same as ProgressionState.apply")
+	var fixture_shares := PartyProgression.apply(_result(BattleResult.Outcome.VICTORY, 90, ["hero", "merc_a", "merc_b"]), fixture, null)
+	_check(fixture.get_exp("hero") == 30 and fixture_shares.keys() == ["hero"] and fixture.get_level("merc_a") == 0, "Fixture party without a roster: the Hero's 30 only (P05: the fixture ids hold no progression)")
 	_check(not fixture.award("merc_9", 10) and not fixture.award("hero", -1) and fixture.award("hero", 0) and fixture.get_exp("hero") == 30, "award(): unknown slot / negative refused")
 	_sections_done.append("settlement")
 
@@ -272,7 +273,7 @@ func _verify_game_hero_alone() -> void:
 	await process_frame
 	_check(view.get_victory_lines().has("主角　經驗 +100"), "The Hero takes the whole pool (10 kills = 100)")
 	(view.get_node("ExitButton") as Button).pressed.emit()
-	_check(main.progression.get_exp("hero") == 0 and main.progression.get_level("hero") == 2 and main.progression.get_exp("merc_a") == 0, "Hero Lv2 (100 EXP), legacy slots untouched")
+	_check(main.progression.get_exp("hero") == 0 and main.progression.get_level("hero") == 2 and main.progression.to_dict().keys() == ["hero"], "Hero Lv2 (100 EXP); P05: no legacy slots")
 	await _destroy(main)
 	_sections_done.append("game_hero_alone")
 
@@ -283,7 +284,6 @@ func _verify_game_party() -> void:
 	_delete(TEST_SAVE)
 	var main := await _new_main(TEST_SAVE)
 	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "GUARDIAN", 2, 0, {"hp": 3, "str": 0, "agi": 0, "int": 0}), Mercenary.create("merc_3", "STRATEGIST", 1, 80), Mercenary.create("merc_4", "MAGE")], ["merc_3", "merc_1", "merc_2"])
-	var legacy_before: Dictionary = main.progression.to_dict()["merc_a"]
 	var view := main.get_node("CombatView") as CombatView
 	var battle := await _locked_battle(main, PASSIVE_ONLY)
 	var friends := battle.get_friends()
@@ -326,10 +326,10 @@ func _verify_game_party() -> void:
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	var roster: MercenaryRoster = main.mercenary_roster
 	_check(main.get_last_award().keys() == ["hero", "merc_3", "merc_1"] and main.progression.get_exp("hero") == 33 and roster.get_mercenary("merc_3").get_level() == 2 and roster.get_mercenary("merc_3").get_exp() == 13 and roster.get_mercenary("merc_1").get_exp() == 33 and roster.get_mercenary("merc_2").get_exp() == 0 and roster.get_mercenary("merc_4").get_exp() == 0, "AC13 Committed: Hero 33, 軍師 #3 Lv2 13, 守衛 #1 33, dead #2 / waiting #4 0")
-	_check(main.progression.to_dict()["merc_a"] == legacy_before and main.progression.get_exp("merc_b") == 0, "AC10 Legacy Merc A / B progression unchanged")
+	_check(main.progression.to_dict().keys() == ["hero"] and roster.get_mercenary("merc_a") == null, "AC10 No legacy Merc A / B progression (P05: the roster only)")
 	_check(not main.commit_battle_result(battle.get_result()) and roster.get_mercenary("merc_1").get_exp() == 33, "AC14 A second commit is refused: nothing settled twice")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(saved != null and int(saved["version"]) == 11 and saved.keys().size() == 11, "AC15 Saved: v11, same sections")
+	_check(saved != null and int(saved["version"]) == 12 and saved.keys().size() == 12, "AC15 Saved: v12 (P05), same sections")
 	var saved_merc_3: Dictionary = (saved["mercenaries"]["owned"] as Array).filter(func(m: Dictionary) -> bool: return m["id"] == "merc_3")[0]
 	_check(int(saved_merc_3["level"]) == 2 and int(saved_merc_3["exp"]) == 13 and (saved_merc_3 as Dictionary).keys().size() == Mercenary.KEYS.size(), "AC15 The saved instance holds its new Level / EXP (nothing derived)")
 	await _destroy(main)
@@ -369,30 +369,30 @@ func _verify_game_save_failure() -> void:
 	_sections_done.append("game_save_failure")
 
 
-# --- Character UI (approved D3) ----------------------------------------------------------------------------
+# --- Character UI (P04 D3, superseded by P05 Q2) ----------------------------------------------------------
 
 func _verify_character_panel() -> void:
 	_delete(TEST_SAVE)
 	var main := await _new_main(TEST_SAVE)
 	var panel := main.get_node("CharacterPanel") as CharacterPanel
-	_check(panel.shown_ids == ["hero"], "AC17 Character UI shows only the Hero")
+	_check(panel.get_tab_ids() == ["hero"], "AC17 A new game: the Hero only (P05: + every owned Mercenary)")
 	_check(panel.open(), "Opened in the world")
 	await process_frame
-	_check((panel.get_node("Panel/Tab_hero") as Button).visible and not (panel.get_node("Panel/Tab_merc_a") as Button).visible and not (panel.get_node("Panel/Tab_merc_b") as Button).visible, "AC17 Tabs: 主角 only (傭兵A / 傭兵B hidden)")
+	_check(panel.get_tab("hero").visible and panel.get_tab("merc_a") == null and panel.get_tab("merc_b") == null, "AC17 Tabs: 主角 only (P05: the fixed 傭兵A / 傭兵B tabs no longer exist)")
 	panel.select_character("merc_a")
-	_check(panel.get_selected() == "hero", "AC17 A hidden character cannot be selected")
-	# Legacy points do not count on the 角色 button.
-	main.progression = ProgressionState.from_dict({"hero": {"level": 1, "exp": 0}, "merc_a": {"level": 3, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})
+	_check(panel.get_selected() == "hero", "AC17 An absent character cannot be selected")
+	# No legacy points reach the 角色 button (P05: there are none).
+	main.progression = ProgressionState.from_dict({"hero": {"level": 1, "exp": 0}})
 	main._apply_level_growth()
-	panel.progression = main.progression
 	panel.close()
 	await process_frame
 	await process_frame
 	_check((panel.get_node("OpenButton") as Button).text == CharacterPanel.OPEN_TEXT, "AC17 Merc A's unspent points are not shown on 角色")
 	await _destroy(main)
-	# A standalone panel keeps S04's three tabs (default).
+	# A standalone panel without characters shows no tab.
 	var standalone := CharacterPanel.new()
-	_check(standalone.shown_ids == CharacterPanel.ORDER, "Default panel: every ORDER character (S04 unchanged)")
+	root.add_child(standalone)
+	_check(standalone.get_tab_ids().is_empty(), "Default panel: no provider, no character (P05: no fixed list)")
 	standalone.free()
 	_sections_done.append("character_panel")
 
@@ -441,7 +441,7 @@ func _verify_mercenary_rows() -> void:
 # --- Scope ---------------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 11 and ProgressionState.SLOTS == ["hero", "merc_a", "merc_b"] and CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"], "AC19 Save v11 and the legacy slots unchanged (P05 maps them)")
+	_check(SaveStore.VERSION == 12 and ProgressionState.LEGACY_SLOTS == ["hero", "merc_a", "merc_b"] and ProgressionState.SLOTS == ["hero"] and CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"], "AC19 Save v12 (P05 mapped the legacy slots; they are read only)")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()
 	_check(not save_code.contains("partyprogression") and not save_code.contains("for_mercenary") and not save_code.contains("ice_field"), "AC19 The save knows nothing about P04")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/party_progression.gd"]:
@@ -502,7 +502,7 @@ func _verify_stress() -> void:
 			var expected: Array = ProgressionState.advance(before[m.get_id()][0], before[m.get_id()][1], int(shares[m.get_id()]["exp"])) if gained else before[m.get_id()]
 			if [m.get_level(), m.get_exp()] != expected:
 				bad += 1
-		if progression.get_exp("merc_a") != 0 or progression.get_exp("merc_b") != 0:
+		if progression.get_level("merc_a") != 0 or progression.get_level("merc_b") != 0:
 			bad += 1
 	_check(bad == 0, "300 seeded battles: 0-3 random deployed, random deaths / kills / retreats; every share to its survivor once, within the pool, legacy slots untouched (%d bad)" % bad)
 	_sections_done.append("stress")

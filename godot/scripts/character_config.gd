@@ -14,17 +14,20 @@ const STATS := ["hp", "mp", "str", "agi", "int"]
 ## player-allocatable (approved Stage 7 design).
 const ALLOCATABLE := ["hp", "str", "agi", "int"]
 ## The fixed Prototype combat party (no fourth character; Stage 8 brings the
-## held / deployed Mercenary model).
+## held / deployed Mercenary model). Stage 8 P05: the game no longer holds a
+## fixed Merc A / Merc B; merc_a / merc_b here (and in the tables below) are
+## the stat profiles GUARDIAN / MAGE use and the C01-C08 fixture's party.
 const PROTOTYPE_CHARACTERS := ["hero", "merc_a", "merc_b"]
 ## Stage 7 corrective: the player-facing labels of the three characters
 ## (Character UI, combat info, result). TEMPORARY Prototype functional labels
 ## from each character's approved combat role (Merc A guards, Merc B casts),
-## NOT permanent Canonical names.
+## NOT permanent Canonical names. Stage 8 P05: merc_a / merc_b labels are
+## only the C01-C08 fixture's; roster Mercenaries use RecruitmentService.label.
 const DISPLAY_NAMES := {"hero": "主角", "merc_a": "傭兵A（守護）", "merc_b": "傭兵B（術法）"}
 ## Stage 8 P04: the existing character profile (the BASE / COMBAT_COMPAT /
 ## GROWTH_PER_LEVEL key) a roster Mercenary type uses — one source of values,
-## no copy. GUARDIAN uses merc_a and MAGE uses merc_b (approved). STRATEGIST
-## uses merc_b: PROTOTYPE placeholder (approved P04 S1: the Strategist borrows
+## no copy. GUARDIAN uses merc_a and MAGE uses merc_b (approved). PROTOTYPE
+## placeholder: STRATEGIST uses merc_b (approved P04 S1: the Strategist borrows
 ## the Mage's base stats, growth and Basic Attack until its own are designed),
 ## not balance.
 const MERCENARY_PROFILE := {"GUARDIAN": "merc_a", "MAGE": "merc_b", "STRATEGIST": "merc_b"}

@@ -53,9 +53,16 @@ static func recruit(wallet: Wallet, roster: MercenaryRoster, type: Variant, pers
 	return _result(true, "", type, mercenary.get_id())
 
 
-## "守衛 #1" style label of an owned instance (the issued serial; any other
-## id is shown as it is). No naming system.
+## Stage 8 P05 (approved Q5): the legacy Mercenaries' player names.
+const LEGACY_LABELS := {"merc_a": "守衛（傳承）", "merc_b": "法師（傳承）"}
+
+
+## "守衛 #1" style label of an owned instance (the issued serial; P05: a
+## legacy id its LEGACY_LABELS name; any other id is shown as it is). No
+## naming system.
 static func label(mercenary: Mercenary) -> String:
+	if LEGACY_LABELS.has(mercenary.get_id()):
+		return LEGACY_LABELS[mercenary.get_id()]
 	var serial := MercenaryRoster.issued_serial(mercenary.get_id())
 	var tag := "#%d" % serial if serial > 0 else mercenary.get_id()
 	return "%s %s" % [TYPE_NAMES.get(mercenary.get_type(), mercenary.get_type()), tag]

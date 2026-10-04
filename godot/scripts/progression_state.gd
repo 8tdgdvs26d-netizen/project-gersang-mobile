@@ -1,10 +1,12 @@
 class_name ProgressionState
 extends RefCounted
 
-## Combat C05: the minimum persistent progression of the three fixed Prototype
-## combat slots (the Hero and the two test Mercenaries): a Level and EXP each.
-## Saved (Save v9 "progression"), nothing else about the slots is. It is not a
-## Mercenary roster.
+## Combat C05: the minimum persistent progression of the Hero: a Level and
+## EXP. Saved ("progression"). It is not a Mercenary roster.
+## Stage 8 P05 (Save v12): only the Hero's slot exists at runtime; every
+## Mercenary's Level / EXP lives on its Mercenary instance (MercenaryRoster).
+## The v9-v11 three-slot section (hero / merc_a / merc_b) is only read by
+## parse_legacy() for the Save migration, never written again.
 ##
 ## Prototype rules:
 ##   - a battle's EXP pool is shared equally (integer division, remainder
@@ -19,7 +21,9 @@ extends RefCounted
 ##     holds only Level and EXP
 ## Each slot's "exp" is the EXP held towards the next Level (0 at the cap).
 
-const SLOTS := ["hero", "merc_a", "merc_b"]
+const SLOTS := ["hero"]
+## Stage 8 P05: the v9-v11 saved slots (read only: parse_legacy()).
+const LEGACY_SLOTS := ["hero", "merc_a", "merc_b"]
 const START_LEVEL := 1
 const MAX_LEVEL := 100
 ## EXP to leave Level L = EXP_BASE + EXP_STEP x (L - 1).
@@ -116,28 +120,57 @@ func to_dict() -> Dictionary:
 	return data
 
 
-## A validated copy of saved progression, or null: exactly the three slots,
+## A validated copy of saved progression, or null: exactly the slots given,
 ## each exactly {level, exp} as integers, 1 <= level <= MAX_LEVEL,
 ## 0 <= exp <= MAX_EXP. S03: EXP at or above the Level's requirement (C05
 ## saves banked EXP at the old Lv2 ceiling) is carried through the S03 curve
 ## on load, Level by Level, so no valid v9 save is refused.
+## Stage 8 P05: the v12 section — exactly {"hero": {level, exp}}; the old
+## three-slot section is refused here.
 static func from_dict(data: Variant) -> ProgressionState:
-	if typeof(data) != TYPE_DICTIONARY or data.size() != SLOTS.size():
+	var levels := _parse(data, SLOTS)
+	if levels.is_empty():
 		return null
+	return from_hero(levels["hero"][0], levels["hero"][1])
+
+
+## Stage 8 P05: a state holding the Hero at `level` with `held` EXP (both
+## already valid, e.g. from parse_legacy()).
+static func from_hero(level: int, held: int) -> ProgressionState:
 	var state := ProgressionState.new()
-	for slot in SLOTS:
+	state._slots["hero"] = {"level": level, "exp": held}
+	return state
+
+
+## Stage 8 P05: the v12 section as {"hero": [level, exp]}, or {} (see
+## from_dict()).
+static func parse(data: Variant) -> Dictionary:
+	return _parse(data, SLOTS)
+
+
+## Stage 8 P05: the v9-v11 three-slot section, validated exactly as before
+## (C05 / S03 rules, banked EXP carried through the curve): {slot: [level,
+## exp]} for hero / merc_a / merc_b, or {} when invalid.
+static func parse_legacy(data: Variant) -> Dictionary:
+	return _parse(data, LEGACY_SLOTS)
+
+
+static func _parse(data: Variant, slots: Array) -> Dictionary:
+	if typeof(data) != TYPE_DICTIONARY or data.size() != slots.size():
+		return {}
+	var levels := {}
+	for slot in slots:
 		if not data.has(slot):
-			return null
+			return {}
 		var entry: Variant = data[slot]
 		if typeof(entry) != TYPE_DICTIONARY or entry.size() != SLOT_KEYS.size() or not entry.has_all(SLOT_KEYS):
-			return null
+			return {}
 		var level: Variant = _whole(entry["level"])
 		var held: Variant = _whole(entry["exp"])
 		if level == null or held == null or level < START_LEVEL or level > MAX_LEVEL or held < 0 or held > MAX_EXP:
-			return null
-		var settled := _gain(level, held, 0)
-		state._slots[slot] = {"level": settled[0], "exp": settled[1]}
-	return state
+			return {}
+		levels[slot] = _gain(level, held, 0)
+	return levels
 
 
 ## An integer from JSON (ints and whole floats), else null.

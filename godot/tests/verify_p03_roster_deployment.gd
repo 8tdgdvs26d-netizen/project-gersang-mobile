@@ -134,14 +134,14 @@ func _verify_game_roster() -> void:
 	_check(hub.get_mercenary_view() == CityHub.MERCENARY_VIEW_RECRUIT and hub.get_deployed_count_text() == "出戰傭兵：0 / 3", "The center opens on 招聘 with 出戰傭兵：0 / 3")
 	(hub.get_node("Center/Content/MercenaryPanel/MercenaryViews/RosterViewButton") as Button).pressed.emit()
 	await process_frame
-	_check(hub.get_mercenary_view() == CityHub.MERCENARY_VIEW_ROSTER and hub.get_roster_ids().is_empty() and (hub.get_node("Center/Content/MercenaryPanel/RosterBox/RosterEmptyLabel") as Label).visible, "我的傭兵 with 0 owned: 尚未持有傭兵")
+	_check(hub.get_mercenary_view() == CityHub.MERCENARY_VIEW_ROSTER and hub.get_roster_ids().is_empty() and (hub.get_node("Center/Content/MercenaryPanel/RosterScroll/RosterBox/RosterEmptyLabel") as Label).visible, "我的傭兵 with 0 owned: 尚未持有傭兵")
 	for type in ["MAGE", "MAGE", "GUARDIAN", "STRATEGIST", "MAGE"]:
 		main.recruit_mercenary(type)
 	main.mercenary_roster.get_mercenary("merc_2").add_exp(100 + 150 + 50)
 	main.mercenary_roster.get_mercenary("merc_2").allocate({"hp": 2, "int": 3})
 	main._refresh_hub_summary()
 	await process_frame
-	_check(hub.get_roster_ids() == ["merc_1", "merc_2", "merc_3", "merc_4", "merc_5"] and not (hub.get_node("Center/Content/MercenaryPanel/RosterBox/RosterEmptyLabel") as Label).visible, "AC01 All 5 owned shown, in order")
+	_check(hub.get_roster_ids() == ["merc_1", "merc_2", "merc_3", "merc_4", "merc_5"] and not (hub.get_node("Center/Content/MercenaryPanel/RosterScroll/RosterBox/RosterEmptyLabel") as Label).visible, "AC01 All 5 owned shown, in order")
 	var texts := hub.get_roster_row_texts("merc_2")
 	_check(texts["TitleLabel"] == "法師 #2　Lv.3　遠程法術型　【待命】", "AC02 Type, identity, Level, role, status (%s)" % texts["TitleLabel"])
 	_check(texts["HintLabel"] == "在後方以法術攻擊敵人" and texts["ProgressLabel"] == "經驗 50 / 200　未分配屬性點 1" and texts["AllocationLabel"] == "已分配：血量 2　力量 0　敏捷 0　智力 3", "AC03 Real data: ability line, EXP, unspent and allocated points (%s / %s)" % [texts["ProgressLabel"], texts["AllocationLabel"]])
@@ -316,7 +316,7 @@ func _verify_layout() -> void:
 # --- Scope -----------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 11, "AC23 Save v11")
+	_check(SaveStore.VERSION == 12, "AC23 Save v11")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/character_config.gd", "res://scripts/save_store.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("deploy") and not code.contains("dismiss") and not code.contains("partyservice"), "AC24 %s knows nothing about deployment / dismissal" % path.get_file())

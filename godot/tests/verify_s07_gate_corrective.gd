@@ -55,7 +55,10 @@ func _initialize() -> void:
 func _verify_identity() -> void:
 	_check(CharacterConfig.DISPLAY_NAMES == {"hero": "主角", "merc_a": "傭兵A（守護）", "merc_b": "傭兵B（術法）"}, "Labels: 主角 / 傭兵A（守護） / 傭兵B（術法）")
 	_check(CharacterConfig.DISPLAY_NAMES.keys() == CharacterConfig.PROTOTYPE_CHARACTERS and CharacterConfig.PROTOTYPE_CHARACTERS.size() == 3, "Exactly the three fixed Prototype characters (no new character)")
-	_check(CharacterPanel.NAMES == CharacterConfig.DISPLAY_NAMES, "The Character UI uses the one label source")
+	# Stage 8 P05: the game's Character UI names the Hero from DISPLAY_NAMES and
+	# each roster Mercenary by RecruitmentService.label (one source each).
+	var main_code := _code_only("res://scripts/main.gd")
+	_check(main_code.contains("\"name\": CharacterConfig.DISPLAY_NAMES[\"hero\"]") and main_code.contains("\"name\": RecruitmentService.label(mercenary)"), "The Character UI uses the one label source")
 	_check(CombatView.ROLE_LABELS[CombatUnit.Role.HERO] == "主角" and CombatView.ROLE_LABELS[CombatUnit.Role.MERC_A] == "傭兵A（守護）" and CombatView.ROLE_LABELS[CombatUnit.Role.MERC_B] == "傭兵B（術法）", "Combat info / result use the same labels")
 	_check(CombatView.ROLE_TAGS[CombatUnit.Role.MERC_A] == "守護" and CombatView.ROLE_TAGS[CombatUnit.Role.MERC_B] == "術法" and CombatView.ROLE_TAGS[CombatUnit.Role.HERO] == "", "Portraits carry the merc role tags")
 	_check(CombatConfig.MERC_A_SKILL["kind"] == "guard" and CombatConfig.MERC_B_SKILL["kind"] == "aoe", "The labels follow the approved roles (Merc A Guard, Merc B AoE magic)")
@@ -75,22 +78,21 @@ func _verify_identity() -> void:
 
 func _verify_panel_copy() -> void:
 	var party := {"hero": _at("hero", 3), "merc_a": _at("merc_a", 2), "merc_b": _at("merc_b", 1)}
-	var progression := ProgressionState.from_dict({"hero": {"level": 3, "exp": 40}, "merc_a": {"level": 2, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})
+	var levels := {"hero": [3, 40], "merc_a": [2, 0], "merc_b": [1, 0]}
 	var panel := CharacterPanel.new()
-	panel.party_provider = func() -> Dictionary: return party
-	panel.progression = progression
+	panel.characters_provider = _entries.bind(party, levels)
 	panel.can_open = func() -> bool: return true
 	root.add_child(panel)
 	await process_frame
 	panel.open()
-	for id in CharacterPanel.ORDER:
+	for id in party:
 		panel.select_character(id)
 		await process_frame
 		var stats: CharacterStats = party[id]
 		var lines := panel.get_lines()
 		var text := " | ".join(lines)
-		_check((panel.get_node("Panel/Tab_" + id) as Button).text == CharacterConfig.DISPLAY_NAMES[id], "Tab %s reads %s" % [id, CharacterConfig.DISPLAY_NAMES[id]])
-		_check((panel.get_node("Panel/Tab_" + id) as Button).disabled and (panel.get_node("Panel/Tab_" + id) as Button).get_theme_color("font_disabled_color") == Color(1.0, 0.85, 0.4), "The selected tab is highlighted, not greyed")
+		_check(panel.get_tab(id).text == CharacterConfig.DISPLAY_NAMES[id], "Tab %s reads %s" % [id, CharacterConfig.DISPLAY_NAMES[id]])
+		_check(panel.get_tab(id).disabled and panel.get_tab(id).get_theme_color("font_disabled_color") == Color(1.0, 0.85, 0.4), "The selected tab is highlighted, not greyed")
 		_check(lines[0] == CharacterConfig.DISPLAY_NAMES[id] and (panel.get_node("Panel/Info0") as Label).text == CharacterConfig.DISPLAY_NAMES[id], "The selected character is named at the top (%s)" % lines[0])
 		_check(lines.has("血量 %d" % stats.get_max_hp()) and (panel.get_node("Panel/Row_hp") as Label).text == "血量 %d" % stats.get_max_hp(), "血量 %d shown plainly (%s)" % [stats.get_max_hp(), text])
 		_check(lines.has("魔力 %d" % stats.get_max_mp()) and (panel.get_node("Panel/Mp") as Label).text == "魔力 %d" % stats.get_max_mp(), "魔力 %d shown plainly" % stats.get_max_mp())
@@ -158,7 +160,7 @@ func _verify_schedule() -> void:
 
 
 func _verify_static() -> void:
-	_check(SaveStore.VERSION == 11 and SaveStore.V10_KEYS == SaveStore.V9_KEYS + ["allocation"], "Save v11, sections unchanged")
+	_check(SaveStore.VERSION == 12 and SaveStore.V10_KEYS == SaveStore.V9_KEYS + ["allocation"], "Save v12 (P05), sections unchanged")
 	var save := _code_only("res://scripts/save_store.gd").to_lower()
 	for word in ["respawn", "monster", "group", "victory"]:
 		_check(not save.contains(word), "save_store.gd knows nothing about %s" % word)
@@ -249,7 +251,7 @@ func _verify_victory_and_respawn() -> void:
 	_check(not main.commit_battle_result(battle.get_result()) and _commits.size() == 1 and main.progression.get_exp("hero") == hero_exp + share, "No second settlement")
 	var saved_text := FileAccess.get_file_as_string(TEST_SAVE)
 	var saved: Variant = JSON.parse_string(saved_text)
-	_check(int(saved["version"]) == 11 and (saved as Dictionary).keys().size() == SaveStore.V11_KEYS.size() and not saved_text.to_lower().contains("monster") and not saved_text.to_lower().contains("respawn"), "Saved as v11 with no group / respawn data")
+	_check(int(saved["version"]) == 12 and (saved as Dictionary).keys().size() == SaveStore.V12_KEYS.size() and not saved_text.to_lower().contains("monster") and not saved_text.to_lower().contains("respawn"), "Saved as v12 (P05) with no group / respawn data")
 	# No immediate respawn; still gone just before 10 s.
 	await _settle()
 	_check(not main.has_node(NODES[2]) and main._world_monsters.size() == 2, "No immediate respawn")
@@ -532,6 +534,16 @@ func _code_only(path: String) -> String:
 			lines.append(line)
 	return "\n".join(lines)
 
+
+
+## Stage 8 P05: the Character UI takes its characters from a provider (the
+## game: the Hero + the roster). This fixture lists the Stage 7 three
+## CharacterStats with their labels and Level / EXP.
+func _entries(party: Dictionary, levels: Dictionary) -> Array:
+	var entries := []
+	for id in party:
+		entries.append({"id": id, "name": CharacterConfig.DISPLAY_NAMES[id], "stats": party[id], "level": levels[id][0], "exp": levels[id][1]})
+	return entries
 
 func _check(condition: bool, message: String) -> void:
 	_checks += 1

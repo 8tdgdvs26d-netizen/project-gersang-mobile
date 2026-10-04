@@ -339,13 +339,13 @@ func _verify_save() -> void:
 	stats.set_allocated("int", 4)
 	stats.set_equipment_bonus("agi", 5)
 	var data := SaveStore.serialize(Wallet.new(), CharacterInventory.new("player", stats), MarketState.create_default())
-	_check(SaveStore.VERSION == 11 and data["version"] == 11, "Save v11 (S05 adds only the allocation)")
+	_check(SaveStore.VERSION == 12 and data["version"] == 12, "Save v12 (P05) (S05 adds only the allocation)")
 	_check(data["character"]["stats"] == {"strength": 12} and SaveStore.STATS_KEYS == ["strength"], "Saved stats exactly {strength: Base STR}: no growth / allocation / equipment")
 	var keys := data.keys()
 	keys.sort()
 	# S05 added the allocation section (point counts only; v10); P01.5 the
 	# Mercenary roster (v11).
-	_check(keys == ["allocation", "character", "cost_ledger", "location", "market", "market_recovery", "mercenaries", "money", "progression", "version", "warehouses"], "Save payload top-level keys: S02 added none; S05 added only allocation, P01.5 only mercenaries (%s)" % str(keys))
+	_check(keys == ["allocation", "character", "cost_ledger", "location", "market", "market_recovery", "mercenaries", "money", "pending_legacy_mercenaries", "progression", "version", "warehouses"], "Save payload top-level keys: S02 added none; S05 added only allocation, P01.5 only mercenaries, P05 only pending_legacy_mercenaries (%s)" % str(keys))
 	_check((data["character"] as Dictionary).keys() == ["id", "stats", "inventory"], "Saved character keys unchanged")
 	_sections_done.append("save")
 

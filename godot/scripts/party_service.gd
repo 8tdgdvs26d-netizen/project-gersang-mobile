@@ -21,6 +21,8 @@ const ERR_DEPLOY_FULL := "ERR_DEPLOY_FULL"
 const ERR_DEPLOYED := "ERR_DEPLOYED"
 const ERR_CHANGE_FAILED := "ERR_CHANGE_FAILED"
 const ERR_SAVE_FAILED := "ERR_SAVE_FAILED"
+## Stage 8 P05: claiming a pending legacy Mercenary needs a free place.
+const ERR_ROSTER_FULL := "ERR_ROSTER_FULL"
 
 
 ## Deploys (`deployed` true) or undeploys the owned `id`; saved at once.
@@ -61,6 +63,44 @@ static func dismiss(roster: MercenaryRoster, id: Variant, persist: Callable = Ca
 		return _result(false, ERR_DEPLOYED, id)
 	var snapshot := roster.get_snapshot()
 	if not roster.remove(id):
+		roster.restore_snapshot(snapshot)
+		return _result(false, ERR_CHANGE_FAILED, id)
+	if persist.is_valid() and not persist.call():
+		roster.restore_snapshot(snapshot)
+		return _result(false, ERR_SAVE_FAILED, id)
+	return _result(true, "", id)
+
+
+## Stage 8 P05: claims the pending legacy `id` into a free place (waiting,
+## its data unchanged); saved at once. Refused while the roster is full.
+static func claim_pending(roster: MercenaryRoster, id: Variant, persist: Callable = Callable()) -> Dictionary:
+	if roster == null:
+		return _result(false, ERR_INVALID_STATE, id)
+	if roster.get_pending_mercenary(id) == null:
+		return _result(false, ERR_UNKNOWN_MERCENARY, id)
+	if roster.is_full():
+		return _result(false, ERR_ROSTER_FULL, id)
+	var snapshot := roster.get_snapshot()
+	if not roster.claim_pending(id):
+		roster.restore_snapshot(snapshot)
+		return _result(false, ERR_CHANGE_FAILED, id)
+	if persist.is_valid() and not persist.call():
+		roster.restore_snapshot(snapshot)
+		return _result(false, ERR_SAVE_FAILED, id)
+	return _result(true, "", id)
+
+
+## Stage 8 P05: confirms the Stat Point allocation {stat: points} of the
+## owned `id` (Mercenary.allocate rules); saved at once, the whole roster
+## restored when the save fails.
+static func allocate(roster: MercenaryRoster, id: Variant, pending: Dictionary, persist: Callable = Callable()) -> Dictionary:
+	if roster == null:
+		return _result(false, ERR_INVALID_STATE, id)
+	var mercenary := roster.get_mercenary(id)
+	if mercenary == null:
+		return _result(false, ERR_UNKNOWN_MERCENARY, id)
+	var snapshot := roster.get_snapshot()
+	if not mercenary.allocate(pending):
 		roster.restore_snapshot(snapshot)
 		return _result(false, ERR_CHANGE_FAILED, id)
 	if persist.is_valid() and not persist.call():

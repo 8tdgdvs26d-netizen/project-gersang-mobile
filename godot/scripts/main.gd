@@ -43,18 +43,23 @@ var cargo: CharacterInventory:
 		if value != null:
 			character_stats = value.get_stats()
 			_apply_level_growth()
-## Stage 7 S01: the two Prototype Mercenaries' stats (the Hero's are
-## character_stats). A minimal runtime holder only, not the Party / Mercenary
-## model. Stage 8 P04: they no longer fight (battles take the deployed roster
-## Mercenaries) and their Character UI tabs are hidden; their v10 progression
-## / allocation is still loaded and saved unchanged until P05 maps them.
-var merc_stats := {"merc_a": CharacterStats.for_character("merc_a"), "merc_b": CharacterStats.for_character("merc_b")}
-## C05: Level / EXP of the three fixed Prototype combat slots (saved, v9).
+## C05: the Hero's Level / EXP (saved). Stage 8 P05: the Hero only — the
+## Stage 7 Merc A / Merc B were migrated into the roster.
 var progression := ProgressionState.new()
-## Stage 8 P01.5: the player's owned Mercenaries (saved, v11). P04: the
-## deployed ones fight with the Hero and earn their own EXP; the fixed merc_a
-## / merc_b above are separate.
+## Stage 8 P01.5: the player's owned Mercenaries (saved). P04: the deployed
+## ones fight with the Hero and earn their own EXP. P05: the only Mercenary
+## source (Level, EXP, allocation, combat stats), with the pending legacy
+## Mercenaries waiting for a free place.
 var mercenary_roster := MercenaryRoster.new()
+## Stage 8 P05: what the load found ({"status", "reason"} of SaveStore.inspect),
+## the legacy migration report of a v1-v11 save, the backup of an unreadable
+## save ("" when none / failed) and whether saving is locked for this session
+## (an unreadable save is never overwritten: _persist() refuses).
+var load_status := {"status": SaveStore.STATUS_MISSING, "reason": ""}
+var migration_report := {"owned": [], "pending": []}
+var unreadable_backup_path := ""
+var save_locked := false
+var _notice: NoticeModal
 ## Session-owned player money, with the same lifetime as the cargo.
 var wallet := Wallet.new()
 ## City market state (reference price, stock and target stock per city x good).
@@ -124,6 +129,7 @@ func _ready() -> void:
 	_city_hub.recruit_requested.connect(_on_recruit_requested)
 	_city_hub.deployment_requested.connect(_on_deployment_requested)
 	_city_hub.dismiss_requested.connect(_on_dismiss_requested)
+	_city_hub.claim_requested.connect(_on_claim_requested)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	for child in $Actors.get_children():
 		if child is WorldMonster:
@@ -143,12 +149,10 @@ func _ready() -> void:
 	# S04: the Character UI (Stat Point allocation), from the world only.
 	_character_panel = CharacterPanel.new()
 	_character_panel.name = "CharacterPanel"
-	_character_panel.party_provider = get_party_stats
-	_character_panel.progression = progression
+	# Stage 8 P05: the Hero + every owned Mercenary.
+	_character_panel.characters_provider = get_character_entries
+	_character_panel.confirm_handler = confirm_character_allocation
 	_character_panel.can_open = _can_open_character_panel
-	# Stage 8 P04 (approved D3): only the Hero's page until P05 decides what
-	# becomes of the legacy Merc A / Merc B.
-	_character_panel.shown_ids = ["hero"]
 	add_child(_character_panel)
 	_character_panel.opened.connect(_on_character_panel_opened)
 	_character_panel.closed.connect(_on_character_panel_closed)
@@ -160,6 +164,7 @@ func _ready() -> void:
 	_saved_world_position = location.get_world_position()
 	_last_world_autosave_ms = time_source.now_ms()
 	_update_enter_city_button()
+	_show_load_notices()
 	print("Myrial: Unwritten ", BOOTSTRAP_VERSION, " passenger transport ready")
 
 
@@ -363,8 +368,63 @@ func sell_in_current_city(good_id: Variant, quantity: Variant) -> Dictionary:
 
 ## Restores money, cargo, market and location from a valid save, or keeps the
 ## fresh defaults. Exact world coordinates are not saved.
+## Stage 8 P05 notices (NoticeModal): the legacy migration result and the
+## unreadable-save warning (texts only state what really happened).
+const MIGRATION_TITLE := "傭兵資料已整理"
+const MIGRATION_OWNED_TEXT := "%s　Lv.%d 已加入傭兵中心（待命）"
+const MIGRATION_PENDING_TEXT := "%s　Lv.%d 已暫存：傭兵人數已達上限，空出名額後可於傭兵中心領取"
+const MIGRATION_SAVE_NOTE := "以上變更會在下次儲存遊戲時保存。"
+const UNREADABLE_TITLE := "存檔未能載入"
+const UNREADABLE_REASONS := {SaveStore.REASON_CORRUPT: "存檔內容已損壞，無法讀取。", SaveStore.REASON_INVALID: "存檔內容不正確，無法讀取。", SaveStore.REASON_FUTURE: "存檔來自較新版本的遊戲，無法讀取。"}
+const UNREADABLE_BACKUP_OK := "原存檔已保留，並已另存一份備份。"
+const UNREADABLE_BACKUP_FAILED := "原存檔已保留，但未能建立備份。"
+const UNREADABLE_NOT_SAVED := "今次遊戲進度不會儲存。"
+
+
+## Stage 8 P05: the notice lines for the load (empty: nothing to say).
+func get_load_notice() -> Dictionary:
+	if load_status["status"] == SaveStore.STATUS_UNREADABLE:
+		return {"title": UNREADABLE_TITLE, "lines": [UNREADABLE_REASONS.get(load_status["reason"], UNREADABLE_REASONS[SaveStore.REASON_INVALID]), UNREADABLE_BACKUP_OK if unreadable_backup_path != "" else UNREADABLE_BACKUP_FAILED, UNREADABLE_NOT_SAVED]}
+	var lines := []
+	for id in migration_report["owned"]:
+		var mercenary := mercenary_roster.get_mercenary(id)
+		if mercenary != null:
+			lines.append(MIGRATION_OWNED_TEXT % [RecruitmentService.label(mercenary), mercenary.get_level()])
+	for id in migration_report["pending"]:
+		var mercenary := mercenary_roster.get_pending_mercenary(id)
+		if mercenary != null:
+			lines.append(MIGRATION_PENDING_TEXT % [RecruitmentService.label(mercenary), mercenary.get_level()])
+	if lines.is_empty():
+		return {}
+	lines.append(MIGRATION_SAVE_NOTE)
+	return {"title": MIGRATION_TITLE, "lines": lines}
+
+
+func _show_load_notices() -> void:
+	_notice = NoticeModal.new()
+	_notice.name = "LoadNotice"
+	add_child(_notice)
+	var notice := get_load_notice()
+	if not notice.is_empty():
+		_notice.show_notice(notice["title"], notice["lines"])
+
+
+func get_load_notice_modal() -> NoticeModal:
+	return _notice
+
+
+## Stage 8 P05: a v1-v11 save is migrated in memory (migration_report); an
+## unreadable one (corrupt, invalid, future version) is kept as it is, copied
+## aside (SaveStore.backup_unreadable) and saving is locked for the session.
 func _load_saved_session() -> void:
-	var loaded := SaveStore.load_session(save_path)
+	var inspected := SaveStore.inspect(save_path)
+	load_status = {"status": inspected["status"], "reason": inspected["reason"]}
+	if inspected["status"] == SaveStore.STATUS_UNREADABLE:
+		save_locked = true
+		unreadable_backup_path = SaveStore.backup_unreadable(save_path)
+		push_warning("Myrial: save file %s could not be loaded (%s); saving is locked, backup: %s" % [save_path, inspected["reason"], unreadable_backup_path])
+		return
+	var loaded: Dictionary = inspected["session"]
 	if not loaded.is_empty():
 		wallet = loaded["wallet"]
 		inventory = loaded["inventory"]
@@ -376,6 +436,7 @@ func _load_saved_session() -> void:
 		cost_ledger = loaded["cost_ledger"]
 		progression = loaded["progression"]
 		mercenary_roster = loaded["mercenaries"]
+		migration_report = loaded["migration"]
 		# S05: Level growth first, then the saved confirmed allocation
 		# (replaced, never added to).
 		_apply_level_growth()
@@ -407,6 +468,9 @@ func _save_session() -> void:
 ## In WORLD mode the player's exact position is recorded first; an invalid
 ## position refuses the save instead of overwriting a valid one.
 func _persist() -> bool:
+	# Stage 8 P05: an unreadable save on disk is never overwritten.
+	if save_locked:
+		return false
 	if location.is_in_world() and is_node_ready() and not location.set_world_position(_player.global_position):
 		return false
 	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats(), mercenary_roster)
@@ -476,7 +540,10 @@ func _refresh_mercenary_view() -> void:
 	for mercenary in mercenary_roster.get_owned():
 		labels.append(RecruitmentService.label(mercenary))
 		entries.append(_mercenary_entry(mercenary))
-	_city_hub.show_mercenaries(labels, mercenary_roster.get_owned_count(), MercenaryRoster.MAX_OWNED, entries, mercenary_roster.get_deployed_ids().size(), MercenaryRoster.MAX_DEPLOYED)
+	var pending := []
+	for mercenary in mercenary_roster.get_pending():
+		pending.append({"id": mercenary.get_id(), "label": RecruitmentService.label(mercenary), "level": mercenary.get_level()})
+	_city_hub.show_mercenaries(labels, mercenary_roster.get_owned_count(), MercenaryRoster.MAX_OWNED, entries, mercenary_roster.get_deployed_ids().size(), MercenaryRoster.MAX_DEPLOYED, pending)
 
 
 func _mercenary_entry(mercenary: Mercenary) -> Dictionary:
@@ -546,6 +613,22 @@ func _on_deployment_requested(mercenary_id: String, deployed: bool) -> void:
 func _on_dismiss_requested(mercenary_id: String) -> void:
 	var label := _party_label(mercenary_id)
 	_city_hub.show_party_feedback("dismiss", dismiss_mercenary(mercenary_id), label)
+
+
+## Stage 8 P05: claims a pending legacy Mercenary into a free place in the
+## current city (waiting), saved at once; a failure changes nothing.
+func claim_legacy_mercenary(mercenary_id: Variant) -> Dictionary:
+	if not is_in_city():
+		return {"success": false, "reason": "ERR_NOT_IN_CITY", "mercenary_id": ""}
+	var result := PartyService.claim_pending(mercenary_roster, mercenary_id, _persist)
+	_refresh_hub_summary()
+	return result
+
+
+func _on_claim_requested(mercenary_id: String) -> void:
+	var mercenary := mercenary_roster.get_pending_mercenary(mercenary_id)
+	var label := RecruitmentService.label(mercenary) if mercenary != null else mercenary_id
+	_city_hub.show_party_feedback("claim", claim_legacy_mercenary(mercenary_id), label)
 
 
 func _party_label(mercenary_id: String) -> String:
@@ -689,10 +772,12 @@ func _on_character_panel_opened() -> void:
 	_player.velocity = Vector2.ZERO
 
 
-## S05: a confirmed allocation is saved at once (like a committed trade: a
-## failed save does not undo it), so quitting right after keeps it.
-func _on_allocation_confirmed(_character_id: String) -> void:
-	_save_session()
+## S05: a confirmed Hero allocation is saved at once (like a committed trade:
+## a failed save does not undo it), so quitting right after keeps it. P05: a
+## Mercenary's was already saved by its transaction.
+func _on_allocation_confirmed(character_id: String) -> void:
+	if character_id == Mercenary.HERO_ID:
+		_save_session()
 
 
 func _on_character_panel_closed() -> void:
@@ -701,10 +786,29 @@ func _on_character_panel_closed() -> void:
 		_player.movement_locked = false
 
 
-## S01: character id -> CharacterStats of the fixed combat party (the Hero is
-## the backpack's character_stats).
+## S01: character id -> CharacterStats saved with the progression (the Hero,
+## the backpack's character_stats). Stage 8 P05: the Hero only; Mercenaries'
+## stats come from their instances (CharacterStats.for_mercenary).
 func get_party_stats() -> Dictionary:
-	return {"hero": character_stats, "merc_a": merc_stats["merc_a"], "merc_b": merc_stats["merc_b"]}
+	return {"hero": character_stats}
+
+
+## Stage 8 P05: the Character UI's characters: the Hero, then every owned
+## Mercenary (never a pending one), each with its own Level / EXP / stats.
+func get_character_entries() -> Array:
+	var entries := [{"id": Mercenary.HERO_ID, "name": CharacterConfig.DISPLAY_NAMES["hero"], "stats": character_stats, "level": progression.get_level("hero"), "exp": progression.get_exp("hero")}]
+	for mercenary in mercenary_roster.get_owned():
+		entries.append({"id": mercenary.get_id(), "name": RecruitmentService.label(mercenary), "stats": CharacterStats.for_mercenary(mercenary), "level": mercenary.get_level(), "exp": mercenary.get_exp()})
+	return entries
+
+
+## Stage 8 P05: the Character UI's 確認分配. The Hero: S04 (then saved by
+## _on_allocation_confirmed); a Mercenary: one roster transaction
+## (PartyService.allocate — a failed save restores everything).
+func confirm_character_allocation(character_id: String, pending: Dictionary) -> bool:
+	if character_id == Mercenary.HERO_ID:
+		return character_stats.confirm_allocation(pending)
+	return PartyService.allocate(mercenary_roster, character_id, pending, _persist)["success"]
 
 
 ## Combat C01: LOCKED -> battlefield. The world stays exactly as LOCKED left

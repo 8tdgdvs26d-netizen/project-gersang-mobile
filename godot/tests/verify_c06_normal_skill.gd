@@ -55,7 +55,7 @@ func _verify_static() -> void:
 	_check(battle.get_enemies().all(func(u: CombatUnit) -> bool: return u.skill.is_empty() and u.mp == 0 and battle.get_skill_readiness(u) == CombatBattle.SkillReadiness.UNAVAILABLE), "Enemies have no Skill and no MP")
 	var again := CombatBattle.create(10)
 	_check(again.get_friends()[1].mp == 100, "MP never carries over: a new battle starts full")
-	_check(SaveStore.VERSION == 11 and SaveStore.V9_KEYS.size() == 9, "Save v11 (S05 adds only the allocation; nothing from this WP)")
+	_check(SaveStore.VERSION == 12 and SaveStore.V9_KEYS.size() == 9, "Save v12 (P05) (S05 adds only the allocation; nothing from this WP)")
 	for path in ["res://scripts/save_store.gd", "res://scripts/progression_state.gd", "res://scripts/main.gd", "res://scripts/battle_result.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("skill") and not code.contains("guard_") and not code.contains("slow"), "%s knows nothing about Skills" % path.get_file())
@@ -550,8 +550,8 @@ func _verify_settlement() -> void:
 	_check(mage.skill_state == CombatUnit.SkillState.NONE and mage.mp == 75, "The Skill finished cleanly")
 	battle.advance(5000)
 	_check(battle.get_result() == result and result.exp_pool == 100, "Nothing changes after the result")
-	var progression := ProgressionState.new()
-	var shares := progression.preview(result)
+	# Stage 8 P05: the fixture's merc_a / merc_b settle as roster instances.
+	var shares := PartyProgression.preview(result, ProgressionState.new(), MercenaryRoster.build([Mercenary.create("merc_a", "GUARDIAN"), Mercenary.create("merc_b", "MAGE")]))
 	_check(shares.size() == 3 and shares["merc_b"]["exp"] == 33, "C05 shares: 100 / 3 = 33 each")
 	_sections_done.append("settlement")
 

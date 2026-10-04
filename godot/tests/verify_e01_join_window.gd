@@ -51,7 +51,7 @@ func _verify_static() -> void:
 	# E02 brought World Enemy Groups / multi-group join into scope
 	# (verify_e02_multi_group).
 	_check(not _code_only("res://scripts/save_store.gd").to_lower().contains("encounter"), "The save format knows nothing about encounters")
-	_check(SaveStore.VERSION == 11, "Save version 11 (C05)")
+	_check(SaveStore.VERSION == 12, "Save version 12 (P05) (C05)")
 	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
 	_check(scene.count("world_monster.tscn") == 1 and scene.count("[node name=\"PrototypeMonster\"") == 1, "Exactly one monster in the main scene")
 	_check(scene.count("encounter_session.gd") == 1 and not scene.to_lower().contains("combat") and not scene.to_lower().contains("battle"), "One encounter session, no combat scene")
@@ -207,7 +207,7 @@ func _verify_reload() -> void:
 		_check(main.save_world_position(), "Exact world position saves")
 		var text := FileAccess.get_file_as_string(TEST_SAVE)
 		var lower := text.to_lower()
-		_check(int(JSON.parse_string(text)["version"]) == 11 and not lower.contains("encounter") and not lower.contains("joining") and not lower.contains("locked") and not lower.contains("monster"), "Save version 11; no encounter state saved")
+		_check(int(JSON.parse_string(text)["version"]) == 12 and not lower.contains("encounter") and not lower.contains("joining") and not lower.contains("locked") and not lower.contains("monster"), "Save version 12 (P05); no encounter state saved")
 		await _destroy(main)
 		main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
 		main.combat_enabled = false  # C01 test seam: observe the bare LOCKED phase

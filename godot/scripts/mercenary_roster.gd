@@ -21,6 +21,12 @@ extends RefCounted
 ## is never issued again after a restart: every "merc_<n>" ever issued has
 ## n < next_serial. from_dict() is strict (nothing repaired) and also refuses
 ## an owned "merc_<n>" at or above next_serial (a future id collision).
+## Stage 8 P05 (Save v12): the Stage 7 Merc A / Merc B keep their legacy
+## stable ids merc_a (GUARDIAN) / merc_b (MAGE). A converted one that found
+## no free place waits in the pending list (pending_legacy_mercenaries): it
+## is not owned (no MAX_OWNED place), cannot be deployed, dismissed, given
+## points or fight, and leaves the list only by claim_pending() into a free
+## place. Legacy ids are not issued-form ids, so they never move next_serial.
 
 const MAX_OWNED := 5
 const MAX_DEPLOYED := 3
@@ -31,12 +37,16 @@ const KEYS := ["owned", "deployed", "next_serial"]
 const ISSUED_ID_PATTERN := "\\Amerc_([1-9][0-9]{0,15})\\z"
 ## Upper bound of a saved next_serial: 2^53, the largest exact JSON integer.
 const MAX_SERIAL := 9007199254740992
+## Stage 8 P05: the legacy stable ids and the type each converts to.
+const LEGACY_TYPES := {"merc_a": "GUARDIAN", "merc_b": "MAGE"}
 
 var _owned: Array[Mercenary] = []
 var _deployed: Array[String] = []
 ## Every id ever owned here (never reused).
 var _used_ids := {}
 var _next_serial := 1
+## Stage 8 P05: converted legacy Mercenaries waiting for a free place.
+var _pending: Array[Mercenary] = []
 
 
 ## A roster holding `mercenaries` (in order) with `deployed` ids, or null
@@ -70,7 +80,7 @@ func create_mercenary(type: Variant) -> Mercenary:
 ## (n below next_serial: issued before, also across a restart) or n >=
 ## MAX_SERIAL (next_serial would have to pass MAX_SERIAL).
 func add(mercenary: Mercenary) -> bool:
-	if mercenary == null or is_full() or not Mercenary.is_valid_id(mercenary.get_id()) or _used_ids.has(mercenary.get_id()):
+	if mercenary == null or is_full() or not Mercenary.is_valid_id(mercenary.get_id()) or _used_ids.has(mercenary.get_id()) or get_pending_mercenary(mercenary.get_id()) != null:
 		return false
 	var serial := issued_serial(mercenary.get_id())
 	if serial >= MAX_SERIAL or (serial > 0 and serial < _next_serial):
@@ -165,6 +175,70 @@ func get_next_serial() -> int:
 	return _next_serial
 
 
+## Stage 8 P05: the converted legacy Mercenaries waiting for a place (a new
+## array, in the order they were added).
+func get_pending() -> Array[Mercenary]:
+	return _pending.duplicate()
+
+
+func get_pending_mercenary(id: Variant) -> Mercenary:
+	if typeof(id) != TYPE_STRING:
+		return null
+	for mercenary in _pending:
+		if mercenary.get_id() == id:
+			return mercenary
+	return null
+
+
+## Stage 8 P05: puts a converted legacy Mercenary in the pending list.
+## Refused (nothing changes) unless its id is a legacy id with that id's type
+## and the id is neither owned, pending nor ever used here.
+func pend_legacy(mercenary: Mercenary) -> bool:
+	if mercenary == null or not LEGACY_TYPES.has(mercenary.get_id()) or LEGACY_TYPES[mercenary.get_id()] != mercenary.get_type():
+		return false
+	if _used_ids.has(mercenary.get_id()) or get_pending_mercenary(mercenary.get_id()) != null:
+		return false
+	_pending.append(mercenary)
+	return true
+
+
+## Stage 8 P05: moves the pending `id` into a free owned place (waiting, not
+## deployed; its id, type, Level, EXP and allocation unchanged). Refused
+## (nothing changes) when it is not pending or the roster is full. Once
+## claimed it is no longer pending, so it can never be claimed again.
+func claim_pending(id: Variant) -> bool:
+	var mercenary := get_pending_mercenary(id)
+	if mercenary == null or is_full():
+		return false
+	_pending.erase(mercenary)
+	_append(mercenary)
+	return true
+
+
+## Stage 8 P05: the pending list as saved data (Mercenary.to_dict each).
+func pending_to_list() -> Array:
+	var list := []
+	for mercenary in _pending:
+		list.append(mercenary.to_dict())
+	return list
+
+
+## Stage 8 P05: replaces the pending list with saved `data` (strict, nothing
+## repaired): an array of at most LEGACY_TYPES.size() valid instances, each a
+## legacy id with its type, none twice, none owned or ever used here. False
+## (nothing changes) otherwise.
+func restore_pending(data: Variant) -> bool:
+	if typeof(data) != TYPE_ARRAY or data.size() > LEGACY_TYPES.size():
+		return false
+	var check := MercenaryRoster.new()
+	check._used_ids = _used_ids.duplicate()
+	for entry in data:
+		if not check.pend_legacy(Mercenary.from_dict(entry)):
+			return false
+	_pending = check._pending
+	return true
+
+
 ## The persistent state: {owned: [Mercenary.to_dict()], deployed: [ids],
 ## next_serial}. Nothing derived is included.
 func to_dict() -> Dictionary:
@@ -206,9 +280,10 @@ static func from_dict(data: Variant) -> MercenaryRoster:
 
 
 ## Stage 8 P02: an exact copy of the whole state for a rollback (owned
-## instances, deployment, next_serial and every id ever owned this session).
+## instances, deployment, next_serial and every id ever owned this session;
+## P05: and the pending legacy list).
 func get_snapshot() -> Dictionary:
-	return {"state": to_dict(), "used_ids": _used_ids.keys()}
+	return {"state": to_dict(), "used_ids": _used_ids.keys(), "pending": pending_to_list()}
 
 
 ## Stage 8 P02: puts back a get_snapshot() exactly (a refused transaction
@@ -225,6 +300,11 @@ func restore_snapshot(snapshot: Dictionary) -> bool:
 		used[id] = true
 	if not used.has_all(restored._used_ids.keys()):
 		return false
+	# P05: the pending list too (a snapshot taken before P05 had none).
+	restored._used_ids = used
+	if not restored.restore_pending(snapshot.get("pending", [])):
+		return false
+	_pending = restored._pending
 	_owned = restored._owned
 	_deployed = restored._deployed
 	_next_serial = restored._next_serial

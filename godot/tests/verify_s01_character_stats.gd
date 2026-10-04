@@ -157,7 +157,7 @@ func _verify_save_v9() -> void:
 	stats.set_equipment_bonus("str", 5)
 	var inventory := CharacterInventory.new("player", stats)
 	var data := SaveStore.serialize(Wallet.new(), inventory, MarketState.create_default())
-	_check(SaveStore.VERSION == 11 and data["version"] == 11, "Save v11 (S05 adds only the allocation)")
+	_check(SaveStore.VERSION == 12 and data["version"] == 12, "Save v12 (P05) (S05 adds only the allocation)")
 	_check(data["character"]["stats"] == {"strength": 13}, "character.stats is exactly {strength: Base STR} (no allocation / equipment saved)")
 	_check(SaveStore.STATS_KEYS == ["strength"], "Saved stats keys unchanged")
 	var path := "user://s01_character_stats_save.json"
@@ -190,7 +190,9 @@ func _verify_in_game() -> void:
 	await process_frame
 	var party: Dictionary = main.get_party_stats()
 	_check(party["hero"] == main.character_stats and party["hero"] == main.inventory.get_stats(), "Hero stats = the backpack's stats (one source)")
-	_check(party["merc_a"].character_id == "merc_a" and party["merc_b"].character_id == "merc_b" and party["merc_a"] != party["merc_b"], "Merc A / Merc B stats held for battles")
+	# Stage 8 P05: the game holds no fixed Merc A / Merc B any more; each
+	# roster Mercenary's stats come from its own instance.
+	_check(party.keys() == ["hero"] and not "merc_stats" in main and CharacterStats.for_mercenary(Mercenary.create("merc_a", "GUARDIAN")).character_id == "merc_a" and CharacterStats.for_mercenary(Mercenary.create("merc_b", "MAGE")).character_id == "merc_b", "Merc A / Merc B stats held for battles (P05: as roster instances)")
 	_check(main.inventory.get_max_capacity() == 100 and main.character_stats.get_strength() == 10, "Game default: Hero Effective STR 10, Capacity 100")
 	_check(party.values().all(func(s: CharacterStats) -> bool: return CharacterConfig.STATS.all(func(stat: String) -> bool: return s.get_allocated(stat) == 0 and s.get_equipment_bonus(stat) == 0)), "In the game every Allocated / Equipment value is 0")
 	# A real encounter's battle is built from the game's party stats (a test-only
@@ -202,10 +204,9 @@ func _verify_in_game() -> void:
 		await physics_frame
 	await process_frame
 	main.character_stats.set_equipment_bonus("hp", 25)
-	(party["merc_b"] as CharacterStats).set_equipment_bonus("mp", 10)
 	# Stage 8 P04: the Mercenaries in battle are the deployed roster instances,
-	# built from their own Level / points (法師 Lv3 + 2 INT points: Max MP 150);
-	# the legacy Merc B (its +10 MP above) no longer fights.
+	# built from their own Level / points (法師 Lv3 + 2 INT points: Max MP 150).
+	# P05: the legacy Merc B (formerly given +10 MP here) no longer exists.
 	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE", 3, 0, {"hp": 0, "str": 0, "agi": 0, "int": 2})], ["merc_1", "merc_2"])
 	(main.get_node("EncounterSession") as EncounterSession).challenge()
 	main.time_source.advance_ms(5000)

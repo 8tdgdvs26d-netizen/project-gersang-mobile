@@ -125,10 +125,9 @@ func _verify_derived() -> void:
 # AC06-AC08, AC12, AC18, AC19, AC20, AC22: the Character UI.
 func _verify_panel() -> void:
 	var party := {"hero": _at("hero", 3), "merc_a": _at("merc_a", 2), "merc_b": _at("merc_b", 1)}
-	var progression := ProgressionState.from_dict({"hero": {"level": 3, "exp": 40}, "merc_a": {"level": 2, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})
+	var levels := {"hero": [3, 40], "merc_a": [2, 0], "merc_b": [1, 0]}
 	var panel := CharacterPanel.new()
-	panel.party_provider = func() -> Dictionary: return party
-	panel.progression = progression
+	panel.characters_provider = _entries.bind(party, levels)
 	panel.can_open = func() -> bool: return true
 	root.add_child(panel)
 	await process_frame
@@ -193,9 +192,9 @@ func _verify_save_and_scope() -> void:
 	var stats := CharacterStats.new()
 	stats.apply_level(3)
 	stats.confirm_allocation({"str": 4, "hp": 2})
-	var progression := ProgressionState.from_dict({"hero": {"level": 3, "exp": 0}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})
+	var progression := ProgressionState.from_dict({"hero": {"level": 3, "exp": 0}})
 	var data := SaveStore.serialize(Wallet.new(), CharacterInventory.new("player", stats), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression)
-	_check(SaveStore.VERSION == 11 and data["version"] == 11, "AC23 SaveStore.VERSION (S05: 10)")
+	_check(SaveStore.VERSION == 12 and data["version"] == 12, "AC23 SaveStore.VERSION (S05: 10)")
 	# S05 superseded AC24: the save now holds the allocation point counts (only).
 	_check(data["character"]["stats"] == {"strength": 10} and SaveStore.STATS_KEYS == ["strength"] and data["progression"]["hero"] == {"level": 3, "exp": 0} and data["allocation"]["hero"] == {"hp": 0, "str": 0, "agi": 0, "int": 0}, "AC24 (S05) stats {strength: Base STR}, progression {level, exp}; allocation counts in their own section")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()
@@ -353,6 +352,16 @@ func _delete(path: String) -> void:
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
+
+
+## Stage 8 P05: the Character UI takes its characters from a provider (the
+## game: the Hero + the roster). This fixture lists the Stage 7 three
+## CharacterStats with their labels and Level / EXP.
+func _entries(party: Dictionary, levels: Dictionary) -> Array:
+	var entries := []
+	for id in party:
+		entries.append({"id": id, "name": CharacterConfig.DISPLAY_NAMES[id], "stats": party[id], "level": levels[id][0], "exp": levels[id][1]})
+	return entries
 
 func _check(condition: bool, message: String) -> void:
 	_checks += 1
