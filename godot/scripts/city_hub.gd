@@ -21,6 +21,9 @@ signal withdraw_requested(city_id: String, item_id: String, request_id: String)
 signal warehouse_city_selected(city_id: String)
 ## Stage 8 P02: a 招聘 press (the recruitment itself runs in main.gd).
 signal recruit_requested(type: String)
+## Stage 8 P03: 設為出戰 / 取消出戰 and a confirmed 解僱 (run in main.gd).
+signal deployment_requested(mercenary_id: String, deployed: bool)
+signal dismiss_requested(mercenary_id: String)
 
 const FACILITY_MARKET := "market"
 const FACILITY_TRANSPORT := "transport"
@@ -46,6 +49,38 @@ const RECRUIT_FAILURE_MESSAGES := {
 	"ERR_NOT_IN_CITY": "需要在城市內招聘",
 }
 const RECRUIT_GENERIC_FAILURE := "招聘失敗"
+## Stage 8 P03: the owned roster, deployment and dismissal (texts only; the
+## rules live in PartyService).
+const MERCENARY_VIEW_RECRUIT := "recruit"
+const MERCENARY_VIEW_ROSTER := "roster"
+const RECRUIT_VIEW_TEXT := "招聘"
+const ROSTER_VIEW_TEXT := "我的傭兵"
+const DEPLOYED_COUNT_TEXT := "出戰傭兵：%d / %d"
+const DEPLOY_TEXT := "設為出戰"
+const UNDEPLOY_TEXT := "取消出戰"
+const DISMISS_TEXT := "解僱"
+const ROSTER_ROW_INFO_WIDTH := 420.0
+const ROSTER_BUTTON_SIZE := Vector2(124, 88)
+const DISMISS_BUTTON_SIZE := Vector2(100, 88)
+const DISMISS_CONFIRM_TITLE := "確定解僱%s？"
+const DISMISS_CONFIRM_NOTE := "解僱後無法復原，亦不會退還招聘費用。"
+const DISMISS_CANCEL_TEXT := "取消"
+const DISMISS_CONFIRM_TEXT := "確定解僱"
+const DEPLOY_SUCCESS_TEXT := "%s已設為出戰"
+const UNDEPLOY_SUCCESS_TEXT := "%s已取消出戰"
+const DISMISS_SUCCESS_TEXT := "已解僱%s"
+const DEPLOYED_DISMISS_TEXT := "請先取消出戰，再解僱傭兵"
+const PARTY_FAILURE_MESSAGES := {
+	"ERR_DEPLOY_FULL": "出戰傭兵已達上限",
+	"ERR_DEPLOYED": DEPLOYED_DISMISS_TEXT,
+	"ERR_UNKNOWN_MERCENARY": "找不到此傭兵",
+	"ERR_ALREADY_DEPLOYED": "此傭兵已在出戰名單",
+	"ERR_NOT_DEPLOYED": "此傭兵未在出戰名單",
+	"ERR_NOT_IN_CITY": "需要在城市內操作",
+}
+const DEPLOY_SAVE_FAILED_TEXT := "無法儲存，隊伍變更已取消"
+const DISMISS_SAVE_FAILED_TEXT := "無法儲存，解僱已取消"
+const PARTY_GENERIC_FAILURE := "操作失敗"
 const WAREHOUSE_NOTE := "開發原型：每次存入或取出 1 件；倉庫只存物品"
 const WAREHOUSE_LOCAL_STATUS := "%s 城倉庫・本地倉庫（每次存入或取出 1 件）"
 const WAREHOUSE_REMOTE_STATUS := "%s 城倉庫・遠端查看：只可在所在城市存取倉庫物品"
@@ -127,6 +162,20 @@ var _traveling := false
 var _recruit_rows := {}
 var _mercenary_count_label: Label
 var _mercenary_owned_label: Label
+## Stage 8 P03: sub-views, the deployed count, the roster rows (id -> row,
+## rebuilt from show_mercenaries) and the dismissal confirmation.
+var _mercenary_view := MERCENARY_VIEW_RECRUIT
+var _deployed_count_label: Label
+var _recruit_view_button: Button
+var _roster_view_button: Button
+var _recruit_box: VBoxContainer
+var _roster_box: VBoxContainer
+var _roster_rows := {}
+var _roster_entries := {}
+var _roster_empty_label: Label
+var _dismiss_modal: Control
+var _dismiss_title: Label
+var _dismiss_id := ""
 
 @onready var _city_label := $Center/Content/CityLabel as Label
 @onready var _leave_button := $Center/Content/LeaveButton as Button
@@ -204,6 +253,9 @@ func show_facility(facility: String) -> void:
 	if _traveling or not facility in FACILITIES:
 		return
 	_feedback_label.text = ""
+	close_dismiss_confirm()
+	if facility == FACILITY_MERCENARY and _facility != FACILITY_MERCENARY:
+		show_mercenary_view(MERCENARY_VIEW_RECRUIT)
 	_apply_view(facility)
 	facility_changed.emit(facility)
 
@@ -365,9 +417,94 @@ func show_money(balance: int) -> void:
 
 ## Stage 8 P02: the owned Mercenaries (display labels, e.g. "法師 #2") and
 ## how many of the maximum are held. The hub only shows what it is given.
-func show_mercenaries(labels: Array, count: int, max_count: int) -> void:
+## Stage 8 P03: `entries` are the roster rows ({id, label, title, hint,
+## progress, allocation, deployed}) and the deployed count of the maximum.
+func show_mercenaries(labels: Array, count: int, max_count: int, entries: Array = [], deployed_count: int = 0, max_deployed: int = 3) -> void:
 	_mercenary_count_label.text = MERCENARY_COUNT_TEXT % [count, max_count]
 	_mercenary_owned_label.text = "　".join(labels) if not labels.is_empty() else MERCENARY_NONE_TEXT
+	_deployed_count_label.text = DEPLOYED_COUNT_TEXT % [deployed_count, max_deployed]
+	_rebuild_roster_rows(entries)
+	if _dismiss_id != "" and not _roster_entries.has(_dismiss_id):
+		close_dismiss_confirm()
+
+
+## Stage 8 P03: 招聘 or 我的傭兵 inside the Mercenary Center.
+func show_mercenary_view(view: String) -> void:
+	if view != MERCENARY_VIEW_RECRUIT and view != MERCENARY_VIEW_ROSTER:
+		return
+	_mercenary_view = view
+	_recruit_box.visible = view == MERCENARY_VIEW_RECRUIT
+	_mercenary_owned_label.visible = view == MERCENARY_VIEW_RECRUIT
+	_roster_box.visible = view == MERCENARY_VIEW_ROSTER
+	_recruit_view_button.disabled = view == MERCENARY_VIEW_RECRUIT
+	_roster_view_button.disabled = view == MERCENARY_VIEW_ROSTER
+
+
+func get_mercenary_view() -> String:
+	return _mercenary_view
+
+
+func get_deployed_count_text() -> String:
+	return _deployed_count_label.text
+
+
+func get_roster_ids() -> Array:
+	return _roster_rows.keys()
+
+
+## A roster row's lines and button texts ({} for an unknown id).
+func get_roster_row_texts(mercenary_id: String) -> Dictionary:
+	if not _roster_rows.has(mercenary_id):
+		return {}
+	var row: Node = _roster_rows[mercenary_id]
+	var texts := {}
+	for name in ["TitleLabel", "HintLabel", "ProgressLabel", "AllocationLabel", "PendingLabel"]:
+		texts[name] = (row.find_child(name, true, false) as Label).text
+	texts["deploy_button"] = get_deploy_button(mercenary_id).text
+	return texts
+
+
+func get_deploy_button(mercenary_id: String) -> Button:
+	return _roster_rows[mercenary_id].find_child("DeployButton", true, false) as Button if _roster_rows.has(mercenary_id) else null
+
+
+func get_dismiss_button(mercenary_id: String) -> Button:
+	return _roster_rows[mercenary_id].find_child("DismissButton", true, false) as Button if _roster_rows.has(mercenary_id) else null
+
+
+func is_dismiss_confirm_open() -> bool:
+	return _dismiss_modal != null and _dismiss_modal.visible
+
+
+## The id the confirmation is for ("" when closed) and its title.
+func get_dismiss_confirm() -> Dictionary:
+	return {"id": _dismiss_id, "title": _dismiss_title.text if is_dismiss_confirm_open() else ""}
+
+
+func get_dismiss_confirm_button() -> Button:
+	return _dismiss_modal.find_child("ConfirmButton", true, false) as Button
+
+
+func get_dismiss_cancel_button() -> Button:
+	return _dismiss_modal.find_child("CancelButton", true, false) as Button
+
+
+func close_dismiss_confirm() -> void:
+	_dismiss_id = ""
+	if _dismiss_modal != null:
+		_dismiss_modal.visible = false
+
+
+## Stage 8 P03: the result of 設為出戰 / 取消出戰 ("deploy" / "undeploy") or
+## 解僱 ("dismiss") for the Mercenary shown as `label`.
+func show_party_feedback(action: String, result: Dictionary, label: String) -> void:
+	if result.get("success", false):
+		var success := {"deploy": DEPLOY_SUCCESS_TEXT, "undeploy": UNDEPLOY_SUCCESS_TEXT, "dismiss": DISMISS_SUCCESS_TEXT}
+		_feedback_label.text = success.get(action, "%s") % label
+	elif result.get("reason", "") == "ERR_SAVE_FAILED":
+		_feedback_label.text = DISMISS_SAVE_FAILED_TEXT if action == "dismiss" else DEPLOY_SAVE_FAILED_TEXT
+	else:
+		_feedback_label.text = PARTY_FAILURE_MESSAGES.get(result.get("reason", ""), PARTY_GENERIC_FAILURE)
 
 
 ## Stage 8 P02: the result of a 招聘 press.
@@ -461,6 +598,7 @@ func show_trade_feedback(action: String, good_id: String, quantity: int, result:
 
 
 func close() -> void:
+	close_dismiss_confirm()
 	city_id = ""
 	_traveling = false
 	_travel_destination_label.text = ""
@@ -573,7 +711,33 @@ func _build_mercenary_panel() -> void:
 	_mercenary_owned_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_mercenary_owned_label.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
 	_mercenary_owned_label.custom_minimum_size = Vector2(RECRUIT_INFO_WIDTH + RECRUIT_BUTTON_SIZE.x, 0)
+	_deployed_count_label = _make_label("DeployedCountLabel", DEPLOYED_COUNT_TEXT % [0, 3], NAME_FONT_SIZE)
+	_deployed_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mercenary_panel.add_child(_deployed_count_label)
+	var views := HBoxContainer.new()
+	views.name = "MercenaryViews"
+	views.alignment = BoxContainer.ALIGNMENT_CENTER
+	views.add_theme_constant_override("separation", 16)
+	_recruit_view_button = _make_button("RecruitViewButton", RECRUIT_VIEW_TEXT, show_mercenary_view.bind(MERCENARY_VIEW_RECRUIT))
+	_roster_view_button = _make_button("RosterViewButton", ROSTER_VIEW_TEXT, show_mercenary_view.bind(MERCENARY_VIEW_ROSTER))
+	for button in [_recruit_view_button, _roster_view_button]:
+		(button as Button).custom_minimum_size = Vector2(220, 64)
+		views.add_child(button)
+	_mercenary_panel.add_child(views)
 	_mercenary_panel.add_child(_mercenary_owned_label)
+	_recruit_box = VBoxContainer.new()
+	_recruit_box.name = "RecruitBox"
+	_recruit_box.add_theme_constant_override("separation", 12)
+	_mercenary_panel.add_child(_recruit_box)
+	_roster_box = VBoxContainer.new()
+	_roster_box.name = "RosterBox"
+	_roster_box.add_theme_constant_override("separation", 10)
+	_mercenary_panel.add_child(_roster_box)
+	_roster_empty_label = _make_label("RosterEmptyLabel", MERCENARY_NONE_TEXT, DETAIL_FONT_SIZE)
+	_roster_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_roster_box.add_child(_roster_empty_label)
+	_build_dismiss_modal()
+	show_mercenary_view(MERCENARY_VIEW_RECRUIT)
 	for type in RecruitmentService.TYPES:
 		var row := HBoxContainer.new()
 		row.name = "Recruit" + type
@@ -589,8 +753,113 @@ func _build_mercenary_panel() -> void:
 		var button := _make_button("RecruitButton", RECRUIT_BUTTON_TEXT, _on_recruit_pressed.bind(type))
 		button.custom_minimum_size = RECRUIT_BUTTON_SIZE
 		row.add_child(button)
-		_mercenary_panel.add_child(row)
+		_recruit_box.add_child(row)
 		_recruit_rows[type] = row
+
+
+## Stage 8 P03: one row per owned Mercenary: its lines, 設為出戰 / 取消出戰 and
+## 解僱 (a deployed one says so instead of opening the confirmation).
+func _rebuild_roster_rows(entries: Array) -> void:
+	for row in _roster_rows.values():
+		_roster_box.remove_child(row)
+		row.queue_free()
+	_roster_rows.clear()
+	_roster_entries.clear()
+	_roster_empty_label.visible = entries.is_empty()
+	for entry in entries:
+		var id: String = entry["id"]
+		var row := HBoxContainer.new()
+		row.name = "Merc_" + id
+		row.add_theme_constant_override("separation", 12)
+		var info := VBoxContainer.new()
+		info.name = "Info"
+		info.custom_minimum_size = Vector2(ROSTER_ROW_INFO_WIDTH, 0)
+		info.add_theme_constant_override("separation", 0)
+		var title := _make_label("TitleLabel", entry["title"], NAME_FONT_SIZE)
+		if entry["deployed"]:
+			title.add_theme_color_override("font_color", Color(0.88, 0.75, 0.36))
+		info.add_child(title)
+		for line in [["HintLabel", "hint"], ["ProgressLabel", "progress"], ["AllocationLabel", "allocation"], ["PendingLabel", "pending"]]:
+			var label := _make_label(line[0], entry.get(line[1], ""), DETAIL_FONT_SIZE - 4)
+			label.clip_text = true
+			label.custom_minimum_size = Vector2(ROSTER_ROW_INFO_WIDTH, 0)
+			info.add_child(label)
+		row.add_child(info)
+		var deploy := _make_button("DeployButton", UNDEPLOY_TEXT if entry["deployed"] else DEPLOY_TEXT, _on_deploy_pressed.bind(id, not entry["deployed"]))
+		deploy.custom_minimum_size = ROSTER_BUTTON_SIZE
+		row.add_child(deploy)
+		var dismiss := _make_button("DismissButton", DISMISS_TEXT, _on_dismiss_pressed.bind(id))
+		dismiss.custom_minimum_size = DISMISS_BUTTON_SIZE
+		row.add_child(dismiss)
+		_roster_box.add_child(row)
+		_roster_rows[id] = row
+		_roster_entries[id] = entry
+
+
+## A full-screen confirmation in front of the hub (it takes every touch).
+func _build_dismiss_modal() -> void:
+	_dismiss_modal = ColorRect.new()
+	_dismiss_modal.name = "DismissModal"
+	(_dismiss_modal as ColorRect).color = Color(0.0, 0.0, 0.0, 0.7)
+	_dismiss_modal.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_dismiss_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	_dismiss_modal.visible = false
+	add_child(_dismiss_modal)
+	var panel := Panel.new()
+	panel.name = "DismissPanel"
+	panel.position = Vector2(60.0, 460.0)
+	panel.size = Vector2(600.0, 340.0)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.1, 0.12, 0.13)
+	style.border_color = Color(0.88, 0.75, 0.36)
+	style.set_border_width_all(3)
+	panel.add_theme_stylebox_override("panel", style)
+	_dismiss_modal.add_child(panel)
+	_dismiss_title = _make_label("TitleLabel", "", NAME_FONT_SIZE + 6)
+	_dismiss_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_dismiss_title.position = Vector2(20.0, 40.0)
+	_dismiss_title.size = Vector2(560.0, 60.0)
+	panel.add_child(_dismiss_title)
+	var note := _make_label("NoteLabel", DISMISS_CONFIRM_NOTE, DETAIL_FONT_SIZE)
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+	note.position = Vector2(30.0, 110.0)
+	note.size = Vector2(540.0, 80.0)
+	panel.add_child(note)
+	var cancel := _make_button("CancelButton", DISMISS_CANCEL_TEXT, close_dismiss_confirm)
+	cancel.position = Vector2(40.0, 220.0)
+	cancel.size = Vector2(240.0, 88.0)
+	panel.add_child(cancel)
+	var confirm := _make_button("ConfirmButton", DISMISS_CONFIRM_TEXT, _on_dismiss_confirmed)
+	confirm.position = Vector2(320.0, 220.0)
+	confirm.size = Vector2(240.0, 88.0)
+	panel.add_child(confirm)
+
+
+func _on_deploy_pressed(mercenary_id: String, deployed: bool) -> void:
+	deployment_requested.emit(mercenary_id, deployed)
+
+
+## 解僱: a deployed Mercenary must be undeployed first (no confirmation);
+## otherwise the confirmation opens. Nothing changes until it is confirmed.
+func _on_dismiss_pressed(mercenary_id: String) -> void:
+	if not _roster_entries.has(mercenary_id):
+		return
+	if _roster_entries[mercenary_id]["deployed"]:
+		_feedback_label.text = DEPLOYED_DISMISS_TEXT
+		return
+	_dismiss_id = mercenary_id
+	_dismiss_title.text = DISMISS_CONFIRM_TITLE % _roster_entries[mercenary_id]["label"]
+	_dismiss_modal.visible = true
+
+
+## 確定解僱: sends the one pending dismissal and closes (a second tap finds
+## nothing pending).
+func _on_dismiss_confirmed() -> void:
+	var mercenary_id := _dismiss_id
+	close_dismiss_confirm()
+	if mercenary_id != "":
+		dismiss_requested.emit(mercenary_id)
 
 
 static func _thousands(value: int) -> String:

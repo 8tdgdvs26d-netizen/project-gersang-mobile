@@ -243,9 +243,13 @@ func _verify_stage7() -> void:
 	# P01.5 (Save v11) saves the roster: save_store.gd and main.gd now hold it
 	# (verify_p015_mercenary_save); everything else stays unwired.
 	_check(SaveStore.VERSION == 11 and SaveStore.V10_KEYS == ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation"] and SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"], "Save v10 sections unchanged; v11 adds only the roster (P01.5)")
-	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/character_panel.gd", "res://scripts/city_hub.gd", "res://scripts/progression_state.gd", "res://scripts/character_stats.gd"]:
+	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/character_panel.gd", "res://scripts/progression_state.gd", "res://scripts/character_stats.gd"]:
 		var code := _code_only(path)
 		_check(not code.contains("MercenaryRoster") and not code.contains("Mercenary.") and not code.contains("roster"), "%s is not wired to the roster" % path.get_file())
+	# Stage 8 P03: the City Hub shows a roster view (display data from main.gd)
+	# but still never holds the roster model.
+	var hub_code := _code_only("res://scripts/city_hub.gd")
+	_check(not hub_code.contains("MercenaryRoster") and not hub_code.contains("Mercenary.") and not hub_code.contains("mercenary_roster"), "city_hub.gd is not wired to the roster model")
 	for path in ["res://scripts/mercenary.gd", "res://scripts/mercenary_roster.gd"]:
 		var code := _code_only(path)
 		for word in ["SaveStore", "FileAccess", "CombatBattle", "CombatUnit", "Node", "Control", "randi", "randf", "Time.", "price", "money", "Wallet"]:

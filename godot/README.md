@@ -47,7 +47,24 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 8 P02: Mercenary Center & Recruitment. Save version stays 11 (unchanged schema).
+Stage 8 P03: Roster, Deployment & Dismissal. Save version stays 11 (unchanged schema).
+
+- 傭兵中心 header: 持有傭兵 X / 5 and 出戰傭兵 X / 3; two views: 招聘 (P02, the default) and 我的傭兵
+- 我的傭兵: one row per owned Mercenary: 法師 #2　Lv.3　遠程法術型　【出戰中】/【待命】, its ability
+  line, EXP and unspent points, the allocated points, and 「能力值、裝備：尚未開放」 (the types have
+  no approved stats yet and equipment is Stage 9; nothing is invented). Buttons 設為出戰 / 取消出戰
+  and 解僱
+- `PartyService`: deploy (owned, not twice, at most 3; the Hero never takes a slot; same types
+  allowed; a 4th is refused, nobody is kicked out), undeploy, dismiss (a deployed one is refused:
+  請先取消出戰，再解僱傭兵; permanent; no refund; the id stays retired). Every change saves at once;
+  a failed save restores the whole roster (無法儲存，隊伍變更已取消 / 無法儲存，解僱已取消)
+- 解僱 opens a confirmation (確定解僱法師 #2？ 解僱後無法復原，亦不會退還招聘費用。 取消 / 確定解僱);
+  only 確定解僱 dismisses, once
+- combat still uses the fixed Hero / Merc A / Merc B (the deployment reaches combat in P04)
+- tests: `tests/verify_p03_roster_deployment.gd`; superseded scope checks (P01 hub wiring, P02 hub
+  words, S04 "dismiss") narrowed to what they still guard
+
+Previous: Stage 8 P02: Mercenary Center & Recruitment. Save version stays 11 (unchanged schema).
 
 - City Hub fourth facility 傭兵中心 (tabs narrowed 180 -> 156 px so four fit the 720 layout):
   money, 持有傭兵：X / 5, the owned list (守衛 #1 法師 #2 ...), one row per type with its role
