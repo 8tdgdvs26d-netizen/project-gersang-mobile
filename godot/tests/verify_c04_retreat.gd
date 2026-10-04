@@ -54,7 +54,7 @@ func _verify_static() -> void:
 	_check(BattleResult.Outcome.VICTORY == 0 and BattleResult.Outcome.DEFEAT == 1 and BattleResult.Outcome.RETREAT == 2, "BattleResult outcomes: VICTORY 0 and DEFEAT 1 kept, RETREAT added")
 	_check(CombatBattle.Phase.VICTORY == 2 and CombatBattle.Phase.DEFEAT == 3 and CombatBattle.Phase.RETREAT == 4, "Battle phases: RETREAT added after the others")
 	_check(CombatConfig.PREPARATION_MS == 3000 and CombatConfig.MERC_A_START_CELL.x == 1 and CombatConfig.HERO_START_CELL.x == 1 and CombatConfig.HERO["move_speed"] == 4.0 and CombatConfig.ENEMY["move_speed"] == 2.0, "Spawns, speeds and preparation unchanged")
-	_check(SaveStore.VERSION == 10 and SaveStore.V8_KEYS == SaveStore.V7_KEYS and not _code_only("res://scripts/save_store.gd").to_lower().contains("retreat"), "Save version 10; the save knows nothing about Retreat")
+	_check(SaveStore.VERSION == 11 and SaveStore.V8_KEYS == SaveStore.V7_KEYS and not _code_only("res://scripts/save_store.gd").to_lower().contains("retreat"), "Save version 11; the save knows nothing about Retreat")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/battle_result.gd", "res://scripts/main.gd"]:
 		var code := _code_only(path).to_lower()
 		# C05 brought EXP rewards into scope ("reward" left the list; C05's own test pins Retreat's EXP).
@@ -508,7 +508,7 @@ func _verify_world_lifecycle() -> void:
 	_check(not player.movement_locked and player.global_position == spot and main.location.is_in_world() and (main.get_node("TouchControls/Joystick") as Node).is_processing_input(), "Player free at the encounter position, world input back")
 	_check(session.is_protection_active() and session.get_protection_remaining_ms() == 5000, "5 s recovery protection")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(saved != null and int(saved["version"]) == 10 and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("retreat") and main.wallet.get_balance() == money, "Saved once: v9, nothing about Retreat, money unchanged (no loot, no penalty)")
+	_check(saved != null and int(saved["version"]) == 11 and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("retreat") and main.wallet.get_balance() == money, "Saved once: v9, nothing about Retreat, money unchanged (no loot, no penalty)")
 	_delete(TEST_SAVE)
 	main.time_source.advance_ms(1000)
 	exit.pressed.emit()

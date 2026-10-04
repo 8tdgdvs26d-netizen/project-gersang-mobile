@@ -75,6 +75,8 @@ func _verify_identity() -> void:
 		issued[mercenary.get_id()] = true
 	issued[a.get_id()] = true
 	_check(not roster.add(_merc(a.get_id(), "MAGE")), "A removed id is never accepted again")
+	var outside := MercenaryRoster.new()
+	_check(outside.add(_merc("merc_a", "GUARDIAN")) and outside.remove("merc_a") and not outside.add(_merc("merc_a", "GUARDIAN")), "A removed non-issued id (merc_a) is never accepted again either")
 	for round in range(20):
 		var fresh := roster.create_mercenary(TYPES[round % 3])
 		_check(fresh != null and not issued.has(fresh.get_id()), "Issued id %s is new" % (fresh.get_id() if fresh != null else "-"))
@@ -238,8 +240,10 @@ func _verify_stage7() -> void:
 	_check(merc_a.restore_allocation(guardian.get_allocation_points()) and merc_a.get_allocation_points() == guardian.get_allocation_points(), "An instance's points fit CharacterStats.restore_allocation")
 	# Stage 7 data untouched.
 	_check(ProgressionState.SLOTS == ["hero", "merc_a", "merc_b"] and CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"], "The Stage 7 fixed party is unchanged")
-	_check(SaveStore.VERSION == 10 and SaveStore.V10_KEYS == ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation"], "Save v10 unchanged")
-	for path in ["res://scripts/save_store.gd", "res://scripts/main.gd", "res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/character_panel.gd", "res://scripts/city_hub.gd", "res://scripts/progression_state.gd", "res://scripts/character_stats.gd"]:
+	# P01.5 (Save v11) saves the roster: save_store.gd and main.gd now hold it
+	# (verify_p015_mercenary_save); everything else stays unwired.
+	_check(SaveStore.VERSION == 11 and SaveStore.V10_KEYS == ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation"] and SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"], "Save v10 sections unchanged; v11 adds only the roster (P01.5)")
+	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/character_panel.gd", "res://scripts/city_hub.gd", "res://scripts/progression_state.gd", "res://scripts/character_stats.gd"]:
 		var code := _code_only(path)
 		_check(not code.contains("MercenaryRoster") and not code.contains("Mercenary.") and not code.contains("roster"), "%s is not wired to the roster" % path.get_file())
 	for path in ["res://scripts/mercenary.gd", "res://scripts/mercenary_roster.gd"]:

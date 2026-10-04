@@ -61,12 +61,12 @@ func _v10(levels: Dictionary, points: Dictionary, strength: int = 10) -> Diction
 
 
 func _verify_schema() -> void:
-	_check(SaveStore.VERSION == 10, "AC01 SaveStore.VERSION = 10")
+	_check(SaveStore.VERSION == 11, "AC01 SaveStore.VERSION = 10")
 	_check(SaveStore.V10_KEYS == SaveStore.V9_KEYS + ["allocation"] and SaveStore.INVENTORY_VERSIONS.has(10), "v10 = v9 + allocation")
 	var levels := {"hero": 4, "merc_a": 3, "merc_b": 5}
 	var points := {"hero": {"hp": 2, "str": 3, "agi": 1, "int": 2}, "merc_a": {"hp": 2, "str": 4}, "merc_b": {"agi": 2, "int": 4}}
 	var data := _v10(levels, points)
-	_check(int(data["version"]) == 10 and data.has("allocation"), "AC02 A new save is v10 with allocation")
+	_check(int(data["version"]) == 11 and data.has("allocation"), "AC02 A new save is v10 with allocation")
 	var allocation: Dictionary = data["allocation"]
 	_check(allocation.keys().size() == 3 and SLOTS.all(func(s: String) -> bool: return (allocation[s] as Dictionary).keys().size() == 4 and (allocation[s] as Dictionary).has_all(["hp", "str", "agi", "int"])), "AC02 Exactly hero / merc_a / merc_b x hp / str / agi / int")
 	_check(_ints(allocation["hero"]) == {"hp": 2, "str": 3, "agi": 1, "int": 2}, "AC03 Hero counts saved (HP 2 points, not +20)")
@@ -96,6 +96,7 @@ func _verify_migration() -> void:
 	var v10 := _v10({"hero": 4, "merc_a": 2, "merc_b": 1}, {}, 13)
 	var v9: Dictionary = v10.duplicate(true)
 	v9.erase("allocation")
+	v9.erase("mercenaries")  # P01.5: nor the v11 roster
 	v9["version"] = 9
 	var v8: Dictionary = v9.duplicate(true)
 	v8.erase("progression")
@@ -131,7 +132,7 @@ func _verify_migration() -> void:
 		var hero_level := 4 if label == "v9" else 1
 		_check(main.progression.get_level("hero") == hero_level and hero.get_unspent_points() == (hero_level - 1) * 3, "AC12 %s: Hero Lv%d, %d unspent points" % [label, hero_level, (hero_level - 1) * 3])
 		_check(_read() == text, "%s: loading does not rewrite the old save" % label)
-		_check(main.save_world_position() and int(JSON.parse_string(_read())["version"]) == 10, "%s: the next save writes v10" % label)
+		_check(main.save_world_position() and int(JSON.parse_string(_read())["version"]) == 11, "%s: the next save writes v10" % label)
 		var written: Dictionary = JSON.parse_string(_read())
 		_check(SLOTS.all(func(s: String) -> bool: return _ints(written["allocation"][s]) == ZERO) and int(written["money"]) == 4321, "%s: the v10 save holds 0 allocation, the same money" % label)
 		await _destroy(main)
@@ -177,7 +178,7 @@ func _verify_validation() -> void:
 		"AC30 allocation not a dictionary": _with(good, {"allocation": []}),
 		"AC30 v10 without allocation": _without(good, "allocation"),
 		"v9 carrying allocation": _with(good, {"version": 9}),
-		"unknown future v11": _with(good, {"version": 11}),
+		"unknown future v12": _with(good, {"version": 12}),  # P01.5: v11 is current
 	}
 	for label in broken:
 		_check(SaveStore.validate(broken[label]).is_empty(), "%s: the whole save is rejected" % label)

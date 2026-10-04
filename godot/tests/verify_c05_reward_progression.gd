@@ -48,7 +48,7 @@ func _verify_static() -> void:
 	_check(CombatConfig.EXP_PER_KILL == 10, "1 enemy killed = 10 EXP")
 	# S03: was MAX_LEVEL 2 / LEVEL_THRESHOLDS {1: 100} (the C05 Lv2 ceiling).
 	_check(ProgressionState.SLOTS == SLOTS and ProgressionState.START_LEVEL == 1 and ProgressionState.MAX_LEVEL == 100 and ProgressionState.required_exp(1) == 100 and ProgressionState.required_exp(2) == 150, "Three fixed slots, Lv1 -> Lv2 at 100 (S03 curve, Lv100 cap)")
-	_check(SaveStore.VERSION == 10 and SaveStore.V9_KEYS == SaveStore.V8_KEYS + ["progression"], "Save v9 = v8 + progression")
+	_check(SaveStore.VERSION == 11 and SaveStore.V9_KEYS == SaveStore.V8_KEYS + ["progression"], "Save v9 = v8 + progression")
 	_check(CombatConfig.HERO["max_hp"] == 300 and CombatConfig.HERO["attack_damage"] == 20 and CombatConfig.ENEMY["move_speed"] == 2.0 and CombatConfig.MERC_B["attack_range"] == 3, "Combat stats unchanged")
 	var progression_code := _code_only("res://scripts/progression_state.gd").to_lower()
 	for word in ["hp", "attack", "damage", "speed", "range", "strength", "capacity", "skill", "loot", "money", "wallet", "item", "rand", "talent", "point"]:
@@ -251,13 +251,14 @@ func _verify_persistence() -> void:
 	var progression := ProgressionState.from_dict({"hero": {"level": 2, "exp": 30}, "merc_a": {"level": 1, "exp": 40}, "merc_b": {"level": 2, "exp": 0}})
 	_check(SaveStore.save(TEST_SAVE, Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression), "v9 save writes")
 	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(raw["version"]) == 10 and raw.keys().size() == 10 and raw["progression"] == {"hero": {"level": 2.0, "exp": 30.0}, "merc_a": {"level": 1.0, "exp": 40.0}, "merc_b": {"level": 2.0, "exp": 0.0}} or raw["progression"] == {"hero": {"level": 2, "exp": 30}, "merc_a": {"level": 1, "exp": 40}, "merc_b": {"level": 2, "exp": 0}}, "v10 progression holds exactly the three slots' {level, exp}")
+	_check(int(raw["version"]) == 11 and raw.keys().size() == 11 and raw["progression"] == {"hero": {"level": 2.0, "exp": 30.0}, "merc_a": {"level": 1.0, "exp": 40.0}, "merc_b": {"level": 2.0, "exp": 0.0}} or raw["progression"] == {"hero": {"level": 2, "exp": 30}, "merc_a": {"level": 1, "exp": 40}, "merc_b": {"level": 2, "exp": 0}}, "v10 progression holds exactly the three slots' {level, exp}")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["progression"].to_dict() == progression.to_dict(), "Level / EXP survive save -> load")
 	# A v8 save (no progression) loads with the defaults; the file is untouched.
 	var v8: Dictionary = raw.duplicate(true)
 	v8.erase("progression")
 	v8.erase("allocation")  # S05: nor the v10 allocation
+	v8.erase("mercenaries")  # P01.5: nor the v11 roster
 	v8["version"] = 8
 	_write_json(v8)
 	var text := FileAccess.get_file_as_string(TEST_SAVE)
@@ -318,7 +319,7 @@ func _verify_in_game() -> void:
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(main.progression.get_exp("hero") == 50 and main.progression.get_exp("merc_b") == 50 and main.progression.get_exp("merc_a") == 0 and main.get_last_award().size() == 2, "Committed: Hero 50, Merc B 50, Merc A 0")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 10 and int(saved["progression"]["hero"]["exp"]) == 50 and int(saved["progression"]["merc_a"]["exp"]) == 0, "Saved once with the commit: v9 progression")
+	_check(int(saved["version"]) == 11 and int(saved["progression"]["hero"]["exp"]) == 50 and int(saved["progression"]["merc_a"]["exp"]) == 0, "Saved once with the commit: v9 progression")
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(main.progression.get_exp("hero") == 50, "A repeated commit adds nothing")
 	# Battle 2 (relaunched, the group was defeated this session): the Hero
