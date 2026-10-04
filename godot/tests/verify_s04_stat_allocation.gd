@@ -218,6 +218,9 @@ func _verify_save_and_scope() -> void:
 func _verify_in_game() -> void:
 	_delete(TEST_SAVE)
 	var main := await _new_main()
+	# Stage 8 P04: the game's battle is the Hero + the deployed roster; a
+	# deployed 守衛 #1 + 法師 #2 stand in for Merc A / Merc B.
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE")], ["merc_1", "merc_2"])
 	var panel := main.get_node("CharacterPanel") as CharacterPanel
 	var open_button := panel.get_node("OpenButton") as Button
 	await process_frame

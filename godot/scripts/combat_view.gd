@@ -40,7 +40,7 @@ const DRAG_THRESHOLD := 12.0
 ## C08 multi-touch: the pointer id of a real (desktop) mouse; fingers use
 ## their touch index (0, 1, ...).
 const MOUSE_POINTER := -2
-## C08: the HUD has room for this many friendly portraits (party of 3 now).
+## C08: the HUD has room for this many friendly portraits (Stage 8 P04: the Hero + up to 3 deployed Mercenaries).
 const MAX_PORTRAITS := 4
 const PORTRAIT_TOP := 282.0
 const PORTRAIT_SIZE := Vector2(168.0, 108.0)
@@ -80,12 +80,16 @@ const ROLE_NAMES := {CombatUnit.Role.HERO: "主角", CombatUnit.Role.MERC_A: "�
 ## there is room (info panel, Victory result); the short names above stay on
 ## the battlefield and compact skill icons, and portraits add the role tag.
 const ROLE_LABELS := {CombatUnit.Role.HERO: CharacterConfig.DISPLAY_NAMES["hero"], CombatUnit.Role.MERC_A: CharacterConfig.DISPLAY_NAMES["merc_a"], CombatUnit.Role.MERC_B: CharacterConfig.DISPLAY_NAMES["merc_b"]}
-const ROLE_TAGS := {CombatUnit.Role.HERO: "", CombatUnit.Role.MERC_A: "守護", CombatUnit.Role.MERC_B: "術法"}
-const ROLE_COLORS := {CombatUnit.Role.HERO: Color(0.95, 0.78, 0.3), CombatUnit.Role.MERC_A: Color(0.35, 0.65, 0.95), CombatUnit.Role.MERC_B: Color(0.55, 0.85, 0.5)}
+const ROLE_TAGS := {CombatUnit.Role.HERO: "", CombatUnit.Role.MERC_A: "守護", CombatUnit.Role.MERC_B: "術法", CombatUnit.Role.GUARDIAN: "", CombatUnit.Role.MAGE: "", CombatUnit.Role.STRATEGIST: ""}
+## Stage 8 P04: roster Mercenaries are coloured by type (GUARDIAN / MAGE as
+## the fixture Merc A / Merc B; STRATEGIST violet). Their names are their own
+## labels (CombatUnit.label, 「守衛 #3」, the type already in it, so no tag):
+## see unit_name().
+const ROLE_COLORS := {CombatUnit.Role.HERO: Color(0.95, 0.78, 0.3), CombatUnit.Role.MERC_A: Color(0.35, 0.65, 0.95), CombatUnit.Role.MERC_B: Color(0.55, 0.85, 0.5), CombatUnit.Role.GUARDIAN: Color(0.35, 0.65, 0.95), CombatUnit.Role.MAGE: Color(0.55, 0.85, 0.5), CombatUnit.Role.STRATEGIST: Color(0.7, 0.55, 0.95)}
 ## C06 / C07 Skills (C08 skill bar; MP is shown as 魔力).
-const SKILL_NAMES := {"slow": "緩速", "guard": "守護", "aoe": "範圍攻擊", "lightning": "閃電"}
+const SKILL_NAMES := {"slow": "緩速", "guard": "守護", "aoe": "範圍攻擊", "lightning": "閃電", "ice_field": "冰場"}
 ## Short identifier drawn in each skill icon (no emoji font needed).
-const SKILL_MARKS := {"slow": "緩", "guard": "守", "aoe": "爆", "lightning": "雷"}
+const SKILL_MARKS := {"slow": "緩", "guard": "守", "aoe": "爆", "lightning": "雷", "ice_field": "冰"}
 const NORMAL_SKILL_TEXT := "普通技能：%s　魔力 %d"
 const SPECIAL_SKILL_TEXT := "特殊技能：%s　魔力 %d"
 const SKILL_READY_STATE := "可用"
@@ -101,6 +105,8 @@ const GESTURE_CASTING_STATE := "施法完成後可用"
 const AIM_HINT_TEXT := "點敵人施放技能　點其他地方取消"
 const SLOW_MARK_TEXT := "緩"
 const AOE_TEXT := "範圍 -%d"
+## Stage 8 P04: the 冰場 cells' mark (no damage).
+const ICE_FIELD_TEXT := "冰場"
 ## How long the AoE cells stay marked (battle time).
 const AOE_MARK_MS := 600
 const EXIT_TEXT := "返回世界"
@@ -155,6 +161,9 @@ var _reward_label: Label
 ## C05: the session's progression (set by main.gd), read for the result's
 ## EXP preview and the info panel's Level / EXP; the world lifecycle applies it.
 var progression: ProgressionState
+## Stage 8 P04: the session's Mercenary roster (set by main.gd when a battle
+## opens), read for the roster Mercenaries' Level / EXP and their preview.
+var roster: MercenaryRoster
 var _exit_button: Button
 var _result_modal: Control
 var _result_title: Label
@@ -713,8 +722,11 @@ func get_info_unit() -> CombatUnit:
 func get_info_text(unit: CombatUnit) -> String:
 	if _battle == null or unit == null:
 		return ""
-	var text: String = INFO_TEXT % [ROLE_LABELS[unit.role], unit.hp, unit.max_hp, unit.mp, unit.max_mp, unit.attack_damage, unit.attack_range, unit.attack_interval_ms / 1000.0, unit.move_speed]
-	if progression != null:
+	var text: String = INFO_TEXT % [unit_label(unit), unit.hp, unit.max_hp, unit.mp, unit.max_mp, unit.attack_damage, unit.attack_range, unit.attack_interval_ms / 1000.0, unit.move_speed]
+	var mercenary := roster.get_mercenary(unit.id) if roster != null and unit.label != "" else null
+	if mercenary != null:
+		text += INFO_PROGRESS_TEXT % [mercenary.get_level(), mercenary.get_exp()]
+	elif progression != null:
 		text += INFO_PROGRESS_TEXT % [progression.get_level(unit.id), progression.get_exp(unit.id)]
 	for entry in _skill_entries_for(unit, false):
 		text += INFO_SKILL_TEXT % [entry["title"], entry["state"]]
@@ -793,7 +805,7 @@ func _skill_entries_for(unit: CombatUnit, compact: bool) -> Array[Dictionary]:
 func _entry(unit: CombatUnit, kind: String, title: String, state: String, disabled: bool, compact: bool) -> Dictionary:
 	var text := title + "\n" + state
 	if compact:
-		text = ROLE_NAMES[unit.role] if state == SKILL_READY_STATE else ROLE_NAMES[unit.role] + "\n" + state
+		text = unit_name(unit) if state == SKILL_READY_STATE else unit_name(unit) + "\n" + state
 	return {"owner": unit, "kind": kind, "title": title, "state": state, "text": text, "disabled": disabled, "compact": compact}
 
 
@@ -834,17 +846,17 @@ func press_skill() -> bool:
 func get_reward_text() -> String:
 	if _battle == null or _battle.get_result() == null or progression == null:
 		return ""
-	var shares := progression.preview(_battle.get_result())
+	var shares := get_award_preview()
 	if shares.is_empty():
 		return NO_REWARD_TEXT
 	var gains := []
 	var levels := []
 	for unit in _battle.get_friends():
 		if shares.has(unit.id):
-			gains.append(REWARD_TEXT % [ROLE_NAMES[unit.role], shares[unit.id]["exp"]])
+			gains.append(REWARD_TEXT % [unit_name(unit), shares[unit.id]["exp"]])
 			if shares[unit.id]["leveled"]:
-				var gained: int = int(shares[unit.id]["level"]) - progression.get_level(unit.id)
-				levels.append(LEVEL_UP_TEXT % [ROLE_NAMES[unit.role], shares[unit.id]["level"], gained * CharacterConfig.STAT_POINTS_PER_LEVEL])
+				var gained: int = int(shares[unit.id]["level"]) - int(shares[unit.id]["from_level"])
+				levels.append(LEVEL_UP_TEXT % [unit_name(unit), shares[unit.id]["level"], gained * CharacterConfig.STAT_POINTS_PER_LEVEL])
 	return "　".join(gains) + ("\n" + "　".join(levels) if not levels.is_empty() else "")
 
 
@@ -857,19 +869,46 @@ func get_victory_lines() -> Array[String]:
 	if _battle == null or _battle.get_phase() != CombatBattle.Phase.VICTORY or _battle.get_result() == null or progression == null:
 		return lines
 	lines.append(DEFEATED_TEXT % _battle.get_enemies().filter(func(enemy: CombatUnit) -> bool: return not enemy.alive).size())
-	var shares := progression.preview(_battle.get_result())
+	var shares := get_award_preview()
 	if shares.is_empty():
 		lines.append(NO_REWARD_TEXT)
 		return lines
 	var levels: Array[String] = []
 	for unit in _battle.get_friends():
 		if shares.has(unit.id):
-			lines.append(RESULT_EXP_TEXT % [ROLE_LABELS[unit.role], shares[unit.id]["exp"]])
+			lines.append(RESULT_EXP_TEXT % [unit_label(unit), shares[unit.id]["exp"]])
 			if shares[unit.id]["leveled"]:
-				var gained: int = int(shares[unit.id]["level"]) - progression.get_level(unit.id)
-				levels.append(LEVEL_UP_TEXT % [ROLE_LABELS[unit.role], shares[unit.id]["level"], gained * CharacterConfig.STAT_POINTS_PER_LEVEL])
+				var gained: int = int(shares[unit.id]["level"]) - int(shares[unit.id]["from_level"])
+				levels.append(LEVEL_UP_TEXT % [unit_label(unit), shares[unit.id]["level"], gained * CharacterConfig.STAT_POINTS_PER_LEVEL])
 	lines.append_array(levels)
 	return lines
+
+
+## Stage 8 P04: the settlement the result would commit (PartyProgression:
+## the Hero + roster Mercenaries; the same rules as the commit).
+func get_award_preview() -> Dictionary:
+	if _battle == null or _battle.get_result() == null or progression == null:
+		return {}
+	return PartyProgression.preview(_battle.get_result(), progression, roster)
+
+
+## Stage 8 P04: a friendly unit's short name (battlefield, portraits, compact
+## skill icons, the reward line): a roster Mercenary's own label, else its
+## role name.
+static func unit_name(unit: CombatUnit) -> String:
+	return unit.label if unit.label != "" else ROLE_NAMES[unit.role]
+
+
+## Stage 8 P04: the portrait name's font size — a roster Mercenary's longer
+## label (「軍師 #3」) is drawn smaller so it stays clear of the ⓘ button.
+static func portrait_name_size(unit: CombatUnit) -> int:
+	return 17 if unit.label != "" else 20
+
+
+## Stage 8 P04: the full label (info panel, Victory result): a roster
+## Mercenary's own label, else the Prototype role label.
+static func unit_label(unit: CombatUnit) -> String:
+	return unit.label if unit.label != "" else ROLE_LABELS[unit.role]
 
 
 func is_result_modal_open() -> bool:
@@ -1149,9 +1188,10 @@ class Field extends Control:
 		var aoe := battle.get_last_aoe()
 		if not aoe.is_empty() and battle.get_elapsed_ms() - int(aoe["at_ms"]) < CombatView.AOE_MARK_MS:
 			for cell: Vector2i in aoe["cells"]:
-				draw_rect(Rect2(origin + Vector2(cell) * cell_size, cell_size), Color(1.0, 0.55, 0.15, 0.5))
+				draw_rect(Rect2(origin + Vector2(cell) * cell_size, cell_size), Color(0.45, 0.75, 1.0, 0.5) if aoe.get("kind", "") == "ice_field" else Color(1.0, 0.55, 0.15, 0.5))
 			var center: Vector2i = aoe["cells"][0]
-			draw_string(get_theme_default_font(), _p(view.cell_center(Vector2(center))) + Vector2(-40.0, -40.0), CombatView.AOE_TEXT % int(aoe.get("damage", CombatConfig.AOE_DAMAGE)), HORIZONTAL_ALIGNMENT_CENTER, 80.0, 18, Color(1.0, 0.85, 0.4))
+			var text := CombatView.ICE_FIELD_TEXT if aoe.get("kind", "") == "ice_field" else CombatView.AOE_TEXT % int(aoe.get("damage", CombatConfig.AOE_DAMAGE))
+			draw_string(get_theme_default_font(), _p(view.cell_center(Vector2(center))) + Vector2(-40.0, -40.0), text, HORIZONTAL_ALIGNMENT_CENTER, 80.0, 18, Color(1.0, 0.85, 0.4))
 		# C07: the last Gesture's targets, while its result shows.
 		if view.get_gesture_result_text() != "" and battle.get_last_gesture().has("targets"):
 			for unit: CombatUnit in battle.get_last_gesture()["targets"]:
@@ -1186,7 +1226,7 @@ class Field extends Control:
 	func _draw_name(unit: CombatUnit) -> void:
 		var center := _p(view.cell_center(unit.visual_cell()))
 		var color := Color(0.9, 0.9, 0.9) if unit.alive else Color(0.5, 0.5, 0.5)
-		draw_string(get_theme_default_font(), center + Vector2(-30.0, 38.0), CombatView.ROLE_NAMES[unit.role], HORIZONTAL_ALIGNMENT_CENTER, 60.0, 16, color)
+		draw_string(get_theme_default_font(), center + Vector2(-30.0, 38.0), CombatView.unit_name(unit), HORIZONTAL_ALIGNMENT_CENTER, 60.0, 16, color)
 
 	func _draw_unit(unit: CombatUnit, color: Color) -> void:
 		var center := _p(view.cell_center(unit.visual_cell()))
@@ -1243,7 +1283,7 @@ class Portrait extends Control:
 		var font := get_theme_default_font()
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.13, 0.13, 0.16) if unit.alive else Color(0.08, 0.08, 0.09))
 		draw_circle(Vector2(30.0, 34.0), 20.0, color if unit.alive else Color(0.3, 0.3, 0.3))
-		draw_string(font, Vector2(58.0, 34.0), CombatView.ROLE_NAMES[unit.role], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 20, Color.WHITE if unit.alive else Color(0.5, 0.5, 0.5))
+		draw_string(font, Vector2(58.0, 34.0), CombatView.unit_name(unit), HORIZONTAL_ALIGNMENT_LEFT, -1.0, CombatView.portrait_name_size(unit), Color.WHITE if unit.alive else Color(0.5, 0.5, 0.5))
 		draw_string(font, Vector2(58.0, 56.0), CombatView.ROLE_TAGS[unit.role], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, color if unit.alive else Color(0.5, 0.5, 0.5))
 		if unit.alive:
 			draw_rect(Rect2(10.0, 64.0, size.x - 20.0, 10.0), Color(0.2, 0.05, 0.05))
@@ -1269,8 +1309,8 @@ class Portrait extends Control:
 
 
 ## C08: a skill bar button with a drawn icon (no emoji font): Lightning a
-## zigzag, Slow a spiral, Guard a shield, AoE a burst, each with its short
-## identifier (雷 / 緩 / 守 / 爆).
+## zigzag, Slow a spiral, Guard a shield, AoE a burst (Stage 8 P04: 冰場 a
+## snowflake), each with its short identifier (雷 / 緩 / 守 / 爆 / 冰).
 class SkillSlot extends Button:
 	var view: CombatView
 	var entry := {}
@@ -1293,6 +1333,11 @@ class SkillSlot extends Button:
 				for ray in range(8):
 					var angle := ray * TAU / 8.0
 					draw_line(center + Vector2.from_angle(angle) * 6.0, center + Vector2.from_angle(angle) * 22.0, color, 4.0)
+			"ice_field":
+				# Stage 8 P04: a snowflake (three crossing strokes).
+				for ray in range(3):
+					var angle := PI / 2.0 + ray * PI / 3.0
+					draw_line(center - Vector2.from_angle(angle) * 22.0, center + Vector2.from_angle(angle) * 22.0, color, 4.0)
 		draw_string(get_theme_default_font(), center + Vector2(-9.0, 7.0), CombatView.SKILL_MARKS[entry["kind"]], HORIZONTAL_ALIGNMENT_CENTER, 18.0, 18, Color(0.1, 0.1, 0.12))
 
 

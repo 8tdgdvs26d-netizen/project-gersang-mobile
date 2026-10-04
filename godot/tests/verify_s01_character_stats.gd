@@ -203,12 +203,16 @@ func _verify_in_game() -> void:
 	await process_frame
 	main.character_stats.set_equipment_bonus("hp", 25)
 	(party["merc_b"] as CharacterStats).set_equipment_bonus("mp", 10)
+	# Stage 8 P04: the Mercenaries in battle are the deployed roster instances,
+	# built from their own Level / points (法師 Lv3 + 2 INT points: Max MP 150);
+	# the legacy Merc B (its +10 MP above) no longer fights.
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE", 3, 0, {"hp": 0, "str": 0, "agi": 0, "int": 2})], ["merc_1", "merc_2"])
 	(main.get_node("EncounterSession") as EncounterSession).challenge()
 	main.time_source.advance_ms(5000)
 	await process_frame
 	await process_frame
 	var battle: CombatBattle = main.get_combat()
-	_check(battle != null and battle.get_hero().max_hp == 325 and battle.get_friends()[2].max_mp == 110 and battle.get_friends()[1].max_hp == 200, "The game's battle reads the party's CharacterStats (Hero = backpack stats)")
+	_check(battle != null and battle.get_hero().max_hp == 325 and battle.get_friends()[2].max_mp == 150 and battle.get_friends()[2].max_mp == CharacterStats.for_mercenary(main.mercenary_roster.get_mercenary("merc_2")).get_max_mp() and battle.get_friends()[1].max_hp == 200, "The game's battle reads the party's CharacterStats (Hero = backpack stats; P04: each deployed Mercenary its own)")
 	main.free()
 	_sections_done.append("in_game")
 

@@ -12,6 +12,9 @@ const TEST_SAVE := "user://c03_party_test_save.json"
 const T0 := 1800000000000
 const PASSIVE_ONLY := Vector2(950.0, 1080.0)
 const WITH_GROUP_1 := Vector2(800.0, 900.0)
+## Stage 8 P04: the narrowed scope checks (calls that would recruit or change
+## the roster).
+const P04_NARROWED := {"recruit": ["recruit(", "recruitmentservice.price"], "roster": ["roster.add(", "roster.remove(", "set_deployment(", "create_mercenary(", "restore_snapshot("]}
 const NODES := ["Actors/PrototypeMonster", "Actors/PrototypeMonster2", "Actors/PrototypeMonster3"]
 const HOMES := [Vector2(800.0, 700.0), Vector2(1100.0, 700.0), Vector2(950.0, 930.0)]
 
@@ -64,6 +67,13 @@ func _verify_static() -> void:
 		# C06 brought Normal Skills into scope ("skill" and "skill_cooldown" left the list).
 		# C08 brought Select All (全體) into scope ("select_all" left the list).
 		for word in ["recruit", "roster", "hire", "equipment", "exp ", "loot", "revive", "heal", "mana", "formation", "taunt", "threat"]:
+			# Stage 8 P04 (approved) brought the deployed roster Mercenaries into
+			# combat_battle / combat_view (their label via RecruitmentService.label,
+			# the view's roster for Level / EXP): there the check narrows to "no
+			# recruiting and no roster change".
+			if word in P04_NARROWED and path.get_file() in ["combat_battle.gd", "combat_view.gd"]:
+				_check(P04_NARROWED[word].all(func(call: String) -> bool: return not code.contains(call)), "%s has no %s" % [path.get_file(), word])
+				continue
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_check(not _code_only("res://scripts/battle_result.gd").to_lower().contains("merc") and not _code_only("res://scripts/battle_result.gd").to_lower().contains("friend"), "BattleResult carries no party data")
 	_sections_done.append("static")
@@ -407,12 +417,13 @@ func _verify_stress() -> void:
 
 func _verify_in_game() -> void:
 	var main := await _new_main(TEST_SAVE)
+	_deploy_fixture_party(main)
 	var session := main.get_node("EncounterSession") as EncounterSession
 	var view := main.get_node("CombatView") as CombatView
 	var money: int = main.wallet.get_balance()
 	var battle := await _locked_battle(main, PASSIVE_ONLY)
 	var friends := battle.get_friends()
-	_check(friends.size() == 3 and battle.get_enemies().size() == 10, "The game's battle: Hero + Merc A + Merc B vs 10")
+	_check(friends.size() == 3 and battle.get_enemies().size() == 10, "The game's battle: Hero + Merc A + Merc B vs 10 (Stage 8 P04: the deployed 守衛 + 法師)")
 	await process_frame
 	# C08: per-unit HP moved from the always-on HUD text to the portraits /
 	# ⓘ info; the camera no longer follows the selected unit.
@@ -434,10 +445,11 @@ func _verify_in_game() -> void:
 	_check(battle.get_result().is_committed() and session.get_phase() == EncounterSession.Phase.NONE and main.get_combat() == null, "C02 lifecycle: DEFEAT committed, encounter ended, battle closed")
 	_check(group_3.global_position == HOMES[2] and not group_3.is_held() and session.get_protection_remaining_ms() == 5000, "C02 DEFEAT: group reset home, 5 s protection")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(saved != null and int(saved["version"]) == 11 and _only_progression_mentions_mercs(saved) and main.wallet.get_balance() == money, "Saved once: v11, no Mercenary battle data (C05: only their Level / EXP; S05: their allocation counts; P01.5: an empty roster), no money reward or penalty")
+	_check(saved != null and int(saved["version"]) == 11 and _only_progression_mentions_mercs(saved) and main.wallet.get_balance() == money, "Saved once: v11, no Mercenary battle data (C05: only their Level / EXP; S05: their allocation counts; P01.5 / P04: the roster's instances only), no money reward or penalty")
 	await _destroy(main)
 	# VICTORY with the Hero dead, through the C02 lifecycle.
 	main = await _new_main("")
+	_deploy_fixture_party(main)
 	session = main.get_node("EncounterSession") as EncounterSession
 	view = main.get_node("CombatView") as CombatView
 	battle = await _locked_battle(main, WITH_GROUP_1)
@@ -481,9 +493,13 @@ func _only_progression_mentions_mercs(saved: Dictionary) -> bool:
 			return false
 	var allocation: Variant = rest.get("allocation")
 	rest.erase("allocation")
-	# P01.5: the Stage 8 roster section, empty here (no Mercenary owned).
+	# P01.5: the Stage 8 roster section. P04: exactly the two deployed fixture
+	# instances, each only id / type / Level / EXP / allocation (no battle data).
 	var roster: Variant = rest.get("mercenaries")
-	if typeof(roster) != TYPE_DICTIONARY or roster.keys().size() != 3 or roster.get("owned") != [] or roster.get("deployed") != [] or int(roster.get("next_serial", 0)) != 1:
+	if typeof(roster) != TYPE_DICTIONARY or roster.keys().size() != 3 or roster.get("deployed") != ["merc_1", "merc_2"] or int(roster.get("next_serial", 0)) != 3:
+		return false
+	var owned: Variant = roster.get("owned")
+	if typeof(owned) != TYPE_ARRAY or owned.size() != 2 or not owned.all(func(m: Variant) -> bool: return typeof(m) == TYPE_DICTIONARY and m.keys().size() == Mercenary.KEYS.size() and m.has_all(Mercenary.KEYS)):
 		return false
 	rest.erase("mercenaries")
 	if typeof(allocation) != TYPE_DICTIONARY or allocation.keys().size() != 3:
@@ -533,6 +549,13 @@ func _locked_battle(main: Node, spot: Vector2) -> CombatBattle:
 	await process_frame
 	await process_frame
 	return main.get_combat()
+
+
+## Stage 8 P04: the game's battle is the Hero + the deployed roster
+## Mercenaries. A deployed 守衛 + 法師 (Lv1, no points) reproduce the C03 party:
+## Merc A / Merc B profiles, start cells and Skills.
+func _deploy_fixture_party(main: Node) -> void:
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE")], ["merc_1", "merc_2"])
 
 
 func _new_main(path: String) -> Node2D:

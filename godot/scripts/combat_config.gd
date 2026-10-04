@@ -24,6 +24,9 @@ const HERO_START_CELL := Vector2i(1, 2)
 ## C03: the two fixed Prototype Mercenaries start above and below the Hero.
 const MERC_A_START_CELL := Vector2i(1, 1)
 const MERC_B_START_CELL := Vector2i(1, 3)
+## Stage 8 P04: the deployed roster Mercenaries' start cells, in deployment
+## order (the 3rd one in front of the Hero; all inside the preparation area).
+const PARTY_START_CELLS: Array[Vector2i] = [MERC_A_START_CELL, MERC_B_START_CELL, Vector2i(2, 2)]
 ## C05: enemies start in the rightmost columns, every row of a column filled:
 ## 10 / 15 / 20 enemies fill columns 59-60 / 58-60 / 57-60.
 
@@ -95,6 +98,15 @@ const AOE_DAMAGE := 40
 const HERO_SKILL := {"kind": "slow", "range": 3}
 const MERC_A_SKILL := {"kind": "guard", "range": 0}
 const MERC_B_SKILL := {"kind": "aoe", "range": 5}
+## Stage 8 P04 冰場 (Strategist) — PROTOTYPE (approved P04 S1), not balance:
+## the C06 Slow applied to every alive enemy on the AoE cells (the target's
+## cell + its four orthogonal neighbours), no damage. It uses only existing
+## C06 values: SKILL_MP_COST, SKILL_CAST_MS, SKILL_COOLDOWN_MS,
+## SKILL_EFFECT_MS, SLOW_FACTOR and the AoE range 5.
+const STRATEGIST_SKILL := {"kind": "ice_field", "range": 5}
+## Stage 8 P04: each roster Mercenary type's Normal Skill (GUARDIAN = Merc
+## A's Guard, MAGE = Merc B's AoE, STRATEGIST = the Prototype 冰場).
+const MERCENARY_SKILLS := {"GUARDIAN": MERC_A_SKILL, "MAGE": MERC_B_SKILL, "STRATEGIST": STRATEGIST_SKILL}
 
 ## C07 Minimum Gesture Skill (Prototype values approved for C07, not final
 ## balance). Only the Hero has it (one symbol: Lightning). The Hero's MP pool

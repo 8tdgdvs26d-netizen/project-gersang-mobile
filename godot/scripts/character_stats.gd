@@ -92,6 +92,21 @@ func get_effective(stat: String) -> int:
 	return get_base(stat) + get_growth(stat) + get_allocated(stat) + get_equipment_bonus(stat)
 
 
+## Stage 8 P04: one roster Mercenary's stats, built from the instance's own
+## Level and allocation on its type's profile (CharacterConfig.MERCENARY_PROFILE)
+## with the Stage 7 rules: Base, Growth = apply_level(), Allocated =
+## restore_allocation(). Derived on demand, never saved. Null for null or an
+## invalid instance.
+static func for_mercenary(mercenary: Mercenary) -> CharacterStats:
+	if mercenary == null or not CharacterConfig.MERCENARY_PROFILE.has(mercenary.get_type()):
+		return null
+	var stats := for_character(CharacterConfig.MERCENARY_PROFILE[mercenary.get_type()])
+	stats.apply_level(mercenary.get_level())
+	if not stats.restore_allocation(mercenary.get_allocation_points()):
+		return null
+	return stats
+
+
 ## S03: this character at `level` — Growth = (level - 1) x its per-Level
 ## growth and (level - 1) x 3 unspent Stat Points (the same as applying every
 ## Level from 1 one by one). Current HP / MP are not touched (Level Up never

@@ -179,6 +179,9 @@ func _verify_static() -> void:
 
 func _verify_victory_and_respawn() -> void:
 	var main := await _new_main()
+	# Stage 8 P04: the game's battle is the Hero + the deployed roster; a
+	# deployed 守衛 #1 + 法師 #2 stand in for Merc A / Merc B.
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE")], ["merc_1", "merc_2"])
 	var view := main.get_node("CombatView") as CombatView
 	var session := _session(main)
 	var handoff := _handoff(main)
@@ -199,7 +202,8 @@ func _verify_victory_and_respawn() -> void:
 	_check((panel.get_node("ResultTitle") as Label).text == "勝利", "Title 勝利")
 	var lines := view.get_victory_lines()
 	var share: int = defeated * CombatConfig.EXP_PER_KILL / 2
-	_check(lines == ["擊敗敵人 %d 名" % defeated, "主角　經驗 +%d" % share, "傭兵B（術法）　經驗 +%d" % share], "Defeated count and each survivor's EXP (%s)" % str(lines))
+	# Stage 8 P04 (approved D5): a roster Mercenary is named by its own label.
+	_check(lines == ["擊敗敵人 %d 名" % defeated, "主角　經驗 +%d" % share, "法師 #2　經驗 +%d" % share], "Defeated count and each survivor's EXP (%s)" % str(lines))
 	var shown := []
 	for label in panel.find_children("ResultLine*", "Label", true, false):
 		shown.append((label as Label).text)
@@ -236,7 +240,7 @@ func _verify_victory_and_respawn() -> void:
 	var hero_exp: int = main.progression.get_exp("hero")
 	await _click(exit.get_global_rect().get_center())
 	_check(_commits.size() == 1 and battle.get_result().is_committed() and main.get_combat() == null and not view.visible, "返回世界 commits once and closes the battle")
-	_check(main.progression.get_exp("hero") == hero_exp + share and main.progression.get_exp("merc_a") == 0, "Settlement as C05 (no new reward)")
+	_check(main.progression.get_exp("hero") == hero_exp + share and main.progression.get_exp("merc_a") == 0 and main.mercenary_roster.get_mercenary("merc_1").get_exp() == 0 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == share, "Settlement as C05 (no new reward; P04: 法師 #2 its share, dead 守衛 #1 none)")
 	_check(_removed.size() == 1 and _removed[0] == IDS[2] and not main.has_node(NODES[2]), "Group 3 removed")
 	_check(main.get_group_respawn().get_remaining_ms(IDS[2], main.time_source.now_ms()) == WorldLayout.GROUP_RESPAWN_MS, "Its 10 s start when the player returns to the world")
 	_check(session.is_protection_active() and session.get_protection_remaining_ms() == 5000, "The 5 s protection unchanged")

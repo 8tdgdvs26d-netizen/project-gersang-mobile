@@ -413,6 +413,9 @@ func _verify_in_game() -> void:
 	main.save_path = ""
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
+	# Stage 8 P04: the game's battle is the Hero + the deployed roster; a
+	# deployed 守衛 #1 + 法師 #2 stand in for Merc A / Merc B.
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE")], ["merc_1", "merc_2"])
 	for frame in range(4):
 		await physics_frame
 	(main.get_node("Actors/Player") as Player).global_position = PASSIVE_ONLY
