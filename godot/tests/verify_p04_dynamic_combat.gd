@@ -237,6 +237,7 @@ func _verify_settlement() -> void:
 	var snapshot := JSON.stringify(roster.get_snapshot())
 	var hero_exp := progression.get_exp("hero")
 	_check(PartyProgression.apply(_result(BattleResult.Outcome.DEFEAT, 100, []), progression, roster).is_empty() and JSON.stringify(roster.get_snapshot()) == snapshot and progression.get_exp("hero") == hero_exp, "DEFEAT: nothing")
+	_check(PartyProgression.apply(_result(BattleResult.Outcome.DEFEAT, 100, ["hero", "merc_1"]), progression, roster).is_empty() and JSON.stringify(roster.get_snapshot()) == snapshot and progression.get_exp("hero") == hero_exp, "DEFEAT awards nothing even to listed survivors")
 	_check(PartyProgression.preview(_result(BattleResult.Outcome.VICTORY, 3, ["hero", "merc_1", "merc_2", "merc_3"]), progression, roster).is_empty(), "3 EXP over 4: 0 each, nothing")
 	_check(PartyProgression.preview(null, progression, roster).is_empty() and PartyProgression.preview(victory, null, roster).is_empty(), "null result / progression: nothing")
 	# An unknown survivor id still divides, gets nothing.
@@ -245,9 +246,9 @@ func _verify_settlement() -> void:
 	# A roster instance whose id is a legacy slot name feeds the instance only.
 	var legacy_named := MercenaryRoster.new()
 	legacy_named.add(Mercenary.create("merc_a", "GUARDIAN"))
-	var p := ProgressionState.new()
-	PartyProgression.apply(_result(BattleResult.Outcome.VICTORY, 60, ["hero", "merc_a"]), p, legacy_named)
-	_check(legacy_named.get_mercenary("merc_a").get_exp() == 30 and p.get_exp("merc_a") == 0 and p.get_exp("hero") == 30, "Roster before legacy slot: merc_a instance 30, legacy slot 0")
+	var p := ProgressionState.from_dict({"hero": {"level": 1, "exp": 0}, "merc_a": {"level": 3, "exp": 5}, "merc_b": {"level": 1, "exp": 0}})
+	var named_shares := PartyProgression.apply(_result(BattleResult.Outcome.VICTORY, 60, ["hero", "merc_a"]), p, legacy_named)
+	_check(named_shares["merc_a"]["from_level"] == 1 and legacy_named.get_mercenary("merc_a").get_exp() == 30 and p.get_exp("merc_a") == 5 and p.get_level("merc_a") == 3 and p.get_exp("hero") == 30, "Roster before legacy slot: merc_a instance (Lv1) 30, legacy slot (Lv3 5) untouched")
 	# Without a roster (the C01-C08 fixture) the legacy slots settle as C05.
 	var fixture := ProgressionState.new()
 	PartyProgression.apply(_result(BattleResult.Outcome.VICTORY, 90, ["hero", "merc_a", "merc_b"]), fixture, null)
