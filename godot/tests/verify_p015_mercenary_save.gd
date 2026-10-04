@@ -44,7 +44,7 @@ func _initialize() -> void:
 # --- Schema ------------------------------------------------------------------------------------
 
 func _verify_schema() -> void:
-	_check(SaveStore.VERSION == 11 and SaveStore.INVENTORY_VERSIONS == [3, 4, 5, 6, 7, 8, 9, 10, 11], "AC01 Save v11 (from v10)")
+	_check(SaveStore.VERSION == 12 and SaveStore.INVENTORY_VERSIONS == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12], "AC01 Save v11 (from v10; P05: v12 is current)")
 	_check(SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"] and SaveStore.V10_KEYS.size() == 10, "v11 = v10 + mercenaries only")
 	var data := _v11(MercenaryRoster.new())
 	_check(int(data["version"]) == 11 and data["mercenaries"].keys().size() == 3 and data["mercenaries"]["owned"] == [] and data["mercenaries"]["deployed"] == [] and int(data["mercenaries"]["next_serial"]) == 1, "An empty roster: {owned: [], deployed: [], next_serial: 1}")
@@ -95,22 +95,29 @@ func _verify_migration() -> void:
 		if loaded.is_empty():
 			continue
 		var roster: MercenaryRoster = loaded["mercenaries"]
-		_check(roster != null and roster.get_owned_count() == 0 and roster.get_deployed_ids().is_empty() and roster.get_next_serial() == 1, "AC03 %s: an empty roster, next_serial 1" % name)
+		# Stage 8 P05 (approved Q3) supersedes "an empty roster": every v1-v10
+		# save now brings exactly the migrated merc_a / merc_b (waiting).
+		_check(roster != null and roster.get_owned().map(func(m: Mercenary) -> String: return m.get_id()) == ["merc_a", "merc_b"] and roster.get_deployed_ids().is_empty() and roster.get_next_serial() == 1, "AC03 %s: the roster holds only merc_a / merc_b (P05), next_serial 1" % name)
 		_check(roster.create_mercenary("MAGE").get_id() == "merc_1", "AC03 %s: the first new instance is merc_1" % name)
 		_check(loaded["wallet"].get_balance() == 4321 and loaded["inventory"].get_quantity("test_good_03") == 4, "%s: money and items preserved" % name)
-	# AC04: the fixed merc_a / merc_b data survive exactly (v10 -> v11).
+	# AC04: the fixed merc_a / merc_b data survive exactly (P05: on their roster
+	# instances; the Hero keeps his slot).
 	var from_v10 := _load(v10)
 	var progression: ProgressionState = from_v10["progression"]
-	_check(progression.get_level("merc_a") == 3 and progression.get_level("merc_b") == 2 and progression.get_level("hero") == 4, "AC04 Fixed merc_a / merc_b / Hero Levels preserved")
-	_check(from_v10["allocation"]["merc_a"] == {"hp": 4, "str": 0, "agi": 0, "int": 0} and from_v10["allocation"]["merc_b"] == {"hp": 0, "str": 0, "agi": 0, "int": 3} and from_v10["allocation"]["hero"] == {"hp": 0, "str": 2, "agi": 1, "int": 0}, "AC04 Fixed merc_a / merc_b / Hero allocations preserved")
-	# The v10 -> v11 rewrite keeps every other section byte for byte.
+	var migrated: MercenaryRoster = from_v10["mercenaries"]
+	_check(migrated.get_mercenary("merc_a").get_level() == 3 and migrated.get_mercenary("merc_b").get_level() == 2 and progression.get_level("hero") == 4, "AC04 Fixed merc_a / merc_b / Hero Levels preserved")
+	_check(migrated.get_mercenary("merc_a").get_allocation_points() == {"hp": 4, "str": 0, "agi": 0, "int": 0} and migrated.get_mercenary("merc_b").get_allocation_points() == {"hp": 0, "str": 0, "agi": 0, "int": 3} and from_v10["allocation"]["hero"] == {"hp": 0, "str": 2, "agi": 1, "int": 0}, "AC04 Fixed merc_a / merc_b / Hero allocations preserved")
+	# The v10 -> v12 rewrite keeps every other section byte for byte.
 	var rewritten := _rewrite(from_v10)
 	var expected := v10.duplicate(true)
-	expected["version"] = 11
-	expected["mercenaries"] = {"owned": [], "deployed": [], "next_serial": 1}
+	expected["version"] = 12
+	expected["progression"] = {"hero": v10["progression"]["hero"]}
+	expected["allocation"] = {"hero": v10["allocation"]["hero"]}
+	expected["mercenaries"] = {"owned": [{"id": "merc_a", "type": "GUARDIAN", "level": 3, "exp": 0, "allocation": {"hp": 4, "str": 0, "agi": 0, "int": 0}}, {"id": "merc_b", "type": "MAGE", "level": 2, "exp": 0, "allocation": {"hp": 0, "str": 0, "agi": 0, "int": 3}}], "deployed": [], "next_serial": 1}
+	expected["pending_legacy_mercenaries"] = []
 	expected = _json(expected)
-	_check(JSON.stringify(rewritten, "", true) == JSON.stringify(expected, "", true), "AC04 v10 rewritten as v11: every v10 section unchanged, an empty roster added")
-	_check(not JSON.stringify(rewritten["mercenaries"]).contains("merc_a") and not JSON.stringify(rewritten["mercenaries"]).contains("merc_b"), "AC04 merc_a / merc_b are not converted into the roster")
+	_check(JSON.stringify(rewritten, "", true) == JSON.stringify(expected, "", true), "AC04 v10 rewritten as v12: every other v10 section unchanged, merc_a / merc_b in the roster (P05)")
+	_check(JSON.stringify(rewritten["mercenaries"]).count("merc_a") == 1 and JSON.stringify(rewritten["mercenaries"]).count("merc_b") == 1, "AC04 merc_a / merc_b are converted into the roster exactly once (P05 Q3)")
 	_sections_done.append("migration")
 
 
@@ -262,7 +269,7 @@ func _verify_invalid() -> void:
 	var extra := good.duplicate(true)
 	extra["version"] = 10
 	_check(SaveStore.validate(extra).is_empty(), "A v10 save carrying mercenaries is rejected (unknown key)")
-	_check(SaveStore.validate(_with(good, {"version": 12})).is_empty(), "An unknown future v12 is rejected")
+	_check(SaveStore.validate(_with(good, {"version": 13})).is_empty(), "An unknown future v13 is rejected (P05: v12 is current)")
 	# Edge values that stay valid.
 	var edges := {
 		"owned merc_5 under next_serial 6": _roster_data([_m("merc_5", "MAGE")], [], 6),
@@ -292,14 +299,16 @@ func _verify_invalid() -> void:
 # --- E. In game ----------------------------------------------------------------------------------
 
 func _verify_game() -> void:
-	# A v10 file in the real game: empty roster, fixed mercs kept.
+	# A v10 file in the real game: fixed mercs kept (P05: as roster merc_a / merc_b).
 	var v10 := _v11(MercenaryRoster.new(), {"hero": 3, "merc_a": 2, "merc_b": 4}, {"merc_a": {"str": 3}, "merc_b": {"hp": 2, "int": 7}})
 	v10.erase("mercenaries")
 	v10["version"] = 10
 	_write(TEST_SAVE, JSON.stringify(v10))
 	var main := await _new_main()
-	_check(main.mercenary_roster.get_owned_count() == 0 and main.mercenary_roster.get_next_serial() == 1, "AC03 The game loads a v10 save with an empty roster")
-	_check(main.progression.get_level("merc_a") == 2 and main.progression.get_level("merc_b") == 4 and (main.merc_stats["merc_a"] as CharacterStats).get_allocation_points() == {"hp": 0, "str": 3, "agi": 0, "int": 0} and (main.merc_stats["merc_b"] as CharacterStats).get_allocation_points() == {"hp": 2, "str": 0, "agi": 0, "int": 7}, "AC04/AC20 Fixed merc_a / merc_b progression and allocation applied as before")
+	_check(main.mercenary_roster.get_owned().map(func(m: Mercenary) -> String: return m.get_id()) == ["merc_a", "merc_b"] and main.mercenary_roster.get_next_serial() == 1, "AC03 The game loads a v10 save with only merc_a / merc_b in the roster (P05)")
+	var legacy_a: Mercenary = main.mercenary_roster.get_mercenary("merc_a")
+	var legacy_b: Mercenary = main.mercenary_roster.get_mercenary("merc_b")
+	_check(legacy_a.get_level() == 2 and legacy_b.get_level() == 4 and legacy_a.get_allocation_points() == {"hp": 0, "str": 3, "agi": 0, "int": 0} and legacy_b.get_allocation_points() == {"hp": 2, "str": 0, "agi": 0, "int": 7}, "AC04/AC20 Fixed merc_a / merc_b progression and allocation applied as before (P05: on the instances)")
 	_check(FileAccess.get_file_as_string(TEST_SAVE) == JSON.stringify(v10), "Loading does not rewrite the v10 file")
 	# The game's roster is saved and restored.
 	var roster: MercenaryRoster = main.mercenary_roster
@@ -312,8 +321,8 @@ func _verify_game() -> void:
 	var before := roster.to_dict()
 	_check(main.save_world_position(), "The game saves")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 11 and (saved["mercenaries"]["owned"] as Array).size() == 2 and int(saved["mercenaries"]["next_serial"]) == 4, "Written as v11 with the roster")
-	_check(saved["progression"]["merc_a"]["level"] == 2.0 and saved["allocation"]["merc_b"]["int"] == 7.0, "The fixed mercs' sections are written as before")
+	_check(int(saved["version"]) == 12 and (saved["mercenaries"]["owned"] as Array).size() == 4 and int(saved["mercenaries"]["next_serial"]) == 4, "Written as v12 with the roster (P05: merc_a, merc_b, merc_2, merc_3)")
+	_check(saved["mercenaries"]["owned"][0]["level"] == 2.0 and saved["mercenaries"]["owned"][1]["allocation"]["int"] == 7.0 and saved["progression"].keys() == ["hero"], "The fixed mercs' data are written (P05: as roster instances)")
 	await _destroy(main)
 	main = await _new_main()
 	_check(JSON.stringify(main.mercenary_roster.to_dict()) == JSON.stringify(before), "AC19 Restart: the roster is restored exactly")
@@ -421,7 +430,7 @@ func _verify_stress() -> void:
 			5:
 				# Save / reload (in memory through JSON; every 10th through the file).
 				var before := JSON.stringify(roster.to_dict())
-				var reloaded: MercenaryRoster = _file_round_trip(roster) if reloads % 10 == 0 else SaveStore.validate(_json(_v11(roster))).get("mercenaries")
+				var reloaded: MercenaryRoster = _file_round_trip(roster) if reloads % 10 == 0 else SaveStore.validate(_json(_current(roster))).get("mercenaries")
 				reloads += 1
 				ok = ok and reloaded != null and JSON.stringify(reloaded.to_dict()) == before
 				roster = reloaded if reloaded != null else roster
@@ -429,7 +438,7 @@ func _verify_stress() -> void:
 			_check(false, "Stress broke at step %d" % step)
 			break
 	_check(ok and reloads > 150 and issued.size() > 200, "1500 seeded steps, %d reloads: every reload exact, %d ids issued, none twice" % [reloads, issued.size()])
-	# Repeated migrations: v10 -> v11 -> save -> load, stable.
+	# Repeated migrations: v10 -> v12 -> save -> load, stable.
 	var v10 := _v11(MercenaryRoster.new(), {"hero": 5, "merc_a": 4, "merc_b": 3}, {"merc_a": {"hp": 9}})
 	v10.erase("mercenaries")
 	v10["version"] = 10
@@ -440,29 +449,45 @@ func _verify_stress() -> void:
 		var text := JSON.stringify(rewritten, "", true)
 		if round == 0:
 			expected = text
-		stable = stable and text == expected and int(rewritten["version"]) == 11 and _rewrite(_load(rewritten)).hash() == rewritten.hash()
-	_check(stable, "100 repeated v10 -> v11 migrations give the same v11 save, which reloads unchanged")
+		stable = stable and text == expected and int(rewritten["version"]) == 12 and _rewrite(_load(rewritten)).hash() == rewritten.hash()
+	_check(stable, "100 repeated v10 -> v12 migrations give the same v12 save, which reloads unchanged")
 	_sections_done.append("stress")
 
 
 # --- Helpers ---------------------------------------------------------------------------------------
 
-## A JSON-shaped v11 save with `roster`, the fixed party at `levels` with `points`.
+## A JSON-shaped v11 save with `roster`, the fixed party at `levels` with
+## `points` (Stage 8 P05: built as the current v12 save, then given the v11
+## shape — the three legacy slots, no pending list).
 func _v11(roster: MercenaryRoster, levels: Dictionary = {}, points: Dictionary = {}) -> Dictionary:
-	var party := {}
+	var data := _current(roster, int(levels.get("hero", 1)), points.get("hero", {}))
+	data.erase("pending_legacy_mercenaries")
+	data["version"] = 11
 	var progression_data := {}
+	var allocation := {}
 	for slot in SLOTS:
-		var stats := CharacterStats.for_character(slot) if slot != "hero" else CharacterStats.new()
-		stats.apply_level(int(levels.get(slot, 1)))
-		if points.has(slot):
-			stats.confirm_allocation(points[slot])
-		party[slot] = stats
 		progression_data[slot] = {"level": int(levels.get(slot, 1)), "exp": 0}
-	var inventory := CharacterInventory.new("player", party["hero"])
+		var full := CharacterStats.zero_allocation()
+		for stat in points.get(slot, {}):
+			full[stat] = points[slot][stat]
+		allocation[slot] = full
+	data["progression"] = progression_data
+	data["allocation"] = allocation
+	return _json(data)
+
+
+## Stage 8 P05: the current (v12) save of `roster`, the Hero at `level` with
+## `points`.
+func _current(roster: MercenaryRoster, level: int = 1, points: Dictionary = {}) -> Dictionary:
+	var hero := CharacterStats.new()
+	hero.apply_level(level)
+	if not points.is_empty():
+		hero.confirm_allocation(points)
+	var inventory := CharacterInventory.new("player", hero)
 	inventory.add("test_good_03", 4)
 	var wallet := Wallet.new()
 	wallet.spend(wallet.get_balance() - 4321)
-	return _json(SaveStore.serialize(wallet, inventory, MarketState.create_default(), PlayerLocation.new(), null, null, null, ProgressionState.from_dict(progression_data), party, roster))
+	return _json(SaveStore.serialize(wallet, inventory, MarketState.create_default(), PlayerLocation.new(), null, null, null, ProgressionState.from_hero(level, 0), {"hero": hero}, roster))
 
 
 ## Loads `data` through validate + rebuild (as a file would).
@@ -471,18 +496,18 @@ func _load(data: Dictionary) -> Dictionary:
 	return {} if payload.is_empty() else SaveStore._rebuild(payload)
 
 
-## The v11 save the game would write after loading `loaded`.
+## The v12 save the game would write after loading `loaded` (P05: the Hero's
+## progression / allocation; the Mercenaries in the roster).
 func _rewrite(loaded: Dictionary) -> Dictionary:
-	var party := {"hero": loaded["character_stats"], "merc_a": CharacterStats.for_character("merc_a"), "merc_b": CharacterStats.for_character("merc_b")}
-	for slot in SLOTS:
-		(party[slot] as CharacterStats).apply_level((loaded["progression"] as ProgressionState).get_level(slot))
-		(party[slot] as CharacterStats).restore_allocation(loaded["allocation"][slot])
-	return _json(SaveStore.serialize(loaded["wallet"], loaded["inventory"], loaded["market"], loaded["location"], loaded["warehouses"], loaded["market_recovery"], loaded["cost_ledger"], loaded["progression"], party, loaded["mercenaries"]))
+	var hero: CharacterStats = loaded["character_stats"]
+	hero.apply_level((loaded["progression"] as ProgressionState).get_level("hero"))
+	hero.restore_allocation(loaded["allocation"]["hero"])
+	return _json(SaveStore.serialize(loaded["wallet"], loaded["inventory"], loaded["market"], loaded["location"], loaded["warehouses"], loaded["market_recovery"], loaded["cost_ledger"], loaded["progression"], {"hero": hero}, loaded["mercenaries"]))
 
 
 ## Saves `roster` to the test file and loads it back (null when refused).
 func _file_round_trip(roster: MercenaryRoster) -> MercenaryRoster:
-	var party := {"hero": CharacterStats.new(), "merc_a": CharacterStats.for_character("merc_a"), "merc_b": CharacterStats.for_character("merc_b")}
+	var party := {"hero": CharacterStats.new()}
 	var inventory := CharacterInventory.new("player", party["hero"])
 	if not SaveStore.save(TEST_SAVE, Wallet.new(), inventory, MarketState.create_default(), PlayerLocation.new(), null, null, null, ProgressionState.new(), party, roster):
 		return null

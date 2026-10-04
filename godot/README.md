@@ -47,7 +47,40 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 8 P03: Roster, Deployment & Dismissal. Save version stays 11 (unchanged schema).
+Stage 8 P05: Legacy Mercenary Migration & Final Integration. Save version 12.
+
+- the roster is the only Mercenary source (Level, EXP, allocation, combat stats); `main.merc_stats`
+  is gone; runtime `ProgressionState` / allocation hold the Hero only
+- Save v12 = v11 with `progression` / `allocation` = `{"hero": ...}` only, plus
+  `pending_legacy_mercenaries` (converted legacy Mercenaries waiting for a place: merc_a GUARDIAN /
+  merc_b MAGE, each at most once, never owned at the same time). Nothing derived is saved; a v12
+  save with the old three-slot sections or a malformed pending list is refused as a whole
+- every valid v1-v11 save migrates in memory (`LegacyMercenaryMigration`): Merc A -> merc_a
+  GUARDIAN 「守衛（傳承）」, Merc B -> merc_b MAGE 「法師（傳承）」, merc_a first, keeping the saved
+  Level / EXP / allocation (v1-v8 Lv1, v9 Level / EXP, v10 / v11 all), waiting (never deployed),
+  next_serial untouched; owned while there is room (5 max), else pending. A v11 roster already
+  owning merc_a / merc_b with the same data counts as converted; different data refuses the save.
+  The file becomes v12 at the next normal save; v12 never migrates again
+- a full-screen notice (知道了) says what moved where, and that it is saved at the next save
+- 我的傭兵: 「暫存傳承傭兵」 rows with 領取 (disabled with 傭兵人數已達上限，請先解僱一名傭兵 while
+  full); a claim is one transaction (failed save: everything restored, 無法儲存，領取已取消); the
+  list scrolls past five rows
+- Character UI: the Hero + every owned Mercenary (never pending) in a scrolling tab strip; a
+  Mercenary's 確認分配 is a roster transaction (failed save: restored, 無法儲存，分配已取消); the
+  Hero's path is unchanged; the fixed Merc A / Merc B tabs are gone
+- unreadable saves (corrupt, invalid, future version): the file is never overwritten, its exact
+  bytes are copied to the first free `<save>.unreadable-<n>`, saving is locked for the session and
+  a warning (存檔未能載入) says whether the backup worked. Older builds cannot get this protection
+  (downgrade limitation)
+- not here: Mercenary backpacks, item transfer, equipment, new combat values
+- tests: `tests/verify_p05_legacy_migration.gd`; tests pinned to v11 / the three fixed slots / the
+  old Character UI were moved to the v12 / roster equivalents (counts kept)
+
+Previous: Stage 8 P04: Dynamic Combat + Strategist. Battles take the Hero + the 0-3 deployed
+roster Mercenaries (守衛 = merc_a profile, 法師 = merc_b, 軍師 Prototype = merc_b + 冰場);
+`PartyProgression` settles EXP per instance.
+
+Previous: Stage 8 P03: Roster, Deployment & Dismissal. Save version stays 11 (unchanged schema).
 
 - 傭兵中心 header: 持有傭兵 X / 5 and 出戰傭兵 X / 3; two views: 招聘 (P02, the default) and 我的傭兵
 - 我的傭兵: one row per owned Mercenary: 法師 #2　Lv.3　遠程法術型　【出戰中】/【待命】, its ability

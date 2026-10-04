@@ -7,6 +7,10 @@ extends SceneTree
 ## restore the counts -> everything else recalculated. v1-v9 migrate with every
 ## allocation 0. A malformed or overspent allocation rejects the whole save
 ## (never clamped or repaired). Unconfirmed previews are never saved.
+## Stage 8 P05 (Save v12): the Hero's progression / allocation stay in their
+## sections; Merc A / Merc B became roster instances merc_a / merc_b (the same
+## Level / EXP / counts, now saved on the instance). The v10 rules below still
+## validate every v10 / v11 file before it migrates.
 
 const TEST_SAVE := "user://s05_save_migration_test_save.json"
 const T0 := 1800000000000
@@ -33,44 +37,98 @@ func _initialize() -> void:
 
 # --- A / B / C: schema, serialization, deserialization ---------------------------
 
-func _party(levels: Dictionary, points: Dictionary) -> Dictionary:
-	var party := {}
-	for slot in SLOTS:
-		var stats := CharacterStats.for_character(slot) if slot != "hero" else CharacterStats.new()
-		stats.apply_level(int(levels.get(slot, 1)))
-		if points.has(slot):
-			stats.confirm_allocation(points[slot])
-		party[slot] = stats
-	return party
+## The Hero's CharacterStats at `levels["hero"]` with `points["hero"]`.
+func _hero(levels: Dictionary, points: Dictionary) -> CharacterStats:
+	var stats := CharacterStats.new()
+	stats.apply_level(int(levels.get("hero", 1)))
+	if points.has("hero"):
+		stats.confirm_allocation(points["hero"])
+	return stats
 
 
-func _progression(levels: Dictionary) -> ProgressionState:
-	var data := {}
-	for slot in SLOTS:
-		data[slot] = {"level": int(levels.get(slot, 1)), "exp": 0}
-	return ProgressionState.from_dict(data)
+## P05: Merc A / Merc B as the roster instances merc_a (GUARDIAN) / merc_b
+## (MAGE) at `levels` with `points` (waiting).
+func _legacy_roster(levels: Dictionary, points: Dictionary) -> MercenaryRoster:
+	var owned := []
+	for slot in ["merc_a", "merc_b"]:
+		var full := ZERO.duplicate()
+		for stat in points.get(slot, {}):
+			full[stat] = points[slot][stat]
+		owned.append(Mercenary.create(slot, MercenaryRoster.LEGACY_TYPES[slot], int(levels.get(slot, 1)), 0, full))
+	return MercenaryRoster.build(owned)
 
 
-func _v10(levels: Dictionary, points: Dictionary, strength: int = 10) -> Dictionary:
-	var party := _party(levels, points)
-	(party["hero"] as CharacterStats).set_strength(strength)
-	var inventory := CharacterInventory.new("player", party["hero"])
+## The current (v12) save JSON: the Hero, Merc A / Merc B in the roster.
+func _v12(levels: Dictionary, points: Dictionary, strength: int = 10) -> Dictionary:
+	var hero := _hero(levels, points)
+	hero.set_strength(strength)
+	var inventory := CharacterInventory.new("player", hero)
 	inventory.add("test_good_03", 4)
-	var raw := SaveStore.serialize(_wallet(4321), inventory, MarketState.create_default(), PlayerLocation.new(), null, null, null, _progression(levels), party)
+	var raw := SaveStore.serialize(_wallet(4321), inventory, MarketState.create_default(), PlayerLocation.new(), null, null, null, ProgressionState.from_hero(int(levels.get("hero", 1)), 0), {"hero": hero}, _legacy_roster(levels, points))
 	return JSON.parse_string(JSON.stringify(raw))
 
 
+## A v10 save JSON (the three-slot progression / allocation sections).
+func _v10(levels: Dictionary, points: Dictionary, strength: int = 10) -> Dictionary:
+	var data := _v12(levels, points, strength)
+	data.erase("mercenaries")
+	data.erase("pending_legacy_mercenaries")
+	data["version"] = 10
+	var progression := {}
+	var allocation := {}
+	for slot in SLOTS:
+		progression[slot] = {"level": int(levels.get(slot, 1)), "exp": 0}
+		var full := ZERO.duplicate()
+		for stat in points.get(slot, {}):
+			full[stat] = points[slot][stat]
+		allocation[slot] = full
+	data["progression"] = progression
+	data["allocation"] = allocation
+	return JSON.parse_string(JSON.stringify(data))
+
+
+## P05: a character's stats in the game: the Hero's, or a roster instance's.
+func _stats_of(main: Node, slot: String) -> CharacterStats:
+	if slot == "hero":
+		return main.character_stats
+	var mercenary: Mercenary = main.mercenary_roster.get_mercenary(slot)
+	return CharacterStats.for_mercenary(mercenary) if mercenary != null else null
+
+
+## Every saved allocation count: the Hero's + merc_a's + merc_b's (P05).
+func _saved_allocations(data: Dictionary) -> Array:
+	return SLOTS.map(func(slot: String) -> Dictionary: return _saved_points(data, slot))
+
+
+func _level_of(main: Node, slot: String) -> int:
+	return main.progression.get_level(slot) if slot == "hero" else main.mercenary_roster.get_mercenary(slot).get_level()
+
+
+func _exp_of(main: Node, slot: String) -> int:
+	return main.progression.get_exp(slot) if slot == "hero" else main.mercenary_roster.get_mercenary(slot).get_exp()
+
+
+## A save JSON's saved counts of `slot` (P05: Merc A / B in the roster).
+func _saved_points(data: Dictionary, slot: String) -> Dictionary:
+	if slot == "hero":
+		return _ints(data["allocation"]["hero"])
+	for entry in data["mercenaries"]["owned"]:
+		if entry["id"] == slot:
+			return _ints(entry["allocation"])
+	return {}
+
+
 func _verify_schema() -> void:
-	_check(SaveStore.VERSION == 11, "AC01 SaveStore.VERSION = 10")
+	_check(SaveStore.VERSION == 12, "AC01 SaveStore.VERSION = 10 (P05: 12)")
 	_check(SaveStore.V10_KEYS == SaveStore.V9_KEYS + ["allocation"] and SaveStore.INVENTORY_VERSIONS.has(10), "v10 = v9 + allocation")
 	var levels := {"hero": 4, "merc_a": 3, "merc_b": 5}
 	var points := {"hero": {"hp": 2, "str": 3, "agi": 1, "int": 2}, "merc_a": {"hp": 2, "str": 4}, "merc_b": {"agi": 2, "int": 4}}
-	var data := _v10(levels, points)
-	_check(int(data["version"]) == 11 and data.has("allocation"), "AC02 A new save is v10 with allocation")
+	var data := _v12(levels, points)
+	_check(int(data["version"]) == 12 and data.has("allocation"), "AC02 A new save is v10 with allocation (P05: v12)")
 	var allocation: Dictionary = data["allocation"]
-	_check(allocation.keys().size() == 3 and SLOTS.all(func(s: String) -> bool: return (allocation[s] as Dictionary).keys().size() == 4 and (allocation[s] as Dictionary).has_all(["hp", "str", "agi", "int"])), "AC02 Exactly hero / merc_a / merc_b x hp / str / agi / int")
+	_check(allocation.keys() == ["hero"] and SLOTS.all(func(s: String) -> bool: return _saved_points(data, s).keys().size() == 4 and _saved_points(data, s).has_all(["hp", "str", "agi", "int"])), "AC02 Exactly hero / merc_a / merc_b x hp / str / agi / int (P05: Merc A / B on their roster instances)")
 	_check(_ints(allocation["hero"]) == {"hp": 2, "str": 3, "agi": 1, "int": 2}, "AC03 Hero counts saved (HP 2 points, not +20)")
-	_check(_ints(allocation["merc_a"]) == {"hp": 2, "str": 4, "agi": 0, "int": 0} and _ints(allocation["merc_b"]) == {"hp": 0, "str": 0, "agi": 2, "int": 4}, "AC03 Merc A / Merc B counts saved")
+	_check(_saved_points(data, "merc_a") == {"hp": 2, "str": 4, "agi": 0, "int": 0} and _saved_points(data, "merc_b") == {"hp": 0, "str": 0, "agi": 2, "int": 4}, "AC03 Merc A / Merc B counts saved")
 	_check(not (allocation["hero"] as Dictionary).has("mp"), "AC04 No MP allocation stored")
 	var text := JSON.stringify(data).to_lower()
 	for word in ["unspent", "earned", "growth", "effective", "capacity", "physical", "magic", "attack", "defense", "interval", "speed", "max_hp", "max_mp", "equipment"]:
@@ -85,8 +143,8 @@ func _verify_schema() -> void:
 	_check(twice.restore_allocation(counts) and twice.restore_allocation(counts) and twice.get_allocation_points() == counts and twice.get_unspent_points() == 3, "AC23 Restoring the same counts twice gives them once (6 spent, 3 left)")
 	_check(not twice.restore_allocation({"hp": 0, "str": 10, "agi": 0, "int": 0}) and twice.get_allocation_points() == counts, "Restoring more than earned is refused; nothing changes")
 	_check(not twice.restore_allocation({"hp": 0, "str": 1, "agi": 0}) and not twice.restore_allocation({"hp": 0, "str": -1, "agi": 0, "int": 0}), "Restore needs exactly the four counts, none negative")
-	var payload := SaveStore.validate(data)
-	_check(not payload.is_empty() and _ints(payload["allocation"]["merc_b"]) == {"hp": 0, "str": 0, "agi": 2, "int": 4}, "AC14 A valid v10 allocation validates exactly")
+	var payload := SaveStore.validate(_v10(levels, points))
+	_check(not payload.is_empty() and (payload["mercenaries"] as MercenaryRoster).get_mercenary("merc_b").get_allocation_points() == {"hp": 0, "str": 0, "agi": 2, "int": 4}, "AC14 A valid v10 allocation validates exactly (P05: onto merc_b)")
 	_sections_done.append("schema")
 
 
@@ -96,7 +154,6 @@ func _verify_migration() -> void:
 	var v10 := _v10({"hero": 4, "merc_a": 2, "merc_b": 1}, {}, 13)
 	var v9: Dictionary = v10.duplicate(true)
 	v9.erase("allocation")
-	v9.erase("mercenaries")  # P01.5: nor the v11 roster
 	v9["version"] = 9
 	var v8: Dictionary = v9.duplicate(true)
 	v8.erase("progression")
@@ -123,25 +180,24 @@ func _verify_migration() -> void:
 		_write_json(old[label])
 		var text := _read()
 		var main := await _new_main()
-		var party: Dictionary = main.get_party_stats()
 		_check(main.wallet.get_balance() == 4321 and main.inventory.get_quantity("test_good_03") == 4, "AC10/AC32 %s: money and items preserved" % label)
-		_check(SLOTS.all(func(s: String) -> bool: return (party[s] as CharacterStats).get_allocation_points() == ZERO), "AC11 %s: every allocation 0" % label)
-		var hero: CharacterStats = party["hero"]
+		_check(SLOTS.all(func(s: String) -> bool: return _stats_of(main, s).get_allocation_points() == ZERO), "AC11 %s: every allocation 0" % label)
+		var hero: CharacterStats = main.character_stats
 		var expected_str := 13 if label not in ["v1", "v2"] else 10
 		_check(hero.get_base_strength() == expected_str and hero.get_allocated_points("str") == 0, "R1 %s: saved strength stays Base STR %d, never allocated STR" % [label, expected_str])
 		var hero_level := 4 if label == "v9" else 1
 		_check(main.progression.get_level("hero") == hero_level and hero.get_unspent_points() == (hero_level - 1) * 3, "AC12 %s: Hero Lv%d, %d unspent points" % [label, hero_level, (hero_level - 1) * 3])
 		_check(_read() == text, "%s: loading does not rewrite the old save" % label)
-		_check(main.save_world_position() and int(JSON.parse_string(_read())["version"]) == 11, "%s: the next save writes v10" % label)
+		_check(main.save_world_position() and int(JSON.parse_string(_read())["version"]) == 12, "%s: the next save writes v10 (P05: v12)" % label)
 		var written: Dictionary = JSON.parse_string(_read())
-		_check(SLOTS.all(func(s: String) -> bool: return _ints(written["allocation"][s]) == ZERO) and int(written["money"]) == 4321, "%s: the v10 save holds 0 allocation, the same money" % label)
+		_check(SLOTS.all(func(s: String) -> bool: return _saved_points(written, s) == ZERO) and int(written["money"]) == 4321, "%s: the v10 save holds 0 allocation, the same money" % label)
 		await _destroy(main)
 	# L: C05 banked EXP still normalises, and the Level it reaches is the budget.
 	var banked: Dictionary = v9.duplicate(true)
 	banked["progression"]["hero"] = {"level": 2, "exp": 400}
 	_write_json(banked)
 	var main := await _new_main()
-	_check(main.progression.get_level("hero") == 4 and main.progression.get_exp("hero") == 50 and (main.get_party_stats()["hero"] as CharacterStats).get_unspent_points() == 9, "AC13 v9 Lv2 + 400 banked EXP -> Lv4 50, 9 points")
+	_check(main.progression.get_level("hero") == 4 and main.progression.get_exp("hero") == 50 and main.character_stats.get_unspent_points() == 9, "AC13 v9 Lv2 + 400 banked EXP -> Lv4 50, 9 points")
 	await _destroy(main)
 	var banked10: Dictionary = v10.duplicate(true)
 	banked10["progression"]["hero"] = {"level": 2, "exp": 400}
@@ -178,7 +234,7 @@ func _verify_validation() -> void:
 		"AC30 allocation not a dictionary": _with(good, {"allocation": []}),
 		"AC30 v10 without allocation": _without(good, "allocation"),
 		"v9 carrying allocation": _with(good, {"version": 9}),
-		"unknown future v12": _with(good, {"version": 12}),  # P01.5: v11 is current
+		"unknown future v13": _with(good, {"version": 13}),  # P05: v12 is current
 	}
 	for label in broken:
 		_check(SaveStore.validate(broken[label]).is_empty(), "%s: the whole save is rejected" % label)
@@ -198,13 +254,11 @@ func _verify_validation() -> void:
 func _verify_round_trip() -> void:
 	_delete()
 	var main := await _new_main()
+	# P05: Merc A / Merc B are the roster's merc_a / merc_b (deployed, so the
+	# battle below takes them: P04).
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_a", "GUARDIAN"), Mercenary.create("merc_b", "MAGE")], ["merc_a", "merc_b"])
 	_level(main, {"hero": 4, "merc_a": 3, "merc_b": 5})
-	var party: Dictionary = main.get_party_stats()
-	_check((party["hero"] as CharacterStats).confirm_allocation({"hp": 1, "str": 3, "int": 2}) and (party["merc_a"] as CharacterStats).confirm_allocation({"hp": 2, "str": 4}) and (party["merc_b"] as CharacterStats).confirm_allocation({"agi": 2, "int": 4}), "F Hero / Merc A / Merc B confirm their own Builds")
-	# Stage 8 P04: battles take the deployed roster instead of the legacy Merc
-	# A / Merc B; a deployed 守衛 #1 / 法師 #2 with the same Level and points
-	# (saved in the v11 roster) carry those Builds into the battle below.
-	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN", 3, 0, {"hp": 2, "str": 4, "agi": 0, "int": 0}), Mercenary.create("merc_2", "MAGE", 5, 0, {"hp": 0, "str": 0, "agi": 2, "int": 4})], ["merc_1", "merc_2"])
+	_check(main.character_stats.confirm_allocation({"hp": 1, "str": 3, "int": 2}) and PartyService.allocate(main.mercenary_roster, "merc_a", {"hp": 2, "str": 4})["success"] and PartyService.allocate(main.mercenary_roster, "merc_b", {"agi": 2, "int": 4})["success"], "F Hero / Merc A / Merc B confirm their own Builds")
 	var before := _snapshot(main)
 	_check(main.save_world_position(), "Saved")
 	var file_1 := _read()
@@ -215,18 +269,17 @@ func _verify_round_trip() -> void:
 		for key in ["level", "exp", "alloc", "growth", "effective", "derived", "unspent"]:
 			_check(after[slot][key] == before[slot][key], "G %s %s equal after restart (%s)" % [slot, key, str(after[slot][key])])
 	_check(after["backpack"] == before["backpack"] and after["backpack"] == 10 + (10 + 3 + 3) * 9, "AC20 Capacity after restart: 154 through Effective STR 16")
-	_check((main.get_party_stats()["hero"] as CharacterStats) == main.character_stats and main.inventory.get_stats() == main.character_stats, "The restored Hero is the backpack's stats")
+	_check((main.get_party_stats()["hero"] as CharacterStats) == main.character_stats and main.inventory.get_stats() == main.character_stats and main.get_party_stats().keys() == ["hero"], "The restored Hero is the backpack's stats")
 	# I: the restored Build fights.
 	var battle := await _locked_battle(main)
 	var units := battle.get_friends()
-	var restored: Dictionary = main.get_party_stats()
 	var fights := true
 	for index in range(3):
-		var stats: CharacterStats = restored[SLOTS[index]]
+		var stats: CharacterStats = _stats_of(main, SLOTS[index])
 		var unit: CombatUnit = units[index]
 		fights = fights and unit.max_hp == stats.get_max_hp() and unit.max_mp == stats.get_max_mp() and unit.attack_damage == stats.get_physical_attack() and unit.physical_defense == stats.get_physical_defense() and unit.magic_attack == stats.get_magic_attack() and unit.attack_interval_ms == stats.get_attack_interval_ms() and unit.move_speed == stats.get_move_speed()
 	_check(fights, "AC21 The next battle uses the restored Builds")
-	_check(units[1].id == "merc_1" and units[2].id == "merc_2" and units[1].max_hp == CharacterStats.for_mercenary(main.mercenary_roster.get_mercenary("merc_1")).get_max_hp() and units[2].magic_attack == CharacterStats.for_mercenary(main.mercenary_roster.get_mercenary("merc_2")).get_magic_attack(), "P04 The Mercenary units are the restored roster instances")
+	_check(units[1].id == "merc_a" and units[2].id == "merc_b", "P04 The Mercenary units are the restored roster instances (P05: merc_a / merc_b)")
 	_check(units[0].attack_damage == 20 + 3 + 3 and units[1].max_hp == 200 + 50 + 20 and units[2].magic_attack == (8 + 4) * 2, "AC21 Hero ATK 26, Merc A Max HP 270, Merc B MATK 24")
 	for enemy in battle.get_enemies():
 		battle.resolve_damage(units[0], enemy, 1000)
@@ -247,9 +300,9 @@ func _verify_round_trip() -> void:
 			for key in ["alloc", "growth", "effective", "derived", "unspent", "level", "exp"]:
 				same = same and again[slot][key] == reference[slot][key]
 		_check(same and again["backpack"] == reference["backpack"], "AC23-AC25 Round %d: no duplicated allocation, regenerated points, stacked Growth or Capacity" % (round + 1))
-	var allocations := files.map(func(f: String) -> Variant: return JSON.parse_string(f)["allocation"])
+	var allocations := files.map(func(f: String) -> Variant: return _saved_allocations(JSON.parse_string(f)))
 	_check(allocations[0] == allocations[1] and allocations[1] == allocations[2], "AC23 The saved allocation is identical every round")
-	_check(JSON.parse_string(file_1)["allocation"] == allocations[0] or _ints(JSON.parse_string(file_1)["allocation"]["hero"]) == _ints(allocations[0]["hero"]), "The first save already held the same allocation")
+	_check(_saved_allocations(JSON.parse_string(file_1)) == allocations[0], "The first save already held the same allocation")
 	await _destroy(main)
 	_delete()
 	_sections_done.append("round_trip")
@@ -296,23 +349,23 @@ func _level(main: Node, levels: Dictionary) -> void:
 		var result := BattleResult.create("s05", BattleResult.Outcome.VICTORY, [] as Array[String])
 		result.exp_pool = total
 		result.survivor_ids.append(slot)
-		main.progression.apply(result)
+		# P05: the Hero's slot or the roster instance (PartyProgression).
+		PartyProgression.apply(result, main.progression, main.mercenary_roster)
 	main._apply_level_growth()
 
 
 func _snapshot(main: Node) -> Dictionary:
 	var out := {}
-	var party: Dictionary = main.get_party_stats()
 	for slot in SLOTS:
-		var s: CharacterStats = party[slot]
+		var s: CharacterStats = _stats_of(main, slot)
 		var growth := []
 		var effective := []
 		for stat in CharacterConfig.STATS:
 			growth.append(s.get_growth(stat))
 			effective.append(s.get_effective(stat))
 		out[slot] = {
-			"level": main.progression.get_level(slot),
-			"exp": main.progression.get_exp(slot),
+			"level": _level_of(main, slot),
+			"exp": _exp_of(main, slot),
 			"alloc": s.get_allocation_points(),
 			"growth": growth,
 			"effective": effective,
