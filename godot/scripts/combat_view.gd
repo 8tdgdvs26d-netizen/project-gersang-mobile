@@ -899,6 +899,12 @@ static func unit_name(unit: CombatUnit) -> String:
 	return unit.label if unit.label != "" else ROLE_NAMES[unit.role]
 
 
+## Stage 8 P04: the portrait name's font size — a roster Mercenary's longer
+## label (「軍師 #3」) is drawn smaller so it stays clear of the ⓘ button.
+static func portrait_name_size(unit: CombatUnit) -> int:
+	return 17 if unit.label != "" else 20
+
+
 ## Stage 8 P04: the full label (info panel, Victory result): a roster
 ## Mercenary's own label, else the Prototype role label.
 static func unit_label(unit: CombatUnit) -> String:
@@ -1277,7 +1283,7 @@ class Portrait extends Control:
 		var font := get_theme_default_font()
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.13, 0.13, 0.16) if unit.alive else Color(0.08, 0.08, 0.09))
 		draw_circle(Vector2(30.0, 34.0), 20.0, color if unit.alive else Color(0.3, 0.3, 0.3))
-		draw_string(font, Vector2(58.0, 34.0), CombatView.unit_name(unit), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 20, Color.WHITE if unit.alive else Color(0.5, 0.5, 0.5))
+		draw_string(font, Vector2(58.0, 34.0), CombatView.unit_name(unit), HORIZONTAL_ALIGNMENT_LEFT, -1.0, CombatView.portrait_name_size(unit), Color.WHITE if unit.alive else Color(0.5, 0.5, 0.5))
 		draw_string(font, Vector2(58.0, 56.0), CombatView.ROLE_TAGS[unit.role], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16, color if unit.alive else Color(0.5, 0.5, 0.5))
 		if unit.alive:
 			draw_rect(Rect2(10.0, 64.0, size.x - 20.0, 10.0), Color(0.2, 0.05, 0.05))

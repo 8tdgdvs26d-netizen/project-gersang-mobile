@@ -293,6 +293,16 @@ func _verify_game_party() -> void:
 	for index in range(4):
 		_check(view.get_portrait_unit(index) == friends[index], "AC12 Portrait %d is %s" % [index, friends[index].id])
 	_check(view.get_info_text(friends[1]).begins_with("軍師 #3\n") and view.get_info_text(friends[1]).contains("等級 1　經驗 80") and view.get_info_text(friends[3]).contains("等級 2　經驗 0"), "AC12 ⓘ info: the instance's label and its own Level / EXP")
+	var portrait := view.get_node("Portrait1") as Control
+	var info_left := (view.get_node("InfoButton1") as Control).get_global_rect().position.x - portrait.get_global_rect().position.x
+	for unit in friends:
+		var width := portrait.get_theme_default_font().get_string_size(CombatView.unit_name(unit), HORIZONTAL_ALIGNMENT_LEFT, -1, CombatView.portrait_name_size(unit)).x
+		_check(58.0 + width + 4.0 <= info_left, "AC12 Portrait name 「%s」 clears the ⓘ button (%.0f px)" % [CombatView.unit_name(unit), width])
+	for label in ["守衛 #5", "法師 #4", "軍師 #9"]:
+		var probe := CombatUnit.new()
+		probe.label = label
+		var probe_width := portrait.get_theme_default_font().get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, CombatView.portrait_name_size(probe)).x
+		_check(58.0 + probe_width + 4.0 <= info_left, "AC12 「%s」 fits the portrait" % label)
 	_check(view.press_all(), "全體")
 	var entries := view.get_skill_bar_entries()
 	var owners := entries.map(func(e: Dictionary) -> String: return (e["owner"] as CombatUnit).id)
