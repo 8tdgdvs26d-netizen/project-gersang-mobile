@@ -132,13 +132,15 @@ func get_allocation_points() -> Dictionary:
 
 ## S05: replaces (never adds to) the confirmed point counts with saved ones,
 ## after apply_level(). Refused (nothing changes) unless exactly the four
-## allocatable stats, whole numbers >= 0, within the earned points.
+## allocatable stats, whole numbers >= 0, within the earned points. Each value
+## is bounded by the earned points before it is summed, so the sum can never
+## overflow (64-bit) past the check.
 func restore_allocation(points: Dictionary) -> bool:
 	if points.size() != CharacterConfig.ALLOCATABLE.size() or not points.has_all(CharacterConfig.ALLOCATABLE):
 		return false
 	var spent := 0
 	for stat in CharacterConfig.ALLOCATABLE:
-		if typeof(points[stat]) != TYPE_INT or points[stat] < 0:
+		if typeof(points[stat]) != TYPE_INT or points[stat] < 0 or points[stat] > _earned_points:
 			return false
 		spent += points[stat]
 	if spent > _earned_points:
@@ -165,15 +167,17 @@ func get_unspent_points() -> int:
 ## S04: confirms a pending allocation {stat: points} at once. Refused as a
 ## whole (nothing changes) unless every stat is allocatable, every amount a
 ## whole number >= 0, at least one point is given and the total fits in the
-## unspent points.
+## unspent points. Each amount is bounded by the unspent points before it is
+## summed, so the total can never overflow (64-bit) past the check.
 func confirm_allocation(pending: Dictionary) -> bool:
 	var total := 0
+	var unspent := get_unspent_points()
 	for stat in pending:
 		var points: Variant = pending[stat]
-		if not CharacterConfig.ALLOCATABLE.has(stat) or typeof(points) != TYPE_INT or points < 0:
+		if not CharacterConfig.ALLOCATABLE.has(stat) or typeof(points) != TYPE_INT or points < 0 or points > unspent:
 			return false
 		total += points
-	if total <= 0 or total > get_unspent_points():
+	if total <= 0 or total > unspent:
 		return false
 	for stat in pending:
 		_allocated[stat] = get_allocated_points(stat) + int(pending[stat])
