@@ -47,7 +47,25 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 7 Gate corrective: Player Clarity + Victory UI + World Monster Respawn. Save version stays
+Stage 8 P01: Party & Mercenary Data Foundation. Save version stays 10 (unchanged schema). Runtime
+data only: nothing saved, nothing wired to `main`, combat or any UI; the Stage 7 fixed party
+(Hero + Merc A + Merc B) is untouched.
+
+- `Mercenary`: one owned instance — a stable unique id, a type (`GUARDIAN` / `MAGE` /
+  `STRATEGIST`, a reference only: no stats, growth or skills) and its own Stage 7 progression:
+  Level / EXP on the S03 curve (`ProgressionState.advance`), Stat Points (Level - 1) x 3 allocated
+  to HP / STR / AGI / INT with the S04 rules. `create()` / `from_dict()` refuse anything invalid
+  (no repair)
+- `MercenaryRoster`: 0-5 owned instances, 0-3 deployed ids (owned, none twice, in order); the
+  Hero is never owned or deployed (`get_party_ids()` = Hero + deployed, at most 4). Any number of
+  instances may share a type (3 deployed MAGEs are valid). `create_mercenary()` issues
+  `merc_<serial>` ids; an id ever owned in the roster is never issued or accepted again. Every
+  change is all-or-nothing
+- approved for later WPs (not done here): Save v11 with the roster, migrating merc_a -> GUARDIAN
+  and merc_b -> MAGE with their ids and progression; player names 守衛 / 法師 / 軍師
+- tests: `tests/verify_p01_party_mercenary.gd` (incl. a seeded 4000-operation stress section)
+
+Previous: Stage 7 Gate corrective: Player Clarity + Victory UI + World Monster Respawn. Save version stays
 10 (unchanged schema).
 
 - character labels (`CharacterConfig.DISPLAY_NAMES`, one source): 主角 / 傭兵A（守護） /
