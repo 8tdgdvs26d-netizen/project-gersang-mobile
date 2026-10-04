@@ -120,6 +120,8 @@ func _ready() -> void:
 	_city_hub.warehouse_city_selected.connect(_on_warehouse_city_selected)
 	_city_hub.facility_changed.connect(_on_hub_facility_changed)
 	_city_hub.recruit_requested.connect(_on_recruit_requested)
+	_city_hub.deployment_requested.connect(_on_deployment_requested)
+	_city_hub.dismiss_requested.connect(_on_dismiss_requested)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	for child in $Actors.get_children():
 		if child is WorldMonster:
@@ -459,12 +461,34 @@ func _refresh_hub_summary() -> void:
 	_refresh_mercenary_view()
 
 
-## Stage 8 P02: the Mercenary Center's held count and owned list.
+## Stage 8 P02 / P03: the Mercenary Center's held count, owned list and
+## roster rows (only data each instance really has: type, id, Level, EXP,
+## points; no type stats or equipment exist yet).
 func _refresh_mercenary_view() -> void:
 	var labels := []
+	var entries := []
 	for mercenary in mercenary_roster.get_owned():
 		labels.append(RecruitmentService.label(mercenary))
-	_city_hub.show_mercenaries(labels, mercenary_roster.get_owned_count(), MercenaryRoster.MAX_OWNED)
+		entries.append(_mercenary_entry(mercenary))
+	_city_hub.show_mercenaries(labels, mercenary_roster.get_owned_count(), MercenaryRoster.MAX_OWNED, entries, mercenary_roster.get_deployed_ids().size(), MercenaryRoster.MAX_DEPLOYED)
+
+
+func _mercenary_entry(mercenary: Mercenary) -> Dictionary:
+	var type := mercenary.get_type()
+	var deployed := mercenary_roster.is_deployed(mercenary.get_id())
+	var level := mercenary.get_level()
+	var points := mercenary.get_allocation_points()
+	var progress := "經驗 %d / %d" % [mercenary.get_exp(), ProgressionState.required_exp(level)] if level < ProgressionState.MAX_LEVEL else "經驗 已達最高等級"
+	return {
+		"id": mercenary.get_id(),
+		"label": RecruitmentService.label(mercenary),
+		"title": "%s　Lv.%d　%s　%s" % [RecruitmentService.label(mercenary), level, RecruitmentService.ROLE_TEXT.get(type, ""), "【出戰中】" if deployed else "【待命】"],
+		"hint": RecruitmentService.HINT_TEXT.get(type, ""),
+		"progress": "%s　未分配屬性點 %d" % [progress, mercenary.get_unspent_points()],
+		"allocation": "已分配：血量 %d　力量 %d　敏捷 %d　智力 %d" % [points["hp"], points["str"], points["agi"], points["int"]],
+		"pending": "能力值、裝備：尚未開放",
+		"deployed": deployed,
+	}
 
 
 ## Stage 8 P02: recruits one Mercenary of `type` in the current city: paid,
@@ -481,6 +505,41 @@ func recruit_mercenary(type: Variant) -> Dictionary:
 func _on_recruit_requested(type: String) -> void:
 	var result := recruit_mercenary(type)
 	_city_hub.show_recruit_feedback(result)
+
+
+## Stage 8 P03: deploys / undeploys an owned Mercenary in the current city,
+## saved at once (PartyService); a failure changes nothing.
+func set_mercenary_deployed(mercenary_id: Variant, deployed: bool) -> Dictionary:
+	if not is_in_city():
+		return {"success": false, "reason": "ERR_NOT_IN_CITY", "mercenary_id": ""}
+	var result := PartyService.set_deployed(mercenary_roster, mercenary_id, deployed, _persist)
+	_refresh_hub_summary()
+	return result
+
+
+## Stage 8 P03: dismisses an owned, not deployed Mercenary for good (no
+## refund), saved at once; a failure changes nothing.
+func dismiss_mercenary(mercenary_id: Variant) -> Dictionary:
+	if not is_in_city():
+		return {"success": false, "reason": "ERR_NOT_IN_CITY", "mercenary_id": ""}
+	var result := PartyService.dismiss(mercenary_roster, mercenary_id, _persist)
+	_refresh_hub_summary()
+	return result
+
+
+func _on_deployment_requested(mercenary_id: String, deployed: bool) -> void:
+	var label := _party_label(mercenary_id)
+	_city_hub.show_party_feedback("deploy" if deployed else "undeploy", set_mercenary_deployed(mercenary_id, deployed), label)
+
+
+func _on_dismiss_requested(mercenary_id: String) -> void:
+	var label := _party_label(mercenary_id)
+	_city_hub.show_party_feedback("dismiss", dismiss_mercenary(mercenary_id), label)
+
+
+func _party_label(mercenary_id: String) -> String:
+	var mercenary := mercenary_roster.get_mercenary(mercenary_id)
+	return RecruitmentService.label(mercenary) if mercenary != null else mercenary_id
 
 
 func _refresh_market_view() -> void:

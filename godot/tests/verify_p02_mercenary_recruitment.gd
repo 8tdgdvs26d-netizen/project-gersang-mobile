@@ -308,7 +308,9 @@ func _verify_scope() -> void:
 	for word in ["CombatBattle", "set_deployment", "remove(", "dismiss", "SaveStore", "FileAccess"]:
 		_check(not service.contains(word), "RecruitmentService has no %s" % word)
 	var hub := _code_only("res://scripts/city_hub.gd")
-	_check(not hub.contains("MercenaryRoster") and not hub.contains("Wallet") and not hub.contains("deploy") and not hub.contains("dismiss"), "The hub only displays and forwards presses")
+	# Stage 8 P03 brought deploy / dismiss buttons into the hub; it still only
+	# displays and forwards presses (no model, wallet or service calls).
+	_check(not hub.contains("MercenaryRoster") and not hub.contains("Wallet") and not hub.contains("PartyService") and not hub.contains("RecruitmentService.recruit") and not hub.contains("mercenary_roster"), "The hub only displays and forwards presses")
 	_sections_done.append("scope")
 
 
