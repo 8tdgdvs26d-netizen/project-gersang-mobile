@@ -297,8 +297,12 @@ func _verify_persistence() -> void:
 
 # --- In game: result screen, commit, save, reload ------------------------------------------------------
 
+## Stage 8 P04: the game's battle is the Hero + the deployed roster
+## Mercenaries; a deployed 守衛 #1 + 法師 #2 (Lv1) stand in for Merc A / Merc B
+## (same profiles, cells, Skills) and earn their own EXP (PartyProgression).
 func _verify_in_game() -> void:
 	var main := await _new_main(TEST_SAVE)
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE")], ["merc_1", "merc_2"])
 	var view := main.get_node("CombatView") as CombatView
 	# Battle 1: Merc A dies, 10 kills -> Hero and Merc B get 50 each.
 	var battle := await _locked_battle(main)
@@ -312,21 +316,21 @@ func _verify_in_game() -> void:
 	var reward := (view.get_node("RewardLabel") as Label)
 	# Stage 7 corrective: a VICTORY shows its reward in the Victory Result
 	# Modal (the C05 result line stays for DEFEAT / RETREAT).
-	_check(not reward.visible and reward.text == "主角 經驗 +50　傭兵B 經驗 +50", "Result screen: 主角 經驗 +50　傭兵B 經驗 +50 (%s)" % reward.text)
-	_check(view.is_result_modal_open() and view.get_victory_lines() == ["擊敗敵人 10 名", "主角　經驗 +50", "傭兵B（術法）　經驗 +50"], "Victory Result Modal: 10 defeated, 主角 +50, 傭兵B（術法） +50 (%s)" % str(view.get_victory_lines()))
+	_check(not reward.visible and reward.text == "主角 經驗 +50　法師 #2 經驗 +50", "Result screen: 主角 經驗 +50　法師 #2 經驗 +50 (%s)" % reward.text)
+	_check(view.is_result_modal_open() and view.get_victory_lines() == ["擊敗敵人 10 名", "主角　經驗 +50", "法師 #2　經驗 +50"], "Victory Result Modal: 10 defeated, 主角 +50, 法師 #2 +50 (%s)" % str(view.get_victory_lines()))
 	_check(main.progression.get_exp("hero") == 0, "Nothing applied before the commit")
 	_delete(TEST_SAVE)
 	(view.get_node("ExitButton") as Button).pressed.emit()
-	_check(main.progression.get_exp("hero") == 50 and main.progression.get_exp("merc_b") == 50 and main.progression.get_exp("merc_a") == 0 and main.get_last_award().size() == 2, "Committed: Hero 50, Merc B 50, Merc A 0")
+	_check(main.progression.get_exp("hero") == 50 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 50 and main.mercenary_roster.get_mercenary("merc_1").get_exp() == 0 and main.get_last_award().size() == 2 and main.progression.get_exp("merc_a") == 0 and main.progression.get_exp("merc_b") == 0, "Committed: Hero 50, Merc B (法師 #2) 50, Merc A (守衛 #1) 0; legacy slots untouched")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 11 and int(saved["progression"]["hero"]["exp"]) == 50 and int(saved["progression"]["merc_a"]["exp"]) == 0, "Saved once with the commit: v9 progression")
+	_check(int(saved["version"]) == 11 and int(saved["progression"]["hero"]["exp"]) == 50 and int(saved["progression"]["merc_a"]["exp"]) == 0 and int(saved["mercenaries"]["owned"][1]["exp"]) == 50 and int(saved["mercenaries"]["owned"][0]["exp"]) == 0, "Saved once with the commit: v9 progression (P04: and the roster's EXP)")
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(main.progression.get_exp("hero") == 50, "A repeated commit adds nothing")
 	# Battle 2 (relaunched, the group was defeated this session): the Hero
 	# alone kills 10 -> +100 -> Lv2 with 50 overflow.
 	await _destroy(main)
 	main = await _new_main(TEST_SAVE)
-	_check(main.progression.get_exp("hero") == 50 and main.progression.get_exp("merc_b") == 50, "Relaunch restores the first award")
+	_check(main.progression.get_exp("hero") == 50 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 50, "Relaunch restores the first award")
 	view = main.get_node("CombatView") as CombatView
 	reward = view.get_node("RewardLabel") as Label
 	battle = await _locked_battle(main)
@@ -343,7 +347,7 @@ func _verify_in_game() -> void:
 	_check(main.progression.get_level("hero") == 2 and main.progression.get_exp("hero") == 50, "Hero Lv2 with 50 overflow")
 	await _destroy(main)
 	main = await _new_main(TEST_SAVE)
-	_check(main.progression.get_level("hero") == 2 and main.progression.get_exp("hero") == 50 and main.progression.get_exp("merc_b") == 50 and main.progression.get_level("merc_a") == 1, "Relaunch restores every slot's Level / EXP")
+	_check(main.progression.get_level("hero") == 2 and main.progression.get_exp("hero") == 50 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 50 and main.mercenary_roster.get_mercenary("merc_1").get_level() == 1, "Relaunch restores every slot's Level / EXP")
 	view = main.get_node("CombatView") as CombatView
 	reward = view.get_node("RewardLabel") as Label
 	# DEFEAT after kills: nothing awarded, said so.
@@ -367,11 +371,11 @@ func _verify_in_game() -> void:
 	battle.start_retreat()
 	battle.advance(500)
 	await process_frame
-	_check(battle.get_phase() == CombatBattle.Phase.RETREAT and reward.text == "主角 經驗 +13　傭兵A 經驗 +13　傭兵B 經驗 +13", "RETREAT: 40 / 3 = 13 each (%s)" % reward.text)
+	_check(battle.get_phase() == CombatBattle.Phase.RETREAT and reward.text == "主角 經驗 +13　守衛 #1 經驗 +13　法師 #2 經驗 +13", "RETREAT: 40 / 3 = 13 each (%s)" % reward.text)
 	# Save failure after the commit: no rollback of the EXP.
 	main.save_path = BAD_SAVE
 	(view.get_node("ExitButton") as Button).pressed.emit()
-	_check(main.progression.get_exp("hero") == 63 and main.progression.get_exp("merc_a") == 13 and main.progression.get_exp("merc_b") == 63 and not FileAccess.file_exists(BAD_SAVE), "Save failed after the commit: the EXP stays applied (no rollback)")
+	_check(main.progression.get_exp("hero") == 63 and main.mercenary_roster.get_mercenary("merc_1").get_exp() == 13 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 63 and not FileAccess.file_exists(BAD_SAVE), "Save failed after the commit: the EXP stays applied (no rollback)")
 	await _destroy(main)
 	_sections_done.append("in_game")
 

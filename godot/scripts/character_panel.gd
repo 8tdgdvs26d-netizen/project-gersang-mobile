@@ -42,6 +42,18 @@ const ARROW := " → "
 
 ## Character id -> CharacterStats of the party (main.gd).
 var party_provider: Callable
+## Stage 8 P04 (approved D3): the characters whose tabs show (ORDER order).
+## main.gd shows only the Hero until P05 decides about the legacy Merc A /
+## Merc B; hidden ones cannot be selected and add no points to the 角色
+## button. Default: every ORDER character (unchanged S04 behaviour).
+var shown_ids: Array = ORDER.duplicate():
+	set(value):
+		shown_ids = ORDER.filter(func(id: String) -> bool: return value.has(id))
+		if not shown_ids.has(_selected) and not shown_ids.is_empty():
+			_selected = shown_ids[0]
+			_pending.clear()
+		if _panel != null:
+			_refresh()
 var progression: ProgressionState
 ## Whether the 角色 button may show (the player is in the world).
 var can_open: Callable
@@ -130,7 +142,7 @@ func _process(_delta: float) -> void:
 	if _open_button.visible:
 		var stats := _stats(_selected)
 		var points := 0
-		for id in ORDER:
+		for id in shown_ids:
 			var character := _stats(id)
 			if character != null:
 				points += character.get_unspent_points()
@@ -164,7 +176,7 @@ func close() -> void:
 
 ## Shows another character (the current preview is discarded).
 func select_character(id: String) -> void:
-	if not ORDER.has(id):
+	if not shown_ids.has(id):
 		return
 	_selected = id
 	_pending.clear()
@@ -255,6 +267,7 @@ func _refresh() -> void:
 		return
 	for id in _tabs:
 		(_tabs[id] as Button).disabled = id == _selected
+		(_tabs[id] as Button).visible = shown_ids.has(id)
 	var lines := get_lines()
 	if lines.is_empty():
 		return

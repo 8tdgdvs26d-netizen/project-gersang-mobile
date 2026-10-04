@@ -73,6 +73,17 @@ func apply(result: BattleResult) -> Dictionary:
 	return shares
 
 
+## Stage 8 P04: adds `amount` EXP to `slot` on the same curve as apply()
+## (PartyProgression's share for the Hero). False (nothing changes) for an
+## unknown slot or an amount outside 0..MAX_EXP.
+func award(slot: String, amount: int) -> bool:
+	if not _slots.has(slot) or amount < 0 or amount > MAX_EXP:
+		return false
+	var after := _gain(get_level(slot), get_exp(slot), amount)
+	_slots[slot] = {"level": after[0], "exp": after[1]}
+	return true
+
+
 ## EXP needed to leave `level` (0 at the cap: no further Level).
 static func required_exp(level: int) -> int:
 	if level >= MAX_LEVEL:

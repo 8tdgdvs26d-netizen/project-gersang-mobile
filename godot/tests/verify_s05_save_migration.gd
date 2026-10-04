@@ -201,6 +201,10 @@ func _verify_round_trip() -> void:
 	_level(main, {"hero": 4, "merc_a": 3, "merc_b": 5})
 	var party: Dictionary = main.get_party_stats()
 	_check((party["hero"] as CharacterStats).confirm_allocation({"hp": 1, "str": 3, "int": 2}) and (party["merc_a"] as CharacterStats).confirm_allocation({"hp": 2, "str": 4}) and (party["merc_b"] as CharacterStats).confirm_allocation({"agi": 2, "int": 4}), "F Hero / Merc A / Merc B confirm their own Builds")
+	# Stage 8 P04: battles take the deployed roster instead of the legacy Merc
+	# A / Merc B; a deployed 守衛 #1 / 法師 #2 with the same Level and points
+	# (saved in the v11 roster) carry those Builds into the battle below.
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN", 3, 0, {"hp": 2, "str": 4, "agi": 0, "int": 0}), Mercenary.create("merc_2", "MAGE", 5, 0, {"hp": 0, "str": 0, "agi": 2, "int": 4})], ["merc_1", "merc_2"])
 	var before := _snapshot(main)
 	_check(main.save_world_position(), "Saved")
 	var file_1 := _read()
@@ -222,6 +226,7 @@ func _verify_round_trip() -> void:
 		var unit: CombatUnit = units[index]
 		fights = fights and unit.max_hp == stats.get_max_hp() and unit.max_mp == stats.get_max_mp() and unit.attack_damage == stats.get_physical_attack() and unit.physical_defense == stats.get_physical_defense() and unit.magic_attack == stats.get_magic_attack() and unit.attack_interval_ms == stats.get_attack_interval_ms() and unit.move_speed == stats.get_move_speed()
 	_check(fights, "AC21 The next battle uses the restored Builds")
+	_check(units[1].id == "merc_1" and units[2].id == "merc_2" and units[1].max_hp == CharacterStats.for_mercenary(main.mercenary_roster.get_mercenary("merc_1")).get_max_hp() and units[2].magic_attack == CharacterStats.for_mercenary(main.mercenary_roster.get_mercenary("merc_2")).get_magic_attack(), "P04 The Mercenary units are the restored roster instances")
 	_check(units[0].attack_damage == 20 + 3 + 3 and units[1].max_hp == 200 + 50 + 20 and units[2].magic_attack == (8 + 4) * 2, "AC21 Hero ATK 26, Merc A Max HP 270, Merc B MATK 24")
 	for enemy in battle.get_enemies():
 		battle.resolve_damage(units[0], enemy, 1000)

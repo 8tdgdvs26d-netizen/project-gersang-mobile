@@ -245,6 +245,12 @@ func _verify_stage7() -> void:
 	_check(SaveStore.VERSION == 11 and SaveStore.V10_KEYS == ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation"] and SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"], "Save v10 sections unchanged; v11 adds only the roster (P01.5)")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/character_panel.gd", "res://scripts/progression_state.gd", "res://scripts/character_stats.gd"]:
 		var code := _code_only(path)
+		# Stage 8 P04 (approved) wired combat_battle / combat_view /
+		# character_stats to the deployed instances (read only); there the check
+		# narrows to "never creates or changes a roster".
+		if path.get_file() in ["combat_battle.gd", "combat_view.gd", "character_stats.gd"]:
+			_check(["roster.add(", "roster.remove(", "set_deployment(", "create_mercenary(", "restore_snapshot(", "MercenaryRoster.new(", "MercenaryRoster.build(", "MercenaryRoster.from_dict("].all(func(call: String) -> bool: return not code.contains(call)), "%s is not wired to the roster" % path.get_file())
+			continue
 		_check(not code.contains("MercenaryRoster") and not code.contains("Mercenary.") and not code.contains("roster"), "%s is not wired to the roster" % path.get_file())
 	# Stage 8 P03: the City Hub shows a roster view (display data from main.gd)
 	# but still never holds the roster model.

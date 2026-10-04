@@ -145,7 +145,9 @@ func _verify_game_roster() -> void:
 	var texts := hub.get_roster_row_texts("merc_2")
 	_check(texts["TitleLabel"] == "法師 #2　Lv.3　遠程法術型　【待命】", "AC02 Type, identity, Level, role, status (%s)" % texts["TitleLabel"])
 	_check(texts["HintLabel"] == "在後方以法術攻擊敵人" and texts["ProgressLabel"] == "經驗 50 / 200　未分配屬性點 1" and texts["AllocationLabel"] == "已分配：血量 2　力量 0　敏捷 0　智力 3", "AC03 Real data: ability line, EXP, unspent and allocated points (%s / %s)" % [texts["ProgressLabel"], texts["AllocationLabel"]])
-	_check(texts["PendingLabel"] == "能力值、裝備：尚未開放", "AC04 Stats / equipment shown as not open yet (no fake numbers)")
+	# Stage 8 P04 (P03 AC03, approved): the stats are real now (verify_p04);
+	# equipment stays not open.
+	_check(texts["PendingLabel"] == "裝備：尚未開放", "AC04 Stats / equipment shown as not open yet (no fake numbers)")
 	_check(hub.get_roster_row_texts("merc_4")["TitleLabel"] == "軍師 #4　Lv.1　戰場控制型　【待命】" and hub.get_roster_row_texts("merc_3")["TitleLabel"] == "守衛 #3　Lv.1　近戰防守型　【待命】", "Duplicate / mixed types each on their own row")
 	for id in hub.get_roster_ids():
 		_check(hub.get_deploy_button(id).text == "設為出戰" and hub.get_dismiss_button(id).text == "解僱", "%s: 設為出戰 / 解僱" % id)
@@ -321,8 +323,11 @@ func _verify_scope() -> void:
 	var main_code := _code_only("res://scripts/main.gd")
 	var start := main_code.find("func _start_combat()")
 	var start_body := main_code.substr(start, main_code.find("\nfunc ", start + 1) - start)
-	_check(start > 0 and start_body.contains("CombatBattle.from_encounter(_encounter_session.get_context(), get_party_stats())") and not start_body.contains("mercenary_roster") and not start_body.contains("deploy"), "AC24 Combat still starts from the fixed party, not the roster deployment (P04)")
-	_check(not _code_only("res://scripts/main.gd").substr(main_code.find("func get_party_stats()"), 300).contains("mercenary_roster"), "get_party_stats() is still the fixed Hero / merc_a / merc_b")
+	# Stage 8 P04 (approved): combat starts from the Hero + the deployed roster
+	# (read only: it never deploys / dismisses).
+	_check(start > 0 and start_body.contains("CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed())") and not start_body.contains("set_deployed") and not start_body.contains("dismiss") and not start_body.contains("PartyService"), "AC24 Combat starts from the Hero + the roster deployment (P04), read only")
+	var party_start := main_code.find("func get_party_stats()")
+	_check(party_start > 0 and not main_code.substr(party_start, main_code.find("\nfunc ", party_start + 1) - party_start).contains("mercenary_roster"), "get_party_stats() is still the fixed Hero / merc_a / merc_b")
 	var party := _code_only("res://scripts/party_service.gd")
 	for word in ["position", "formation", "row", "CombatBattle", "SaveStore", "equipment", "backpack", "inventory"]:
 		_check(not party.to_lower().contains(word.to_lower()), "PartyService has no %s" % word)

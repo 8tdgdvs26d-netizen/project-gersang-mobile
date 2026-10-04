@@ -303,7 +303,10 @@ func _verify_scope() -> void:
 	_check(SaveStore.VERSION == 11 and SaveStore.V11_KEYS.size() == 11, "AC21 Save v11 unchanged")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/character_config.gd", "res://scripts/character_stats.gd", "res://scripts/save_store.gd"]:
 		var code := _code_only(path).to_lower()
-		_check(not code.contains("recruit") and not code.contains("mercenary_center"), "AC22 %s knows nothing about recruitment" % path.get_file())
+		# Stage 8 P04 (approved): combat_battle names a deployed Mercenary with
+		# RecruitmentService.label; there the check narrows to "no recruiting".
+		var recruit_free := code.replace("recruitmentservice.label(", "") if path.get_file() == "combat_battle.gd" else code
+		_check(not recruit_free.contains("recruit") and not code.contains("mercenary_center"), "AC22 %s knows nothing about recruitment" % path.get_file())
 	var service := _code_only("res://scripts/recruitment_service.gd")
 	for word in ["CombatBattle", "set_deployment", "remove(", "dismiss", "SaveStore", "FileAccess"]:
 		_check(not service.contains(word), "RecruitmentService has no %s" % word)

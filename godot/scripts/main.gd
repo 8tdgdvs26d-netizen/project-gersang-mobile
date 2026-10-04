@@ -43,15 +43,17 @@ var cargo: CharacterInventory:
 		if value != null:
 			character_stats = value.get_stats()
 			_apply_level_growth()
-## Stage 7 S01: the two Prototype Mercenaries' stats for battles (the Hero's
-## are character_stats). A minimal runtime holder only, not saved (fixed
-## Prototype values) and not the Party / Mercenary model, which Stage 8
-## replaces it with.
+## Stage 7 S01: the two Prototype Mercenaries' stats (the Hero's are
+## character_stats). A minimal runtime holder only, not the Party / Mercenary
+## model. Stage 8 P04: they no longer fight (battles take the deployed roster
+## Mercenaries) and their Character UI tabs are hidden; their v10 progression
+## / allocation is still loaded and saved unchanged until P05 maps them.
 var merc_stats := {"merc_a": CharacterStats.for_character("merc_a"), "merc_b": CharacterStats.for_character("merc_b")}
 ## C05: Level / EXP of the three fixed Prototype combat slots (saved, v9).
 var progression := ProgressionState.new()
-## Stage 8 P01.5: the player's owned Mercenaries (saved, v11). Not used by
-## combat or any UI yet; the fixed merc_a / merc_b above are separate.
+## Stage 8 P01.5: the player's owned Mercenaries (saved, v11). P04: the
+## deployed ones fight with the Hero and earn their own EXP; the fixed merc_a
+## / merc_b above are separate.
 var mercenary_roster := MercenaryRoster.new()
 ## Session-owned player money, with the same lifetime as the cargo.
 var wallet := Wallet.new()
@@ -144,6 +146,9 @@ func _ready() -> void:
 	_character_panel.party_provider = get_party_stats
 	_character_panel.progression = progression
 	_character_panel.can_open = _can_open_character_panel
+	# Stage 8 P04 (approved D3): only the Hero's page until P05 decides what
+	# becomes of the legacy Merc A / Merc B.
+	_character_panel.shown_ids = ["hero"]
 	add_child(_character_panel)
 	_character_panel.opened.connect(_on_character_panel_opened)
 	_character_panel.closed.connect(_on_character_panel_closed)
@@ -462,8 +467,9 @@ func _refresh_hub_summary() -> void:
 
 
 ## Stage 8 P02 / P03: the Mercenary Center's held count, owned list and
-## roster rows (only data each instance really has: type, id, Level, EXP,
-## points; no type stats or equipment exist yet).
+## roster rows. P04 (AC03): each row also shows the instance's own stats
+## (CharacterStats.for_mercenary, the Stage 7 formulas); equipment is not
+## open yet (Stage 9).
 func _refresh_mercenary_view() -> void:
 	var labels := []
 	var entries := []
@@ -479,6 +485,9 @@ func _mercenary_entry(mercenary: Mercenary) -> Dictionary:
 	var level := mercenary.get_level()
 	var points := mercenary.get_allocation_points()
 	var progress := "經驗 %d / %d" % [mercenary.get_exp(), ProgressionState.required_exp(level)] if level < ProgressionState.MAX_LEVEL else "經驗 已達最高等級"
+	var stats := CharacterStats.for_mercenary(mercenary)
+	var stats_line := "血量 %d　魔力 %d　力量 %d　敏捷 %d　智力 %d" % [stats.get_max_hp(), stats.get_max_mp(), stats.get_effective("str"), stats.get_effective("agi"), stats.get_effective("int")]
+	var derived_line := "物攻 %d　魔攻 %d　物防 %d　魔防 %d　間隔 %.2f秒　移速 %.1f" % [stats.get_physical_attack(), stats.get_magic_attack(), stats.get_physical_defense(), stats.get_magic_defense(), stats.get_attack_interval_ms() / 1000.0, stats.get_move_speed()]
 	return {
 		"id": mercenary.get_id(),
 		"label": RecruitmentService.label(mercenary),
@@ -486,7 +495,9 @@ func _mercenary_entry(mercenary: Mercenary) -> Dictionary:
 		"hint": RecruitmentService.HINT_TEXT.get(type, ""),
 		"progress": "%s　未分配屬性點 %d" % [progress, mercenary.get_unspent_points()],
 		"allocation": "已分配：血量 %d　力量 %d　敏捷 %d　智力 %d" % [points["hp"], points["str"], points["agi"], points["int"]],
-		"pending": "能力值、裝備：尚未開放",
+		"stats": stats_line,
+		"derived": derived_line,
+		"pending": "裝備：尚未開放",
 		"deployed": deployed,
 	}
 
@@ -632,8 +643,9 @@ func _set_world_active(active: bool) -> void:
 		monster.set_threat_active(active)
 
 
-## C05: the EXP shares of the last committed battle ({slot: {exp, level,
-## leveled}}; empty when it awarded none).
+## C05: the EXP shares of the last committed battle ({id: {exp, from_level,
+## level, leveled}} — Stage 8 P04: the Hero and roster Mercenary ids; empty
+## when it awarded none).
 func get_last_award() -> Dictionary:
 	return _last_award
 
@@ -698,9 +710,12 @@ func get_party_stats() -> Dictionary:
 ## Combat C01: LOCKED -> battlefield. The world stays exactly as LOCKED left
 ## it (player locked, groups held, nothing new can trigger) under the battle.
 func _start_combat() -> void:
-	var battle := CombatBattle.from_encounter(_encounter_session.get_context(), get_party_stats())
+	# Stage 8 P04: the Hero + the 0-3 deployed roster Mercenaries.
+	var battle := CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed())
 	if battle == null or _combat_view.is_open():
 		return
+	_combat_view.progression = progression
+	_combat_view.roster = mercenary_roster
 	print("Myrial: combat started for ", battle.encounter_id, " with ", battle.get_enemies().size(), " enemies")
 	_joystick.release()
 	_joystick.set_process_input(false)
@@ -732,7 +747,9 @@ func _on_combat_exit_requested() -> void:
 ##      (EncounterHandoff),
 ##   5. end the encounter (player unlocked where the encounter caught the player),
 ##   6. C05: EXP to the slots alive at settlement (ProgressionState; none on
-##      DEFEAT), close the battle, world input back, 7. save once.
+##      DEFEAT; Stage 8 P04: PartyProgression — the Hero's share to its slot,
+##      each surviving roster Mercenary's to its own Level / EXP), close the
+##      battle, world input back, 7. save once (the roster included).
 ## A failed save does not undo the committed result. No reward, EXP, loot,
 ## penalty or hospital happens here; a removed group's later return is
 ## scheduled by _on_group_removed (Stage 7 corrective).
@@ -750,9 +767,10 @@ func commit_battle_result(result: BattleResult) -> bool:
 	_encounter_session.start_recovery_protection()
 	_encounter_handoff.resolve_encounter(result.encounter_id, result.is_victory())
 	_encounter_session.end_resolved_encounter(result.encounter_id)
-	# C05: the battle's EXP goes to the slots alive at settlement (none on
-	# DEFEAT); part of the committed result, saved with it below.
-	_last_award = progression.apply(result)
+	# C05: the battle's EXP goes to the units alive at settlement (none on
+	# DEFEAT); part of the committed result, saved with it below. Stage 8 P04
+	# (approved D4): a failed save still does not undo it (C02).
+	_last_award = PartyProgression.apply(result, progression, mercenary_roster)
 	_apply_level_growth()
 	_close_combat()
 	var saved := save_world_position()

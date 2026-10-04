@@ -12,14 +12,22 @@ extends RefCounted
 ## claimed.
 
 enum Team { FRIEND, ENEMY }
-## C03: who the unit is (the game's party is Hero + Merc A + Merc B).
-enum Role { HERO, MERC_A, MERC_B, ENEMY }
+## C03: who the unit is (the C01-C08 fixture party is Hero + Merc A + Merc
+## B). Stage 8 P04: a deployed roster Mercenary is GUARDIAN / MAGE /
+## STRATEGIST by its type (appended: the existing values keep their numbers).
+enum Role { HERO, MERC_A, MERC_B, ENEMY, GUARDIAN, MAGE, STRATEGIST }
+## Stage 8 P04: the role of each roster Mercenary type.
+const ROLE_BY_TYPE := {"GUARDIAN": Role.GUARDIAN, "MAGE": Role.MAGE, "STRATEGIST": Role.STRATEGIST}
 
 const NO_CELL := Vector2i(-1, -1)
 
 var id := ""
 var team: Team = Team.ENEMY
 var role: Role = Role.ENEMY
+## Stage 8 P04: a roster Mercenary's own player-facing label (「守衛 #3」),
+## which tells instances of one type apart; "" for the Hero, the fixture
+## Mercenaries and enemies (their role names are used).
+var label := ""
 var is_hero: bool:
 	get:
 		return role == Role.HERO

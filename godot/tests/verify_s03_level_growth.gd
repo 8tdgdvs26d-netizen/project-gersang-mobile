@@ -207,6 +207,9 @@ func _verify_save_and_scope() -> void:
 func _verify_in_game() -> void:
 	_delete(TEST_SAVE)
 	var main := await _new_main()
+	# Stage 8 P04: the game's battle is the Hero + the deployed roster; a
+	# deployed 守衛 + 法師 stand in for Merc A / Merc B.
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE")], ["merc_1", "merc_2"])
 	var view := main.get_node("CombatView") as CombatView
 	var battle := await _locked_battle(main)
 	var f := battle.get_friends()
@@ -222,7 +225,7 @@ func _verify_in_game() -> void:
 	var stats: CharacterStats = main.character_stats
 	_check(main.progression.get_level("hero") == 2 and stats.get_growth("str") == 1 and stats.get_unspent_points() == 3 and stats.get_max_hp() == 320, "Settlement: Hero Lv2, Growth applied, 3 points, Max HP 320")
 	_check(hero.hp == 100, "11. The settled battle's Hero stays at 100 HP (no refill)")
-	_check(main.inventory.get_max_capacity() == 10 + 11 * 9 and main.merc_stats["merc_a"].get_unspent_points() == 0, "Hero backpack Capacity 109; the dead Mercs gained nothing")
+	_check(main.inventory.get_max_capacity() == 10 + 11 * 9 and main.merc_stats["merc_a"].get_unspent_points() == 0 and main.mercenary_roster.get_owned().all(func(m: Mercenary) -> bool: return m.get_level() == 1 and m.get_exp() == 0), "Hero backpack Capacity 109; the dead Mercs gained nothing")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
 	_check(int(saved["version"]) == 11 and int(saved["progression"]["hero"]["level"]) == 2 and (saved["character"]["stats"] as Dictionary).keys() == ["strength"], "Saved v9: Level 2, stats still only strength")
 	await _destroy(main)

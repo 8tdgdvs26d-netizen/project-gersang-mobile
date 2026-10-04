@@ -24,7 +24,9 @@ extends RefCounted
 ## before enemies in every tick, so an escape resolves before that tick's
 ## enemy attacks; a finished battle never changes its result.
 ##
-## C03: the friendly party is the Hero + two fixed Prototype Mercenaries.
+## C03: the friendly party is the Hero + two fixed Prototype Mercenaries
+## (the C01-C08 fixture, create()). Stage 8 P04: the game builds the Hero + the
+## 0-3 deployed roster Mercenaries instead (create_party() / from_party()).
 ## One friendly unit is selected at a time; commands go to it only and every
 ## other unit keeps its own move / target.
 ##   VICTORY      every enemy is dead
@@ -152,8 +154,9 @@ var _gesture_ready_at_ms := 0
 var _last_gesture := {}
 
 
-## C03: which friendly party a battle gets. PROTOTYPE is the game's party
-## (Hero + Merc A + Merc B; the only one the game ever builds). HERO_ONLY is
+## C03: which friendly party a battle gets. PROTOTYPE is the fixed C01-C08
+## party (Hero + Merc A + Merc B; Stage 8 P04: the game builds create_party()
+## instead, so it is a test fixture now too). HERO_ONLY is
 ## a test fixture for the C01 single-friendly rule tests: never used by the
 ## game, never saved, not a player option.
 enum PartyFixture { PROTOTYPE, HERO_ONLY }
@@ -173,16 +176,52 @@ static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYP
 	if party == PartyFixture.PROTOTYPE:
 		battle._friends.append(_friend("merc_a", CombatUnit.Role.MERC_A, CombatConfig.MERC_A_START_CELL, CombatConfig.MERC_A_SKILL, party_stats))
 		battle._friends.append(_friend("merc_b", CombatUnit.Role.MERC_B, CombatConfig.MERC_B_START_CELL, CombatConfig.MERC_B_SKILL, party_stats))
+	battle._populate(enemy_count)
+	return battle
+
+
+## Stage 8 P04: the game's battle party — the Hero (`hero_stats`; null: the
+## Prototype Hero) + the deployed roster Mercenaries in deployment order (0-3,
+## MercenaryRoster.get_deployed()). Each Mercenary is its own unit: id = its
+## instance id, stats from its own Level / allocation
+## (CharacterStats.for_mercenary), its type's role and Skill
+## (CombatConfig.MERCENARY_SKILLS), its own label, start cell
+## PARTY_START_CELLS[i]. Null when the list is not 0-3 valid instances
+## with distinct ids.
+static func create_party(enemy_count: int, hero_stats: CharacterStats, mercenaries: Array) -> CombatBattle:
+	if mercenaries.size() > CombatConfig.PARTY_START_CELLS.size():
+		return null
+	var battle := CombatBattle.new()
+	battle._friends.append(_friend("hero", CombatUnit.Role.HERO, CombatConfig.HERO_START_CELL, CombatConfig.HERO_SKILL, {"hero": hero_stats} if hero_stats != null else {}))
+	var ids := {}
+	for index in range(mercenaries.size()):
+		if not mercenaries[index] is Mercenary:
+			return null
+		var mercenary: Mercenary = mercenaries[index]
+		var stats := CharacterStats.for_mercenary(mercenary)
+		if stats == null or ids.has(mercenary.get_id()) or not CombatConfig.MERCENARY_SKILLS.has(mercenary.get_type()):
+			return null
+		ids[mercenary.get_id()] = true
+		var unit := CombatUnit.create(mercenary.get_id(), CombatUnit.Team.FRIEND, stats.get_combat_profile(), CombatConfig.PARTY_START_CELLS[index])
+		unit.role = CombatUnit.ROLE_BY_TYPE[mercenary.get_type()]
+		unit.label = RecruitmentService.label(mercenary)
+		_give_skill(unit, CombatConfig.MERCENARY_SKILLS[mercenary.get_type()], stats.get_max_mp())
+		battle._friends.append(unit)
+	battle._populate(enemy_count)
+	return battle
+
+
+## The enemies, the starting selection (the Hero) and the HP totals.
+func _populate(enemy_count: int) -> void:
 	var cells := enemy_spawn_cells(enemy_count)
 	for index in range(cells.size()):
-		battle._enemies.append(CombatUnit.create("enemy_%02d" % (index + 1), CombatUnit.Team.ENEMY, CombatConfig.ENEMY, cells[index]))
-	battle._selected = hero
-	battle._selection = [hero]
-	for unit in battle._friends:
-		battle._friend_hp_total += unit.max_hp
-	for unit in battle._enemies:
-		battle._enemy_hp_total += unit.max_hp
-	return battle
+		_enemies.append(CombatUnit.create("enemy_%02d" % (index + 1), CombatUnit.Team.ENEMY, CombatConfig.ENEMY, cells[index]))
+	_selected = _friends[0]
+	_selection = [_friends[0]]
+	for unit in _friends:
+		_friend_hp_total += unit.max_hp
+	for unit in _enemies:
+		_enemy_hp_total += unit.max_hp
 
 
 ## S01: one friendly unit built from its character's stats.
@@ -212,6 +251,20 @@ static func from_encounter(context: EncounterContext, party_stats: Dictionary = 
 	if context == null or context.get_planned_combat_enemy_count() <= 0:
 		return null
 	var battle := create(context.get_planned_combat_enemy_count(), PartyFixture.PROTOTYPE, party_stats)
+	battle.encounter_id = context.encounter_id
+	battle.group_monster_ids = context.group_monster_ids.duplicate()
+	return battle
+
+
+## Stage 8 P04: the game's battle for a LOCKED encounter (as from_encounter)
+## with the Hero + the deployed roster Mercenaries (create_party). Null when
+## the context or the party is invalid.
+static func from_party(context: EncounterContext, hero_stats: CharacterStats, mercenaries: Array) -> CombatBattle:
+	if context == null or context.get_planned_combat_enemy_count() <= 0:
+		return null
+	var battle := create_party(context.get_planned_combat_enemy_count(), hero_stats, mercenaries)
+	if battle == null:
+		return null
 	battle.encounter_id = context.encounter_id
 	battle.group_monster_ids = context.group_monster_ids.duplicate()
 	return battle
@@ -944,6 +997,15 @@ func _resolve_skill(unit: CombatUnit) -> void:
 					hits.append(enemy)
 			for enemy in hits:
 				resolve_damage(unit, enemy, damage, DamageKind.MAGIC)
+		"ice_field":
+			# Stage 8 P04 冰場 (Prototype): the C06 Slow on every alive enemy
+			# on the locked AoE cells (refreshed, never stacked); no damage.
+			var cells := aoe_cells(center)
+			_last_aoe = {"cells": cells, "at_ms": _tick_end_ms, "damage": 0, "kind": "ice_field"}
+			for enemy in _enemies:
+				if enemy.alive and cells.has(enemy.cell):
+					enemy.slow_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
+					enemy.slowed = true
 	_end_skill(unit, true)
 	skill_resolved.emit(unit)
 

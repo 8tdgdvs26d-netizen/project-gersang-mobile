@@ -19,7 +19,8 @@ var group_monster_ids: Array[String] = []
 ## C05: EXP earned by enemies actually killed in this battle.
 var exp_pool := 0
 ## C05: ids of the friendly units alive at settlement ("hero", "merc_a",
-## "merc_b").
+## "merc_b"; Stage 8 P04: "hero" + the deployed roster Mercenaries' instance
+## ids, settled by PartyProgression).
 var survivor_ids: Array[String] = []
 var _committed := false
 

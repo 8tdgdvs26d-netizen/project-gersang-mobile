@@ -458,7 +458,7 @@ func get_roster_row_texts(mercenary_id: String) -> Dictionary:
 		return {}
 	var row: Node = _roster_rows[mercenary_id]
 	var texts := {}
-	for name in ["TitleLabel", "HintLabel", "ProgressLabel", "AllocationLabel", "PendingLabel"]:
+	for name in ["TitleLabel", "HintLabel", "ProgressLabel", "AllocationLabel", "StatsLabel", "DerivedLabel", "PendingLabel"]:
 		texts[name] = (row.find_child(name, true, false) as Label).text
 	texts["deploy_button"] = get_deploy_button(mercenary_id).text
 	return texts
@@ -779,18 +779,33 @@ func _rebuild_roster_rows(entries: Array) -> void:
 		if entry["deployed"]:
 			title.add_theme_color_override("font_color", Color(0.88, 0.75, 0.36))
 		info.add_child(title)
-		for line in [["HintLabel", "hint"], ["ProgressLabel", "progress"], ["AllocationLabel", "allocation"], ["PendingLabel", "pending"]]:
+		# P04 (P03 AC03): the instance's stats and derived values follow its
+		# points.
+		for line in [["HintLabel", "hint"], ["ProgressLabel", "progress"], ["AllocationLabel", "allocation"], ["StatsLabel", "stats"], ["DerivedLabel", "derived"]]:
 			var label := _make_label(line[0], entry.get(line[1], ""), DETAIL_FONT_SIZE - 4)
 			label.clip_text = true
 			label.custom_minimum_size = Vector2(ROSTER_ROW_INFO_WIDTH, 0)
 			info.add_child(label)
 		row.add_child(info)
+		# The buttons, with the not-open-yet equipment note under them (keeps
+		# five rows inside the 720 x 1280 canvas).
+		var side := VBoxContainer.new()
+		side.name = "Side"
+		side.add_theme_constant_override("separation", 0)
+		var buttons := HBoxContainer.new()
+		buttons.name = "Buttons"
+		buttons.add_theme_constant_override("separation", 12)
 		var deploy := _make_button("DeployButton", UNDEPLOY_TEXT if entry["deployed"] else DEPLOY_TEXT, _on_deploy_pressed.bind(id, not entry["deployed"]))
 		deploy.custom_minimum_size = ROSTER_BUTTON_SIZE
-		row.add_child(deploy)
+		buttons.add_child(deploy)
 		var dismiss := _make_button("DismissButton", DISMISS_TEXT, _on_dismiss_pressed.bind(id))
 		dismiss.custom_minimum_size = DISMISS_BUTTON_SIZE
-		row.add_child(dismiss)
+		buttons.add_child(dismiss)
+		side.add_child(buttons)
+		var pending := _make_label("PendingLabel", entry.get("pending", ""), DETAIL_FONT_SIZE - 4)
+		pending.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		side.add_child(pending)
+		row.add_child(side)
 		_roster_box.add_child(row)
 		_roster_rows[id] = row
 		_roster_entries[id] = entry

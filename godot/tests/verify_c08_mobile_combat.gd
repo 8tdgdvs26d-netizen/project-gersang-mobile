@@ -53,8 +53,14 @@ func _verify_static() -> void:
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/combat_camera.gd"]:
 		var code := _code_only(path).to_lower()
 		for word in ["box_select", "pinch", "zoom", "minimap", "formation", "recruit", "auto_battle", "save_store", "randi", "randf"]:
+			# Stage 8 P04 (approved): combat_battle names a deployed Mercenary with
+			# RecruitmentService.label (「守衛 #1」); the check narrows to "no
+			# recruiting".
+			if word == "recruit" and path.get_file() == "combat_battle.gd":
+				_check(not code.contains("recruit(") and not code.contains("recruitmentservice.price"), "%s has no %s" % [path.get_file(), word])
+				continue
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
-	_check(CombatView.MAX_PORTRAITS == 4 and CombatView.DRAG_THRESHOLD == 12.0, "Room for 4 portraits (party of 3 now); 12 px drag threshold")
+	_check(CombatView.MAX_PORTRAITS == 4 and CombatView.DRAG_THRESHOLD == 12.0, "Room for 4 portraits (Stage 8 P04: Hero + up to 3); 12 px drag threshold")
 	_check(CombatConfig.HERO["move_speed"] == 4.0 and CombatConfig.ENEMY["attack_damage"] == 4 and CombatConfig.SKILL_MP_COST == 25 and CombatConfig.GESTURE_MP_COST == 50, "Combat values unchanged")
 	_sections_done.append("static")
 
@@ -678,6 +684,9 @@ func _verify_in_game() -> void:
 	main.save_path = TEST_SAVE
 	main.time_source = TimeSource.fixed(T0)
 	root.add_child(main)
+	# Stage 8 P04: the game's battle is the Hero + the deployed roster; a
+	# deployed 守衛 #1 + 法師 #2 stand in for Merc A / Merc B.
+	main.mercenary_roster = MercenaryRoster.build([Mercenary.create("merc_1", "GUARDIAN"), Mercenary.create("merc_2", "MAGE")], ["merc_1", "merc_2"])
 	for frame in range(4):
 		await physics_frame
 	(main.get_node("Actors/Player") as Player).global_position = PASSIVE_ONLY
@@ -772,7 +781,7 @@ func _verify_in_game() -> void:
 	(view.get_node("InfoButton1") as Button).pressed.emit()
 	await process_frame
 	var info := (view.get_node("InfoPanel/InfoText") as Label).text
-	_check((view.get_node("InfoPanel") as Control).visible and info.contains("傭兵A") and info.contains("血量 200 / 200") and info.contains("魔力 100 / 100") and info.contains("等級 1") and info.contains("經驗 0") and info.contains("攻擊 15") and info.contains("攻擊距離 1 格") and info.contains("守護"), "ⓘ: name, HP, MP, Level, EXP, combat values, Skill (%s)" % info)
+	_check((view.get_node("InfoPanel") as Control).visible and info.contains("守衛 #1") and info.contains("血量 200 / 200") and info.contains("魔力 100 / 100") and info.contains("等級 1") and info.contains("經驗 0") and info.contains("攻擊 15") and info.contains("攻擊距離 1 格") and info.contains("守護"), "ⓘ: name (Stage 8 P04: the deployed 守衛 #1's label), HP, MP, Level, EXP, combat values, Skill (%s)" % info)
 	_check(battle.get_selection() == [hero, merc_a, merc_b], "ⓘ does not change the selection")
 	texts.append(info)
 	(view.get_node("InfoPanel/InfoClose") as Button).pressed.emit()

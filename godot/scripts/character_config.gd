@@ -21,6 +21,13 @@ const PROTOTYPE_CHARACTERS := ["hero", "merc_a", "merc_b"]
 ## from each character's approved combat role (Merc A guards, Merc B casts),
 ## NOT permanent Canonical names.
 const DISPLAY_NAMES := {"hero": "主角", "merc_a": "傭兵A（守護）", "merc_b": "傭兵B（術法）"}
+## Stage 8 P04: the existing character profile (the BASE / COMBAT_COMPAT /
+## GROWTH_PER_LEVEL key) a roster Mercenary type uses — one source of values,
+## no copy. GUARDIAN uses merc_a and MAGE uses merc_b (approved). STRATEGIST
+## uses merc_b: PROTOTYPE placeholder (approved P04 S1: the Strategist borrows
+## the Mage's base stats, growth and Basic Attack until its own are designed),
+## not balance.
+const MERCENARY_PROFILE := {"GUARDIAN": "merc_a", "MAGE": "merc_b", "STRATEGIST": "merc_b"}
 
 ## Base Stats. HP / MP are the C01-C08 values (unchanged); STR / AGI / INT
 ## are the approved S01 placeholders (10 each; STR 10 is the existing
