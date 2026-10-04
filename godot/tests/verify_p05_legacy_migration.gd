@@ -311,6 +311,8 @@ func _verify_game_notice_and_claim() -> void:
 	await process_frame
 	var texts := hub.get_pending_texts()
 	_check(texts["title"] == "暫存傳承傭兵" and texts["rows"] == {"merc_b": "法師（傳承）　Lv.2"} and texts["hint"] == "傭兵人數已達上限，請先解僱一名傭兵" and hub.get_claim_button("merc_b").disabled, "AC22 Full roster: 暫存傳承傭兵 法師（傳承） Lv.2, 領取 disabled, hint")
+	var canvas := Rect2(0.0, 0.0, 720.0, 1280.0)
+	_check(canvas.encloses((hub.get_node("Center/Content") as Control).get_global_rect()) and canvas.encloses(hub.get_claim_button("merc_b").get_global_rect()), "AC22 5 owned + the pending section fit 720 x 1280 (the list scrolls) (%s)" % str((hub.get_node("Center/Content") as Control).get_global_rect()))
 	_check(hub.get_roster_ids().has("merc_a") and hub.get_roster_row_texts("merc_a")["TitleLabel"].begins_with("守衛（傳承）　Lv.3") and not hub.get_roster_ids().has("merc_b"), "守衛（傳承） in 我的傭兵; the pending one is not a roster row")
 	hub.get_claim_button("merc_b").pressed.emit()
 	_check(main.mercenary_roster.get_pending_mercenary("merc_b") != null, "A disabled 領取 claims nothing")

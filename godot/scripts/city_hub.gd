@@ -92,7 +92,7 @@ const CLAIM_SUCCESS_TEXT := "已領取%s"
 const CLAIM_SAVE_FAILED_TEXT := "無法儲存，領取已取消"
 ## Stage 8 P05: the roster list scrolls past this height (five rows fit
 ## without scrolling; the pending rows may push it past).
-const ROSTER_SCROLL_MAX_HEIGHT := 780.0
+const ROSTER_SCROLL_MAX_HEIGHT := 748.0
 const PARTY_GENERIC_FAILURE := "操作失敗"
 const WAREHOUSE_NOTE := "開發原型：每次存入或取出 1 件；倉庫只存物品"
 const WAREHOUSE_LOCAL_STATUS := "%s 城倉庫・本地倉庫（每次存入或取出 1 件）"
