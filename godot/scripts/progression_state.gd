@@ -80,6 +80,12 @@ static func required_exp(level: int) -> int:
 	return EXP_BASE + EXP_STEP * (maxi(level, START_LEVEL) - 1)
 
 
+## Stage 8 P01: the same curve for a Mercenary instance's own Level / EXP
+## (Mercenary.add_exp); see _gain().
+static func advance(level: int, held: int, amount: int) -> Array:
+	return _gain(level, held, amount)
+
+
 ## [level, exp] after gaining `amount` EXP at `level` with `exp`: Level by
 ## Level, each consuming its own requirement; nothing is kept at the cap.
 static func _gain(level: int, held: int, amount: int) -> Array:
