@@ -203,6 +203,18 @@ func _verify_validation() -> void:
 	for data in [null, {}, {"id": "v", "type": "MAGE", "level": 1, "exp": 0}, {"id": "v", "type": "MAGE", "level": 1, "exp": 0, "allocation": zero, "extra": 1}]:
 		_check(Mercenary.from_dict(data) == null, "Malformed dictionary refused")
 	_check(MercenaryRoster.build([_merc("a", "MAGE"), "b"]) == null and MercenaryRoster.build([null]) == null, "build: a non-Mercenary entry refused")
+	# Codex review: overflow and anchoring.
+	var huge := 9223372036854775807
+	for bad in ["merc_1\n", "merc_1\n\n", "\nmerc_1", "merc_1 "]:
+		_check(Mercenary.create(bad, "MAGE") == null, "An id with a trailing / leading newline or space is refused (%s)" % bad.c_escape())
+	_check(Mercenary.create("v", "MAGE", 3, 0, {"hp": huge, "str": huge, "agi": huge, "int": huge}) == null and Mercenary.create("v", "MAGE", 3, 0, {"hp": huge, "str": huge, "agi": 2, "int": 0}) == null, "Huge allocation values refused (no overflow past the earned points)")
+	var holder := Mercenary.create("v", "MAGE", 2, 100)
+	_check(not holder.add_exp(huge) and not holder.add_exp(ProgressionState.MAX_EXP + 1) and holder.get_level() == 2 and holder.get_exp() == 100, "A huge EXP amount is refused, nothing changes")
+	_check(holder.add_exp(ProgressionState.MAX_EXP) and holder.get_level() == 100 and holder.get_exp() == 0, "MAX_EXP itself is accepted (to the cap)")
+	var spender := Mercenary.create("w", "MAGE", 2)
+	_check(not spender.allocate({"hp": huge, "str": huge, "agi": 3}) and spender.get_allocation_points() == CharacterStats.zero_allocation() and spender.get_unspent_points() == 3, "Pending points that would wrap the total are refused")
+	_check(not spender.allocate({"hp": 2, "str": 2}) and spender.get_unspent_points() == 3, "Each amount fits but the total (4) is over the unspent 3: refused")
+	_check(Mercenary.create("v", "MAGE", 2, 0, {"hp": 2, "str": 2, "agi": 0, "int": 0}) == null, "Each value within the earned 3 but the sum (4) over it: refused")
 	_sections_done.append("validation")
 
 

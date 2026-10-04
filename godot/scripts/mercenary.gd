@@ -17,8 +17,9 @@ extends RefCounted
 const TYPES := ["GUARDIAN", "MAGE", "STRATEGIST"]
 ## Reserved: the Hero is never a Mercenary.
 const HERO_ID := "hero"
-## Ids: lowercase letters, digits and _, 1-32 characters.
-const ID_PATTERN := "^[a-z0-9_]{1,32}$"
+## Ids: lowercase letters, digits and _, 1-32 characters (\A / \z: the
+## whole string, no trailing newline).
+const ID_PATTERN := "\\A[a-z0-9_]{1,32}\\z"
 const KEYS := ["id", "type", "level", "exp", "allocation"]
 
 var _id := ""
@@ -103,9 +104,10 @@ func get_unspent_points() -> int:
 
 
 ## Gains `amount` EXP on the Stage 7 curve (several Levels at once, nothing
-## kept at the cap). Refused for anything but a whole amount >= 0.
+## kept at the cap). Refused for anything but a whole amount from 0 to
+## MAX_EXP (so held + amount can never overflow).
 func add_exp(amount: Variant) -> bool:
-	if typeof(amount) != TYPE_INT or amount < 0:
+	if typeof(amount) != TYPE_INT or amount < 0 or amount > ProgressionState.MAX_EXP:
 		return false
 	var after := ProgressionState.advance(_level, _exp, amount)
 	_level = after[0]
@@ -115,12 +117,14 @@ func add_exp(amount: Variant) -> bool:
 
 ## Confirms {stat: points} at once, as CharacterStats.confirm_allocation:
 ## refused as a whole unless every stat is allocatable, every amount a whole
-## number >= 0, at least one point and no more than the unspent points.
+## number >= 0, at least one point and no more than the unspent points
+## (each amount is bounded first, so the total can never overflow).
 func allocate(pending: Dictionary) -> bool:
 	var total := 0
+	var unspent := get_unspent_points()
 	for stat in pending:
 		var points: Variant = pending[stat]
-		if not CharacterConfig.ALLOCATABLE.has(stat) or typeof(points) != TYPE_INT or points < 0:
+		if not CharacterConfig.ALLOCATABLE.has(stat) or typeof(points) != TYPE_INT or points < 0 or points > unspent:
 			return false
 		total += points
 	if total <= 0 or total > get_unspent_points():
@@ -147,13 +151,15 @@ static func _valid_allocation(points: Variant, level: int) -> Dictionary:
 		return {}
 	var result := {}
 	var spent := 0
+	var earned := CharacterStats.earned_points_for(level)
 	for stat in CharacterConfig.ALLOCATABLE:
 		var value: Variant = _whole(points[stat])
-		if value == null or value < 0:
+		# Each value is bounded before the sum, so the sum cannot overflow.
+		if value == null or value < 0 or value > earned:
 			return {}
 		result[stat] = value
 		spent += value
-	if spent > CharacterStats.earned_points_for(level):
+	if spent > earned:
 		return {}
 	return result
 
