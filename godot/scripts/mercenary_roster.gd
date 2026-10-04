@@ -205,6 +205,33 @@ static func from_dict(data: Variant) -> MercenaryRoster:
 	return roster
 
 
+## Stage 8 P02: an exact copy of the whole state for a rollback (owned
+## instances, deployment, next_serial and every id ever owned this session).
+func get_snapshot() -> Dictionary:
+	return {"state": to_dict(), "used_ids": _used_ids.keys()}
+
+
+## Stage 8 P02: puts back a get_snapshot() exactly (a refused transaction
+## leaves no trace, next_serial included). False, changing nothing, for
+## anything that is not a valid snapshot.
+func restore_snapshot(snapshot: Dictionary) -> bool:
+	if not snapshot.has("state") or typeof(snapshot.get("used_ids")) != TYPE_ARRAY:
+		return false
+	var restored := from_dict(snapshot["state"])
+	if restored == null:
+		return false
+	var used := {}
+	for id in snapshot["used_ids"]:
+		used[id] = true
+	if not used.has_all(restored._used_ids.keys()):
+		return false
+	_owned = restored._owned
+	_deployed = restored._deployed
+	_next_serial = restored._next_serial
+	_used_ids = used
+	return true
+
+
 ## The serial of an issued-form id ("merc_<n>"), or 0 for any other id.
 static func issued_serial(id: String) -> int:
 	var pattern := RegEx.new()

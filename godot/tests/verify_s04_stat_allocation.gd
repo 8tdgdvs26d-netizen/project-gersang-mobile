@@ -203,8 +203,12 @@ func _verify_save_and_scope() -> void:
 	var code := ""
 	for path in ["res://scripts/character_panel.gd", "res://scripts/character_stats.gd", "res://scripts/main.gd"]:
 		code += _code_only(path).to_lower()
-	for word in ["recruit", "dismiss", "mercenary_center", "equip_slot", "weapon", "armor", "hospital", "reset_stat", "merc_c", "crit", "dodge"]:
+	for word in ["dismiss", "mercenary_center", "equip_slot", "weapon", "armor", "hospital", "reset_stat", "merc_c", "crit", "dodge"]:
 		_check(not code.contains(word), "AC28 No %s" % word)
+	# Stage 8 P02 brought recruitment into main.gd (the Mercenary Center);
+	# the Character UI and the stats still know nothing about it.
+	var character_code := (_code_only("res://scripts/character_panel.gd") + _code_only("res://scripts/character_stats.gd")).to_lower()
+	_check(not character_code.contains("recruit"), "AC28 No recruit in the Character UI / stats")
 	_sections_done.append("save_scope")
 
 
