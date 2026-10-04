@@ -67,7 +67,7 @@ func _verify_static() -> void:
 	_check(EncounterSession.CHALLENGE_TEXT == "挑戰", "Challenge button text 挑戰")
 	_check(EncounterSession.JOIN_WINDOW_MS == 5000 and EncounterHandoff.MAX_GROUPS == 3 and EncounterContext.PLANNED_COMBAT_ENEMIES == {1: 10, 2: 15, 3: 20}, "Join window 5 s, at most 3 groups, sizes 10 / 15 / 20")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()
-	_check(not save_code.contains("disposition") and not save_code.contains("passive") and not save_code.contains("challenge") and SaveStore.VERSION == 10, "Save version 10; dispositions and challenges are never saved")
+	_check(not save_code.contains("disposition") and not save_code.contains("passive") and not save_code.contains("challenge") and SaveStore.VERSION == 11, "Save version 11; dispositions and challenges are never saved")
 	for path in ["res://scripts/encounter_session.gd", "res://scripts/encounter_handoff.gd", "res://scripts/world_monster.gd", "res://scripts/world_layout.gd"]:
 		var code := _code_only(path).to_lower()
 		for word in ["hostile", "neutral", "faction", "reputation", "battle", "damage", "health", "reward", "loot", "retreat", "cooldown", "randi", "randf"]:
@@ -351,7 +351,7 @@ func _verify_world_exit_and_reload() -> void:
 	_check(main.save_world_position(), "Saved during a challenged encounter")
 	var saved := FileAccess.get_file_as_string(TEST_SAVE)
 	var text := saved.to_lower()
-	_check(int(JSON.parse_string(text)["version"]) == 10 and not text.contains("disposition") and not text.contains("passive") and not text.contains("challenge") and not text.contains("encounter"), "Save version 10; nothing about dispositions or the challenge")
+	_check(int(JSON.parse_string(text)["version"]) == 11 and not text.contains("disposition") and not text.contains("passive") and not text.contains("challenge") and not text.contains("encounter"), "Save version 11; nothing about dispositions or the challenge")
 	player.global_position = CITY_A
 	await _settle()
 	_check(main.try_enter_city(), "Entered City A during JOINING")

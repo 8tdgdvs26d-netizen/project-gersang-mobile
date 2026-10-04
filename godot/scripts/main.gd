@@ -50,6 +50,9 @@ var cargo: CharacterInventory:
 var merc_stats := {"merc_a": CharacterStats.for_character("merc_a"), "merc_b": CharacterStats.for_character("merc_b")}
 ## C05: Level / EXP of the three fixed Prototype combat slots (saved, v9).
 var progression := ProgressionState.new()
+## Stage 8 P01.5: the player's owned Mercenaries (saved, v11). Not used by
+## combat or any UI yet; the fixed merc_a / merc_b above are separate.
+var mercenary_roster := MercenaryRoster.new()
 ## Session-owned player money, with the same lifetime as the cargo.
 var wallet := Wallet.new()
 ## City market state (reference price, stock and target stock per city x good).
@@ -364,6 +367,7 @@ func _load_saved_session() -> void:
 		market_recovery = loaded["market_recovery"]
 		cost_ledger = loaded["cost_ledger"]
 		progression = loaded["progression"]
+		mercenary_roster = loaded["mercenaries"]
 		# S05: Level growth first, then the saved confirmed allocation
 		# (replaced, never added to).
 		_apply_level_growth()
@@ -397,7 +401,7 @@ func _save_session() -> void:
 func _persist() -> bool:
 	if location.is_in_world() and is_node_ready() and not location.set_world_position(_player.global_position):
 		return false
-	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats())
+	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats(), mercenary_roster)
 	if saved:
 		_saved_world_position = location.get_world_position()
 	return saved

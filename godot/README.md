@@ -47,7 +47,24 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 8 P01: Party & Mercenary Data Foundation. Save version stays 10 (unchanged schema). Runtime
+Stage 8 P01.5: Mercenary Roster Save Persistence. Save version 11.
+
+- Save v11 = v10 + `mercenaries`: `MercenaryRoster.to_dict()` = `{owned: [{id, type, level, exp,
+  allocation: {hp, str, agi, int}}], deployed: [ids], next_serial}`. Nothing derived is saved
+- ids: `next_serial` is the high-water mark of the `merc_<n>` ids `create_mercenary()` issues
+  (every issued one is below it), so a removed id is never issued again after a restart
+- `MercenaryRoster.from_dict()` validates strictly (owned 0-5 valid instances, unique ids;
+  deployed 0-3 owned ids, none twice; next_serial 1..2^53 and above every owned `merc_<n>`);
+  anything malformed rejects the whole save (the existing policy). `SaveStore.save()` refuses to
+  write a roster that would not load back
+- v1-v10 saves load with an empty roster (next_serial 1); the fixed Stage 7 merc_a / merc_b
+  progression and allocation stay in their own sections, unconverted (Stage 8 P05)
+- `main.mercenary_roster` is saved and restored with the session; nothing uses it in gameplay yet
+  (P02 recruitment; `from_dict(to_dict())` gives P02 an exact rollback snapshot)
+- tests: `tests/verify_p015_mercenary_save.gd`; every test that pinned Save v10 now expects v11
+  (unknown-future probes moved to v12; old-version fixtures drop `mercenaries`)
+
+Previous: Stage 8 P01: Party & Mercenary Data Foundation. Save version stayed 10. Runtime
 data only: nothing saved, nothing wired to `main`, combat or any UI; the Stage 7 fixed party
 (Hero + Merc A + Merc B) is untouched.
 

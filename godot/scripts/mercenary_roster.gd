@@ -16,11 +16,21 @@ extends RefCounted
 ## that was ever owned here is never accepted or issued again, even after
 ## remove(). So an id is stable, unique and tied to neither type nor
 ## position. Every change is all-or-nothing: a refused call changes nothing.
+## Stage 8 P01.5 (Save v11): to_dict() / from_dict() keep the owned instances,
+## the deployment and the serial high-water mark (next_serial), so an issued id
+## is never issued again after a restart: every "merc_<n>" ever issued has
+## n < next_serial. from_dict() is strict (nothing repaired) and also refuses
+## an owned "merc_<n>" at or above next_serial (a future id collision).
 
 const MAX_OWNED := 5
 const MAX_DEPLOYED := 3
 const MAX_PARTY := 1 + MAX_DEPLOYED
 const ID_PREFIX := "merc_"
+const KEYS := ["owned", "deployed", "next_serial"]
+## The ids create_mercenary() issues: merc_ + a serial without leading zeros.
+const ISSUED_ID_PATTERN := "\\Amerc_([1-9][0-9]{0,15})\\z"
+## Upper bound of a saved next_serial: 2^53, the largest exact JSON integer.
+const MAX_SERIAL := 9007199254740992
 
 var _owned: Array[Mercenary] = []
 var _deployed: Array[String] = []
@@ -60,6 +70,10 @@ func add(mercenary: Mercenary) -> bool:
 		return false
 	_owned.append(mercenary)
 	_used_ids[mercenary.get_id()] = true
+	# P01.5: an issued-form id given from outside moves the high-water mark
+	# past it, so next_serial stays above every owned "merc_<n>" (the saved
+	# roster always validates; the issuer never reaches it).
+	_next_serial = maxi(_next_serial, issued_serial(mercenary.get_id()) + 1)
 	return true
 
 
@@ -131,6 +145,58 @@ func get_party_ids() -> Array[String]:
 	var ids: Array[String] = [Mercenary.HERO_ID]
 	ids.append_array(_deployed)
 	return ids
+
+
+## The next serial create_mercenary() may issue (every issued one is below).
+func get_next_serial() -> int:
+	return _next_serial
+
+
+## The persistent state: {owned: [Mercenary.to_dict()], deployed: [ids],
+## next_serial}. Nothing derived is included.
+func to_dict() -> Dictionary:
+	var owned := []
+	for mercenary in _owned:
+		owned.append(mercenary.to_dict())
+	return {"owned": owned, "deployed": _deployed.duplicate(), "next_serial": _next_serial}
+
+
+## A validated roster from to_dict() data (JSON numbers accepted), or null:
+## exactly KEYS; owned 0..MAX_OWNED valid instances (Mercenary.from_dict),
+## ids unique; deployed 0..MAX_DEPLOYED owned ids, none twice; next_serial a
+## whole number from 1 to MAX_SERIAL above every owned issued-form id.
+static func from_dict(data: Variant) -> MercenaryRoster:
+	if typeof(data) != TYPE_DICTIONARY or data.size() != KEYS.size() or not data.has_all(KEYS):
+		return null
+	if typeof(data["owned"]) != TYPE_ARRAY or typeof(data["deployed"]) != TYPE_ARRAY:
+		return null
+	var serial: Variant = data["next_serial"]
+	if typeof(serial) == TYPE_FLOAT and is_finite(serial) and serial == floorf(serial) and absf(serial) <= MAX_SERIAL:
+		serial = int(serial)
+	if typeof(serial) != TYPE_INT or serial < 1 or serial > MAX_SERIAL:
+		return null
+	var mercenaries := []
+	for entry in data["owned"]:
+		var mercenary := Mercenary.from_dict(entry)
+		if mercenary == null or issued_serial(mercenary.get_id()) >= serial:
+			return null
+		mercenaries.append(mercenary)
+	for id in data["deployed"]:
+		if typeof(id) != TYPE_STRING:
+			return null
+	var roster := build(mercenaries, data["deployed"])
+	if roster == null:
+		return null
+	roster._next_serial = serial
+	return roster
+
+
+## The serial of an issued-form id ("merc_<n>"), or 0 for any other id.
+static func issued_serial(id: String) -> int:
+	var pattern := RegEx.new()
+	pattern.compile(ISSUED_ID_PATTERN)
+	var found := pattern.search(id)
+	return int(found.get_string(1)) if found != null else 0
 
 
 func _issue_id() -> String:

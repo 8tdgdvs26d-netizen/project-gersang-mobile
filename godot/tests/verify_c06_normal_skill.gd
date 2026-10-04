@@ -55,7 +55,7 @@ func _verify_static() -> void:
 	_check(battle.get_enemies().all(func(u: CombatUnit) -> bool: return u.skill.is_empty() and u.mp == 0 and battle.get_skill_readiness(u) == CombatBattle.SkillReadiness.UNAVAILABLE), "Enemies have no Skill and no MP")
 	var again := CombatBattle.create(10)
 	_check(again.get_friends()[1].mp == 100, "MP never carries over: a new battle starts full")
-	_check(SaveStore.VERSION == 10 and SaveStore.V9_KEYS.size() == 9, "Save v10 (S05 adds only the allocation; nothing from this WP)")
+	_check(SaveStore.VERSION == 11 and SaveStore.V9_KEYS.size() == 9, "Save v11 (S05 adds only the allocation; nothing from this WP)")
 	for path in ["res://scripts/save_store.gd", "res://scripts/progression_state.gd", "res://scripts/main.gd", "res://scripts/battle_result.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("skill") and not code.contains("guard_") and not code.contains("slow"), "%s knows nothing about Skills" % path.get_file())

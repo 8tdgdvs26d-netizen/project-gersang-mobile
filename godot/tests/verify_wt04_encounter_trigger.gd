@@ -65,7 +65,7 @@ func _verify_static() -> void:
 	_check(not monster.contains("EncounterContext") and not monster.contains("EncounterHandoff") and not monster.to_lower().contains("encounter"), "The monster knows nothing about encounters (only a hold)")
 	for unrelated in ["trade_service", "warehouse_service", "market_state", "market_rules", "transport_service", "save_store", "city_hub", "player_location", "trade_cost_ledger"]:
 		_check(not _code_only("res://scripts/%s.gd" % unrelated).to_lower().contains("encounter"), "No encounter logic in %s" % unrelated)
-	_check(SaveStore.VERSION == 10, "No save schema change (still version 10 (S05))")
+	_check(SaveStore.VERSION == 11, "No save schema change (still version 11 (P01.5))")
 	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
 	_check(scene.count("[node name=\"PrototypeMonster\"") == 1 and scene.count("encounter_handoff.gd") == 1 and scene.count("[node name=\"EncounterHandoff\" type=\"Node\"") == 1, "One monster, one handoff node (no UI)")
 	_sections_done.append("static")
@@ -314,7 +314,7 @@ func _verify_save() -> void:
 	await _settle()
 	_check(_handoff(main).has_pending_encounter() and main.save_world_position(), "Exact world position saves while pending")
 	var text := FileAccess.get_file_as_string(TEST_SAVE)
-	_check(int(JSON.parse_string(text)["version"]) == 10 and not text.to_lower().contains("encounter") and not text.to_lower().contains("monster"), "Save version 10; no encounter or monster data saved")
+	_check(int(JSON.parse_string(text)["version"]) == 11 and not text.to_lower().contains("encounter") and not text.to_lower().contains("monster"), "Save version 11; no encounter or monster data saved")
 	await _destroy(main)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_single_group(main)

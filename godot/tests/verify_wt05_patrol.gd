@@ -75,7 +75,7 @@ func _verify_static() -> void:
 	for word in ["randi", "randf", "RandomNumberGenerator", "randomize", "Navigation", "AStar", "spawn"]:
 		_check(not monster.contains(word), "No %s in the monster / layout" % word)
 	_check(not _code_only("res://scripts/save_store.gd").to_lower().contains("patrol"), "The save format knows nothing about patrol")
-	_check(SaveStore.VERSION == 10, "No save schema change (still version 10 (S05))")
+	_check(SaveStore.VERSION == 11, "No save schema change (still version 11 (P01.5))")
 	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
 	_check(scene.count("world_monster.tscn") == 1 and scene.count("[node name=\"PrototypeMonster\"") == 1, "Exactly one monster in the main scene")
 	_sections_done.append("static")
@@ -317,7 +317,7 @@ func _verify_reload() -> void:
 	player.global_position = Vector2(1500.5, 2500.25)
 	_check(main.save_world_position(), "Exact world position saves")
 	var text := FileAccess.get_file_as_string(TEST_SAVE)
-	_check(int(JSON.parse_string(text)["version"]) == 10 and not text.to_lower().contains("patrol") and not text.to_lower().contains("monster"), "Save version 10; nothing about patrol or the monster")
+	_check(int(JSON.parse_string(text)["version"]) == 11 and not text.to_lower().contains("patrol") and not text.to_lower().contains("monster"), "Save version 11; nothing about patrol or the monster")
 	await _destroy(main)
 	var reference := await _patrol_track("", 200)
 	main = (load("res://scenes/main.tscn") as PackedScene).instantiate()

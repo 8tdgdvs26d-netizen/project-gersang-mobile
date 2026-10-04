@@ -186,7 +186,7 @@ func _verify_save_and_scope() -> void:
 	var progression := ProgressionState.from_dict({"hero": {"level": 4, "exp": 120}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 100, "exp": 0}})
 	_check(progression != null and progression.get_level("merc_b") == 100, "Saved Levels up to 100 load")
 	var data := SaveStore.serialize(Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression)
-	_check(SaveStore.VERSION == 10 and data["version"] == 10 and data["progression"] == {"hero": {"level": 4, "exp": 120}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 100, "exp": 0}}, "17. Save v9: progression still exactly {level, exp} per slot")
+	_check(SaveStore.VERSION == 11 and data["version"] == 11 and data["progression"] == {"hero": {"level": 4, "exp": 120}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 100, "exp": 0}}, "17. Save v9: progression still exactly {level, exp} per slot")
 	_check(data["character"]["stats"] == {"strength": 10} and SaveStore.STATS_KEYS == ["strength"], "17. No Growth / Stat Points written")
 	# A C05 save banked EXP at the Lv2 ceiling: it loads, carried through the S03 curve.
 	var legacy := ProgressionState.from_dict({"hero": {"level": 2, "exp": 400}, "merc_a": {"level": 2, "exp": 149}, "merc_b": {"level": 1, "exp": 99}})
@@ -224,7 +224,7 @@ func _verify_in_game() -> void:
 	_check(hero.hp == 100, "11. The settled battle's Hero stays at 100 HP (no refill)")
 	_check(main.inventory.get_max_capacity() == 10 + 11 * 9 and main.merc_stats["merc_a"].get_unspent_points() == 0, "Hero backpack Capacity 109; the dead Mercs gained nothing")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 10 and int(saved["progression"]["hero"]["level"]) == 2 and (saved["character"]["stats"] as Dictionary).keys() == ["strength"], "Saved v9: Level 2, stats still only strength")
+	_check(int(saved["version"]) == 11 and int(saved["progression"]["hero"]["level"]) == 2 and (saved["character"]["stats"] as Dictionary).keys() == ["strength"], "Saved v9: Level 2, stats still only strength")
 	await _destroy(main)
 	main = await _new_main()
 	var reloaded: CharacterStats = main.character_stats
