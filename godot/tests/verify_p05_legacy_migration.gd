@@ -232,6 +232,9 @@ func _verify_v12_rules() -> void:
 	for name in bad:
 		_check(_load(bad[name]).is_empty(), "AC14 v12 %s: the whole save is refused" % name)
 	_check(not MercenaryRoster.new().pend_legacy(Mercenary.create("merc_1", "MAGE")) and not MercenaryRoster.new().pend_legacy(null), "Only legacy ids can be pending")
+	var full := _recruited(5)
+	full.pend_legacy(_legacy("merc_a", 2))
+	_check(not full.claim_pending("merc_a") and full.get_owned_count() == 5 and full.get_pending_mercenary("merc_a") != null, "The roster itself refuses a claim while full (never 6 owned)")
 	_sections_done.append("v12_rules")
 
 
@@ -400,6 +403,10 @@ func _verify_character_ui() -> void:
 	# The Hero path unchanged (S04 / S05).
 	main.progression = ProgressionState.from_hero(2, 0)
 	main._apply_level_growth()
+	# The right Mercenary: 法師 #1 (second in the roster) gets the points.
+	panel.select_character("merc_1")
+	panel.press_plus("agi")
+	_check(panel.confirm() and main.mercenary_roster.get_mercenary("merc_1").get_allocation_points() == _pts(0, 0, 1, 0) and main.mercenary_roster.get_mercenary("merc_a").get_allocation_points() == _pts(2, 1, 0, 0), "AC31 法師 #1's allocation lands on 法師 #1 only")
 	panel.select_character("hero")
 	panel.press_plus("int")
 	_check(panel.confirm() and main.character_stats.get_allocated_points("int") == 1, "The Hero's allocation unchanged")
