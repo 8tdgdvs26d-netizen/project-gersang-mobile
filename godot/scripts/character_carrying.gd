@@ -187,6 +187,31 @@ func equip(id: Variant, item_id: Variant) -> bool:
 	return true
 
 
+## Stage 9 P03: the character's stats as they would be after equip(id,
+## item_id) — a copy (CharacterStats.duplicate_stats with the resulting
+## equipment bonuses); nothing changes. Null when equip would be refused.
+func preview_equip(id: Variant, item_id: Variant) -> CharacterStats:
+	var equipment := get_equipment(id)
+	if equipment == null or typeof(item_id) != TYPE_STRING or equipment.get_carried_quantity(item_id) <= 0:
+		return null
+	var slot := EquipmentCatalog.get_slot(item_id)
+	if not EquipmentCatalog.is_slot(slot):
+		return null
+	var snapshot := equipment.get_snapshot()
+	var previous := equipment.get_equipped(slot)
+	equipment._remove_carried(item_id, 1)
+	if previous != "":
+		equipment._add_carried(previous, 1)
+	equipment._set_equipped(slot, item_id)
+	var bonuses := equipment.get_bonuses()
+	equipment.restore_snapshot(snapshot)
+	var stats := get_stats(id)
+	if stats == null:
+		return null
+	var copy := stats.duplicate_stats()
+	return copy if copy.apply_equipment_bonuses(bonuses) else null
+
+
 ## Takes the item out of `slot` into the carried equipment. Load unchanged:
 ## allowed over capacity (and may leave the character over capacity).
 func unequip(id: Variant, slot: Variant) -> bool:

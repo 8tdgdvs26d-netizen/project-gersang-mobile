@@ -171,6 +171,11 @@ func _ready() -> void:
 	_character_panel.characters_provider = get_character_entries
 	_character_panel.confirm_handler = confirm_character_allocation
 	_character_panel.can_open = _can_open_character_panel
+	# Stage 9 P03: the 裝備 view (state, preview, saved changes).
+	_character_panel.equipment_provider = get_character_equipment
+	_character_panel.preview_provider = carrying_preview_equip
+	_character_panel.equip_handler = equip_character_item
+	_character_panel.unequip_handler = unequip_character_slot
 	add_child(_character_panel)
 	_character_panel.opened.connect(_on_character_panel_opened)
 	_character_panel.closed.connect(_on_character_panel_closed)
@@ -562,6 +567,37 @@ func get_equipment_recipients() -> Array:
 		var id := mercenary.get_id()
 		recipients.append({"id": id, "name": RecruitmentService.label(mercenary), "load": carrying.get_load(id), "capacity": carrying.get_capacity(id)})
 	return recipients
+
+
+## Stage 9 P03: the Character UI's equipment state of `character_id` (the
+## Hero or an owned Mercenary by stable id; {} otherwise).
+func get_character_equipment(character_id: Variant) -> Dictionary:
+	var equipment := carrying.get_equipment(character_id)
+	if equipment == null:
+		return {}
+	return {"equipped": equipment.get_equipped_items(), "carried": equipment.get_carried(), "load": carrying.get_load(character_id), "capacity": carrying.get_capacity(character_id)}
+
+
+## Stage 9 P03: the stats copy after equipping (CharacterCarrying).
+func carrying_preview_equip(character_id: Variant, item_id: Variant) -> CharacterStats:
+	return carrying.preview_equip(character_id, item_id)
+
+
+## Stage 9 P03: equips a carried item of `character_id` and saves, as one
+## transaction (EquipmentService); refused during a battle. A failure
+## changes nothing.
+func equip_character_item(character_id: Variant, item_id: Variant, slot: Variant = "") -> Dictionary:
+	if get_combat() != null:
+		return {"success": false, "reason": "ERR_IN_COMBAT", "character_id": character_id if typeof(character_id) == TYPE_STRING else "", "item_id": item_id if typeof(item_id) == TYPE_STRING else "", "slot": "", "replaced": ""}
+	return EquipmentService.equip(carrying, character_id, item_id, _persist, slot)
+
+
+## Stage 9 P03: unequips `slot` of `character_id` and saves, as one
+## transaction (EquipmentService); refused during a battle.
+func unequip_character_slot(character_id: Variant, slot: Variant) -> Dictionary:
+	if get_combat() != null:
+		return {"success": false, "reason": "ERR_IN_COMBAT", "character_id": character_id if typeof(character_id) == TYPE_STRING else "", "item_id": "", "slot": slot if typeof(slot) == TYPE_STRING else "", "replaced": ""}
+	return EquipmentService.unequip(carrying, character_id, slot, _persist)
 
 
 ## Stage 9 P02: buys one `item_id` at the 裝備商店 of the current city for

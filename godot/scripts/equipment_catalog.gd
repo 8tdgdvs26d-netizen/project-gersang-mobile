@@ -29,6 +29,26 @@ const ITEMS := [
 ]
 
 
+## Stage 9 P03: player names of the slots and bonuses (Traditional
+## Chinese), shared by the 裝備商店 and the Character UI.
+const SLOT_NAMES := {SLOT_WEAPON: "武器", SLOT_ARMOR: "防具"}
+const BONUS_NAMES := {"hp": "血量", "mp": "魔力", "str": "力量", "agi": "敏捷", "int": "智力", "physical_defense": "物理防禦", "magic_defense": "魔法防禦"}
+
+
+## "武器" / "防具" ("" for an unknown slot).
+static func slot_name(slot: Variant) -> String:
+	return SLOT_NAMES.get(slot, "") if typeof(slot) == TYPE_STRING else ""
+
+
+## "力量 +2" style text of an item's fixed bonuses ("" for an unknown item).
+static func describe_bonuses(item_id: Variant) -> String:
+	var parts := []
+	var bonuses := get_bonuses(item_id)
+	for stat in bonuses:
+		parts.append("%s +%d" % [BONUS_NAMES.get(stat, stat), int(bonuses[stat])])
+	return "　".join(parts)
+
+
 static func get_ids() -> Array:
 	var ids := []
 	for item in ITEMS:

@@ -43,8 +43,6 @@ const MERCENARY_NOTE := "開發原型：每名傭兵 $1,000；同一類型可重
 ## Stage 9 P02: 裝備商店 texts (EquipmentCatalog gives names, slots, weights
 ## and bonuses; EquipmentShopService the prices).
 const EQUIPMENT_NOTE := "開發原型：每次購買 1 件，放入所選角色的背包（不會自動裝備）"
-const EQUIPMENT_SLOT_TEXT := {"WEAPON": "武器", "ARMOR": "防具"}
-const EQUIPMENT_BONUS_TEXT := {"hp": "血量", "mp": "魔力", "str": "力量", "agi": "敏捷", "int": "智力", "physical_defense": "物理防禦", "magic_defense": "魔法防禦"}
 const EQUIPMENT_DETAIL_TEXT := "重量 %d　價格 $%s"
 const EQUIPMENT_BUY_TEXT := "購買"
 const EQUIPMENT_RECIPIENT_TEXT := "收件角色：%s"
@@ -810,7 +808,7 @@ func _build_equipment_panel() -> void:
 		info.name = "Info"
 		info.custom_minimum_size = Vector2(RECRUIT_INFO_WIDTH, 0)
 		info.add_theme_constant_override("separation", 0)
-		info.add_child(_make_label("NameLabel", "%s　%s" % [item["display_name"], EQUIPMENT_SLOT_TEXT.get(item["slot"], "")], NAME_FONT_SIZE + 2))
+		info.add_child(_make_label("NameLabel", "%s　%s" % [item["display_name"], EquipmentCatalog.slot_name(item["slot"])], NAME_FONT_SIZE + 2))
 		info.add_child(_make_label("BonusLabel", equipment_bonus_text(item_id), DETAIL_FONT_SIZE))
 		info.add_child(_make_label("DetailLabel", EQUIPMENT_DETAIL_TEXT % [int(item["capacity_cost"]), _thousands(EquipmentShopService.get_price(item_id))], DETAIL_FONT_SIZE))
 		row.add_child(info)
@@ -824,11 +822,7 @@ func _build_equipment_panel() -> void:
 
 ## "力量 +2" style text of an item's fixed bonuses (EquipmentCatalog).
 static func equipment_bonus_text(item_id: String) -> String:
-	var parts := []
-	var bonuses := EquipmentCatalog.get_bonuses(item_id)
-	for stat in bonuses:
-		parts.append("%s +%d" % [EQUIPMENT_BONUS_TEXT.get(stat, stat), int(bonuses[stat])])
-	return "　".join(parts)
+	return EquipmentCatalog.describe_bonuses(item_id)
 
 
 ## The receiving characters ({id, name, load, capacity}: the Hero, then the

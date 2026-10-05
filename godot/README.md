@@ -47,7 +47,23 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 9 P02: Equipment Shop (裝備商店). Save version stays 13 (unchanged schema).
+Stage 9 P03: Equip / Unequip + Character Equipment UI. Save version stays 13 (unchanged schema).
+
+- the Character UI (角色) gets two views: 屬性 (the Stage 7 stats / allocation, unchanged) and
+  裝備; the bottom bar holds the view switch, 確認分配 / 裝備 and 關閉
+- 裝備 view, for the selected character (the Hero or an owned Mercenary by stable id):
+  武器：… / 防具：… with 卸下, the current values (力量 / 智力 / 物理攻擊 / 魔法攻擊 / 物理防禦
+  / 魔法防禦) and load, its own carried equipment (name ×quantity, slot, effect, weight); tapping
+  an item shows 裝備X後：value before → after (a CharacterStats copy from
+  `CharacterCarrying.preview_equip`, no formula in the UI), then 裝備
+- `EquipmentService.equip / unequip`: the P01 semantics (catalog slot, swap: the old item back
+  to carried; unequip to carried), same character only, refused for unknown / pending /
+  dismissed ids and wrong slots, saved at once, any failure restores the exact previous state;
+  refused during a battle
+- not here: combat verification (P04), selling, transfer between characters, new slots
+- tests: `tests/verify_s9_p03_equip_unequip.gd`
+
+Previous: Stage 9 P02: Equipment Shop (裝備商店). Save version stays 13 (unchanged schema).
 
 - City Hub fifth facility 裝備商店 (same tab architecture). The five tabs share one row:
   128 x 64 each, 8 px apart (approved controlled update of the Stage 8 150 px tab rule; no

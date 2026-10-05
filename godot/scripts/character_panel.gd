@@ -26,9 +26,19 @@ extends CanvasLayer
 ## everything, the panel says so); the Hero keeps the S04 / S05 path. The old
 ## fixed Merc A / Merc B tabs are gone.
 
+## Stage 9 P03: the panel has two views — 屬性 (the Stage 7 stats and
+## allocation, unchanged) and 裝備 (the selected character's equipped Weapon
+## / Armor with 卸下, its own carried equipment, a before -> after preview of
+## the chosen item and 裝備). Everything comes from main.gd: the equipment
+## state (equipment_provider), the preview stats (preview_provider: a copy
+## from CharacterCarrying, no formula here) and the changes (equip_handler /
+## unequip_handler: EquipmentService transactions, saved; a failure changes
+## nothing and says so).
+
 signal opened
 signal closed
 signal allocation_confirmed(character_id: String)
+signal equipment_changed(character_id: String)
 
 ## Allocation rows (CharacterConfig.ALLOCATABLE order) and their labels.
 const ROWS := ["hp", "str", "agi", "int"]
@@ -56,6 +66,33 @@ const TAB_SIZE := Vector2(208.0, 72.0)
 ## a horizontal scroll, not a tab tap; a press released without moving that
 ## far selects the tab under it. The thin scrollbar is only an indicator.
 const TAB_DRAG_THRESHOLD := 12.0
+## Stage 9 P03: the two views and the 裝備 view texts.
+const VIEW_STATS := "stats"
+const VIEW_EQUIPMENT := "equipment"
+const STATS_VIEW_TEXT := "屬性"
+const EQUIPMENT_VIEW_TEXT := "裝備"
+const EQUIPPED_TEXT := "%s：%s"
+const NONE_TEXT := "無"
+const UNEQUIP_TEXT := "卸下"
+const EQUIP_TEXT := "裝備"
+const CURRENT_TEXT := "目前：%s"
+const LOAD_TEXT := "負重 %d / %d"
+const CARRIED_TITLE := "隨身裝備（點選查看效果）"
+const CARRIED_EMPTY := "沒有隨身裝備"
+const CARRIED_ROW_TEXT := "%s ×%d　%s　%s　重量 %d"
+const PREVIEW_HINT := "選擇一件隨身裝備，查看裝備後的數值"
+const PREVIEW_TITLE := "裝備%s後："
+const PREVIEW_SWAP := "（%s放回背包）"
+const PREVIEW_SAME := "數值不變"
+const EQUIPPED_FEEDBACK := "已裝備%s"
+const UNEQUIPPED_FEEDBACK := "已卸下%s"
+const EQUIP_SAVE_FAILED_TEXT := "無法儲存，裝備變更已取消"
+const EQUIP_FAILED_TEXT := "無法變更裝備"
+## The values the 裝備 view compares / shows (all read from CharacterStats).
+const VALUE_NAMES := ["血量", "魔力", "力量", "敏捷", "智力", "物理攻擊", "魔法攻擊", "物理防禦", "魔法防禦", "負重容量"]
+## The current-values line of the 裝備 view (subset of VALUE_NAMES).
+const CURRENT_NAMES := ["力量", "智力", "物理攻擊", "魔法攻擊", "物理防禦", "魔法防禦"]
+const MAX_CARRIED_ROWS := 4
 
 ## Stage 8 P05: the characters shown, in order (main.gd: the Hero, then the
 ## owned Mercenaries): [{"id", "name", "stats": CharacterStats, "level",
@@ -67,6 +104,14 @@ var characters_provider: Callable
 var confirm_handler: Callable
 ## Whether the 角色 button may show (the player is in the world).
 var can_open: Callable
+## Stage 9 P03: id -> {"equipped": {slot: item id}, "carried": {item id:
+## quantity}, "load": int, "capacity": int} ({} for no character).
+var equipment_provider: Callable
+## Stage 9 P03: (id, item id) -> CharacterStats copy after equipping it.
+var preview_provider: Callable
+## Stage 9 P03: (id, item id) / (id, slot) -> EquipmentService result.
+var equip_handler: Callable
+var unequip_handler: Callable
 
 var _open_button: Button
 var _panel: Control
@@ -91,6 +136,18 @@ var _confirm_button: Button
 var _feedback_label: Label
 var _selected := "hero"
 var _pending := {}
+## Stage 9 P03: the view, the 裝備 view nodes and the chosen carried item.
+var _view := VIEW_STATS
+var _view_button: Button
+var _equip_button: Button
+var _equipment_view: Control
+var _slot_labels := {}
+var _unequip_buttons := {}
+var _current_label: Label
+var _carried_title: Label
+var _carried_rows: Array[Button] = []
+var _preview_label: Label
+var _selected_item := ""
 
 
 func _ready() -> void:
@@ -157,10 +214,19 @@ func _ready() -> void:
 		var derived := _label("Derived%d" % index, "", Vector2(32.0, 764.0 + index * 44.0), Vector2(656.0, 44.0), 26)
 		_panel.add_child(derived)
 		_derived_labels.append(derived)
-	_confirm_button = _button("ConfirmButton", CONFIRM_TEXT, Vector2(32.0, 1140.0), Vector2(320.0, 96.0), 32)
+	# Stage 9 P03: the bottom bar holds the view switch, 確認分配 (屬性) /
+	# 裝備 (裝備) and 關閉 (208 x 96 each).
+	_view_button = _button("ViewButton", EQUIPMENT_VIEW_TEXT, Vector2(32.0, 1140.0), Vector2(208.0, 96.0), 32)
+	_view_button.pressed.connect(toggle_view)
+	_panel.add_child(_view_button)
+	_confirm_button = _button("ConfirmButton", CONFIRM_TEXT, Vector2(256.0, 1140.0), Vector2(208.0, 96.0), 32)
 	_confirm_button.pressed.connect(confirm)
 	_panel.add_child(_confirm_button)
-	var close_button := _button("CloseButton", CLOSE_TEXT, Vector2(368.0, 1140.0), Vector2(320.0, 96.0), 32)
+	_equip_button = _button("EquipButton", EQUIP_TEXT, Vector2(256.0, 1140.0), Vector2(208.0, 96.0), 32)
+	_equip_button.pressed.connect(equip_selected)
+	_panel.add_child(_equip_button)
+	_build_equipment_view()
+	var close_button := _button("CloseButton", CLOSE_TEXT, Vector2(480.0, 1140.0), Vector2(208.0, 96.0), 32)
 	close_button.pressed.connect(close)
 	_panel.add_child(close_button)
 	_feedback_label = _label("FeedbackLabel", "", Vector2(32.0, 1236.0), Vector2(656.0, 40.0), 24, HORIZONTAL_ALIGNMENT_CENTER)
@@ -192,6 +258,8 @@ func open() -> bool:
 	_pending.clear()
 	_feedback_label.text = ""
 	_panel.visible = true
+	_view = VIEW_STATS
+	_selected_item = ""
 	if _entry(_selected).is_empty():
 		_selected = "hero"
 	_refresh()
@@ -215,6 +283,7 @@ func select_character(id: String) -> void:
 		return
 	_selected = id
 	_pending.clear()
+	_selected_item = ""
 	_feedback_label.text = ""
 	_refresh()
 
@@ -389,6 +458,19 @@ func _refresh() -> void:
 	_sync_tabs()
 	for id in _tabs:
 		(_tabs[id] as Button).disabled = id == _selected
+	# Stage 9 P03: one view at a time.
+	var stats_view := _view == VIEW_STATS
+	for stat in ROWS:
+		for node in [_row_labels[stat], _minus[stat], _plus[stat], _pending_labels[stat]]:
+			(node as Control).visible = stats_view
+	_mp_label.visible = stats_view
+	for label in _derived_labels:
+		label.visible = stats_view
+	_confirm_button.visible = stats_view
+	_equip_button.visible = not stats_view
+	_equipment_view.visible = not stats_view
+	_view_button.text = EQUIPMENT_VIEW_TEXT if stats_view else STATS_VIEW_TEXT
+	_refresh_equipment_view()
 	var lines := get_lines()
 	if lines.is_empty():
 		return
@@ -407,6 +489,221 @@ func _refresh() -> void:
 	for index in range(_derived_labels.size()):
 		_derived_labels[index].text = derived[index] if index < derived.size() else ""
 	_confirm_button.disabled = _pending.is_empty()
+
+
+# --- Stage 9 P03: 裝備 view --------------------------------------------------
+
+func _build_equipment_view() -> void:
+	_equipment_view = Control.new()
+	_equipment_view.name = "EquipmentView"
+	_equipment_view.position = Vector2.ZERO
+	_equipment_view.size = Vector2(720.0, 1130.0)
+	_equipment_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_panel.add_child(_equipment_view)
+	var y := 330.0
+	for slot in EquipmentCatalog.SLOTS:
+		var label := _label("Slot_" + slot, "", Vector2(32.0, y), Vector2(480.0, 80.0), 28)
+		_equipment_view.add_child(label)
+		_slot_labels[slot] = label
+		var button := _button("Unequip_" + slot, UNEQUIP_TEXT, Vector2(528.0, y), Vector2(160.0, 80.0), 30)
+		button.pressed.connect(unequip_slot.bind(slot))
+		_equipment_view.add_child(button)
+		_unequip_buttons[slot] = button
+		y += 90.0
+	_current_label = _label("CurrentStats", "", Vector2(32.0, 512.0), Vector2(656.0, 72.0), 22)
+	_current_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_equipment_view.add_child(_current_label)
+	_carried_title = _label("CarriedTitle", CARRIED_TITLE, Vector2(32.0, 590.0), Vector2(656.0, 36.0), 24)
+	_equipment_view.add_child(_carried_title)
+	for index in range(MAX_CARRIED_ROWS):
+		var row := _button("Carried%d" % index, "", Vector2(32.0, 632.0 + index * 88.0), Vector2(656.0, 80.0), 22)
+		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		row.add_theme_color_override("font_disabled_color", Color(1.0, 0.85, 0.4))
+		row.pressed.connect(_on_carried_row_pressed.bind(index))
+		_equipment_view.add_child(row)
+		_carried_rows.append(row)
+	_preview_label = _label("Preview", "", Vector2(32.0, 990.0), Vector2(656.0, 140.0), 22)
+	_preview_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_preview_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_equipment_view.add_child(_preview_label)
+
+
+func get_view() -> String:
+	return _view
+
+
+## 屬性 <-> 裝備 (an unconfirmed allocation preview is discarded).
+func toggle_view() -> void:
+	show_view(VIEW_EQUIPMENT if _view == VIEW_STATS else VIEW_STATS)
+
+
+func show_view(view: String) -> void:
+	if view != VIEW_STATS and view != VIEW_EQUIPMENT:
+		return
+	_view = view
+	_pending.clear()
+	_selected_item = ""
+	_feedback_label.text = ""
+	_refresh()
+
+
+## The selected character's equipment state from main.gd ({} without).
+func get_equipment_state() -> Dictionary:
+	if not equipment_provider.is_valid():
+		return {}
+	var state: Variant = equipment_provider.call(_selected)
+	return state if typeof(state) == TYPE_DICTIONARY else {}
+
+
+## The carried item ids in the rows, in EquipmentCatalog order.
+func get_carried_ids() -> Array:
+	var carried: Dictionary = get_equipment_state().get("carried", {})
+	return EquipmentCatalog.get_ids().filter(func(item_id: String) -> bool: return int(carried.get(item_id, 0)) > 0)
+
+
+## Chooses a carried item for the preview ("" clears). False when the
+## selected character does not carry it.
+func select_item(item_id: String) -> bool:
+	if item_id != "" and not get_carried_ids().has(item_id):
+		return false
+	_selected_item = item_id
+	_feedback_label.text = ""
+	_refresh()
+	return true
+
+
+func get_selected_item() -> String:
+	return _selected_item
+
+
+## The 裝備 button: equips the chosen carried item of the selected
+## character (equip_handler, saved); the result is shown either way.
+func equip_selected() -> bool:
+	if _selected_item == "" or not equip_handler.is_valid():
+		return false
+	var item_id := _selected_item
+	var result: Dictionary = equip_handler.call(_selected, item_id)
+	_selected_item = ""
+	_show_change_result(result, EQUIPPED_FEEDBACK, item_id)
+	return result.get("success", false)
+
+
+## 卸下: the item in `slot` back to the selected character's carried
+## equipment (unequip_handler, saved).
+func unequip_slot(slot: String) -> bool:
+	if not unequip_handler.is_valid():
+		return false
+	var item_id: String = get_equipment_state().get("equipped", {}).get(slot, "")
+	var result: Dictionary = unequip_handler.call(_selected, slot)
+	_selected_item = ""
+	_show_change_result(result, UNEQUIPPED_FEEDBACK, item_id)
+	return result.get("success", false)
+
+
+## Every line of the 裝備 view (slots, current values, carried rows,
+## preview), for checks.
+func get_equipment_lines() -> Dictionary:
+	var rows := []
+	for row in _carried_rows:
+		if row.visible:
+			rows.append(row.text)
+	return {
+		"slots": EquipmentCatalog.SLOTS.map(func(slot: String) -> String: return (_slot_labels[slot] as Label).text),
+		"current": _current_label.text,
+		"carried_title": _carried_title.text,
+		"rows": rows,
+		"preview": _preview_label.text,
+	}
+
+
+func _show_change_result(result: Dictionary, success_text: String, item_id: String) -> void:
+	if result.get("success", false):
+		_feedback_label.text = success_text % EquipmentCatalog.get_item(item_id).get("display_name", item_id)
+		equipment_changed.emit(_selected)
+	else:
+		_feedback_label.text = EQUIP_SAVE_FAILED_TEXT if result.get("reason", "") == "ERR_SAVE_FAILED" else EQUIP_FAILED_TEXT
+	_refresh()
+
+
+func _on_carried_row_pressed(index: int) -> void:
+	var ids := get_carried_ids()
+	if index < ids.size():
+		select_item(ids[index])
+
+
+func _refresh_equipment_view() -> void:
+	var state := get_equipment_state()
+	var equipped: Dictionary = state.get("equipped", {})
+	for slot in EquipmentCatalog.SLOTS:
+		var item_id: String = equipped.get(slot, "")
+		var shown := NONE_TEXT
+		if item_id != "":
+			shown = "%s（%s）" % [EquipmentCatalog.get_item(item_id).get("display_name", item_id), EquipmentCatalog.describe_bonuses(item_id)]
+		(_slot_labels[slot] as Label).text = EQUIPPED_TEXT % [EquipmentCatalog.slot_name(slot), shown]
+		(_unequip_buttons[slot] as Button).disabled = item_id == ""
+	var stats := _stats(_selected)
+	var current := []
+	if stats != null:
+		var values := _values(stats)
+		for name in CURRENT_NAMES:
+			current.append("%s %s" % [name, values[name]])
+		current.append(LOAD_TEXT % [int(state.get("load", 0)), int(state.get("capacity", stats.get_max_capacity()))])
+	_current_label.text = CURRENT_TEXT % "　".join(current) if not current.is_empty() else ""
+	var carried: Dictionary = state.get("carried", {})
+	var ids := get_carried_ids()
+	if _selected_item != "" and not ids.has(_selected_item):
+		_selected_item = ""
+	_carried_title.text = CARRIED_TITLE if not ids.is_empty() else CARRIED_EMPTY
+	for index in range(_carried_rows.size()):
+		var row := _carried_rows[index]
+		row.visible = index < ids.size()
+		if not row.visible:
+			continue
+		var item_id: String = ids[index]
+		var item := EquipmentCatalog.get_item(item_id)
+		row.text = CARRIED_ROW_TEXT % [item["display_name"], int(carried[item_id]), EquipmentCatalog.slot_name(item["slot"]), EquipmentCatalog.describe_bonuses(item_id), int(item["capacity_cost"])]
+		row.disabled = item_id == _selected_item
+	_preview_label.text = _preview_text(stats, equipped)
+	_equip_button.disabled = _selected_item == ""
+
+
+## "裝備X後：力量 10 → 12　…" from the preview stats (preview_provider: a
+## CharacterStats copy); only the values that change.
+func _preview_text(stats: CharacterStats, equipped: Dictionary) -> String:
+	if _selected_item == "" or stats == null or not preview_provider.is_valid():
+		return PREVIEW_HINT
+	var after: Variant = preview_provider.call(_selected, _selected_item)
+	if not after is CharacterStats:
+		return PREVIEW_HINT
+	var name: String = EquipmentCatalog.get_item(_selected_item).get("display_name", _selected_item)
+	var text := PREVIEW_TITLE % name
+	var replaced: String = equipped.get(EquipmentCatalog.get_slot(_selected_item), "")
+	if replaced != "":
+		text += PREVIEW_SWAP % EquipmentCatalog.get_item(replaced).get("display_name", replaced)
+	var before_values := _values(stats)
+	var after_values := _values(after)
+	var changes := []
+	for value_name in VALUE_NAMES:
+		if before_values[value_name] != after_values[value_name]:
+			# Non-breaking spaces: one change never wraps across lines.
+			changes.append("%s\u00a0%s\u00a0→\u00a0%s" % [value_name, before_values[value_name], after_values[value_name]])
+	return text + "\n" + ("　".join(changes) if not changes.is_empty() else PREVIEW_SAME)
+
+
+## The compared values, all read from CharacterStats.
+func _values(stats: CharacterStats) -> Dictionary:
+	return {
+		"血量": str(stats.get_max_hp()),
+		"魔力": str(stats.get_max_mp()),
+		"力量": str(stats.get_effective("str")),
+		"敏捷": str(stats.get_effective("agi")),
+		"智力": str(stats.get_effective("int")),
+		"物理攻擊": str(stats.get_physical_attack()),
+		"魔法攻擊": str(stats.get_magic_attack()),
+		"物理防禦": str(stats.get_physical_defense()),
+		"魔法防禦": str(stats.get_magic_defense()),
+		"負重容量": str(stats.get_max_capacity()),
+	}
 
 
 ## Stage 8 P05: rebuilds the tab row when the characters changed (ids or
