@@ -41,6 +41,11 @@ var inventory := CharacterInventory.new("player", character_stats):
 ## Stage 9 P01: what every character carries (equipment; Mercenary goods),
 ## keyed by stable character id, on the Hero's backpack and the roster.
 var carrying: CharacterCarrying
+## Stage 10 P00: every character's persistent current HP / MP / dead state
+## (saved), keyed by stable character id; CharacterCarrying is its identity
+## and stats authority. Battles start from it and write their participants'
+## final values back.
+var condition: CharacterCondition
 ## Temporary code-compatibility alias for pre-M2-08 callers and historical
 ## regression scripts. Runtime trades and persistence use inventory directly.
 var cargo: CharacterInventory:
@@ -122,6 +127,12 @@ var _group_respawn := GroupRespawn.new()
 
 func _init() -> void:
 	carrying = CharacterCarrying.new(inventory, _current_roster)
+	condition = CharacterCondition.new(_current_carrying)
+
+
+## Stage 10 P00: the carrying CharacterCondition reads (replaced on load).
+func _current_carrying() -> CharacterCarrying:
+	return carrying
 
 
 ## Stage 9 P01: the roster CharacterCarrying reads (tests may replace it).
@@ -132,6 +143,9 @@ func _current_roster() -> MercenaryRoster:
 func _ready() -> void:
 	_load_saved_session()
 	_apply_level_growth()
+	# Stage 10 P00: every character gets its record (full / alive for a new
+	# game or a v1-v13 save) and is clamped to its current maxima.
+	condition.sync()
 	for child in $Cities.get_children():
 		if child is CityMarker and child.city_id in WorldLayout.ACTIVE_CITY_IDS:
 			_city_markers[child.city_id] = child
@@ -472,6 +486,10 @@ func _load_saved_session() -> void:
 		var party := get_party_stats()
 		for slot in ProgressionState.SLOTS:
 			(party[slot] as CharacterStats).restore_allocation(loaded["allocation"][slot])
+		# Stage 10 P00: the saved condition, once the maxima are rebuilt
+		# (a v1-v13 save has none: sync() gives everyone full / alive).
+		condition.restore_save(loaded["condition"])
+		condition.sync()
 
 
 ## Puts the scene into the loaded location: the world (at the last city's
@@ -502,9 +520,17 @@ func _persist() -> bool:
 		return false
 	if location.is_in_world() and is_node_ready() and not location.set_world_position(_player.global_position):
 		return false
-	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats(), mercenary_roster, carrying)
+	# Stage 10 P00: what is saved is clamped to the current maxima (the
+	# approved Max-change rule; a new character gets its full record). A
+	# failed save restores the condition exactly (the caller's own rollback
+	# restores the change that moved a Max).
+	var condition_before := condition.get_snapshot()
+	condition.sync()
+	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats(), mercenary_roster, carrying, condition)
 	if saved:
 		_saved_world_position = location.get_world_position()
+	else:
+		condition.restore_snapshot(condition_before)
 	return saved
 
 
@@ -579,6 +605,16 @@ func get_deployed_combat_stats() -> Dictionary:
 	for mercenary in mercenary_roster.get_deployed():
 		stats[mercenary.get_id()] = carrying.get_stats(mercenary.get_id())
 	return stats
+
+
+## Stage 10 P00: character id -> {"hp", "mp", "dead"} (CharacterCondition,
+## synced to the current maxima) for the Hero and every deployed Mercenary —
+## what their battle units start from.
+func get_combat_conditions() -> Dictionary:
+	var conditions := {Mercenary.HERO_ID: condition.get_condition(Mercenary.HERO_ID)}
+	for mercenary in mercenary_roster.get_deployed():
+		conditions[mercenary.get_id()] = condition.get_condition(mercenary.get_id())
+	return conditions
 
 
 ## Stage 9 P03: the Character UI's equipment state of `character_id` (the
@@ -709,7 +745,7 @@ func _on_recruit_requested(type: String) -> void:
 func set_mercenary_deployed(mercenary_id: Variant, deployed: bool) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "reason": "ERR_NOT_IN_CITY", "mercenary_id": ""}
-	var result := PartyService.set_deployed(mercenary_roster, mercenary_id, deployed, _persist)
+	var result := PartyService.set_deployed(mercenary_roster, mercenary_id, deployed, _persist, condition)
 	_refresh_hub_summary()
 	return result
 
@@ -938,7 +974,9 @@ func _start_combat() -> void:
 	# Stage 9 P04: each deployed Mercenary fights with its authoritative
 	# stats by stable id (CharacterCarrying: Level, allocation and its own
 	# equipment); the Hero's character_stats already carry its equipment.
-	var battle := CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed(), get_deployed_combat_stats())
+	# Stage 10 P00: every character starts from its persistent condition; a
+	# dead deployed Mercenary does not take part.
+	var battle := CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed(), get_deployed_combat_stats(), get_combat_conditions())
 	if battle == null or _combat_view.is_open():
 		return
 	_combat_view.progression = progression
@@ -977,6 +1015,9 @@ func _on_combat_exit_requested() -> void:
 ##      DEFEAT; Stage 8 P04: PartyProgression — the Hero's share to its slot,
 ##      each surviving roster Mercenary's to its own Level / EXP), close the
 ##      battle, world input back, 7. save once (the roster included).
+## Stage 10 P00: after 5., every participant's final HP / MP / death becomes
+## its persistent condition (record_battle_condition); Level growth then
+## only raises the maxima (the current values stay).
 ## A failed save does not undo the committed result. No reward, EXP, loot,
 ## penalty or hospital happens here; a removed group's later return is
 ## scheduled by _on_group_removed (Stage 7 corrective).
@@ -994,6 +1035,11 @@ func commit_battle_result(result: BattleResult) -> bool:
 	_encounter_session.start_recovery_protection()
 	_encounter_handoff.resolve_encounter(result.encounter_id, result.is_victory())
 	_encounter_session.end_resolved_encounter(result.encounter_id)
+	# Stage 10 P00: each participant's final HP / MP / death becomes its
+	# persistent condition (victory, defeat and retreat alike; nobody else
+	# changes). Part of the committed result: saved with it below, and — as
+	# the EXP (C02 / D4) — not undone by a failed save.
+	record_battle_condition(battle)
 	# C05: the battle's EXP goes to the units alive at settlement (none on
 	# DEFEAT); part of the committed result, saved with it below. Stage 8 P04
 	# (approved D4): a failed save still does not undo it (C02).
@@ -1003,6 +1049,24 @@ func commit_battle_result(result: BattleResult) -> bool:
 	var saved := save_world_position()
 	print("Myrial: battle result ", BattleResult.Outcome.keys()[result.outcome], " of ", result.encounter_id, " committed (saved: ", saved, ")")
 	battle_result_committed.emit(result, saved)
+	return true
+
+
+## Stage 10 P00: writes every friendly unit of `battle` (its participants,
+## by stable id) to its persistent condition: remaining HP, remaining MP,
+## dead when HP is 0. All or nothing: a unit that is not a character (the
+## C01-C08 fixtures' merc_a / merc_b without a roster) is skipped, and
+## nothing is written if any participant is refused.
+func record_battle_condition(battle: CombatBattle) -> bool:
+	if battle == null:
+		return false
+	var before := condition.get_snapshot()
+	for unit in battle.get_friends():
+		if not condition.is_character(unit.id):
+			continue
+		if not condition.set_condition(unit.id, unit.hp if unit.alive else 0, unit.mp):
+			condition.restore_snapshot(before)
+			return false
 	return true
 
 

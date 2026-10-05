@@ -244,7 +244,7 @@ func _verify_stage7() -> void:
 	_check(ProgressionState.LEGACY_SLOTS == ["hero", "merc_a", "merc_b"] and ProgressionState.SLOTS == ["hero"] and CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"], "The Stage 7 fixed party is unchanged (P05: legacy slots read only)")
 	# P01.5 (Save v11) saves the roster: save_store.gd and main.gd now hold it
 	# (verify_p015_mercenary_save); everything else stays unwired.
-	_check(SaveStore.VERSION == 13 and SaveStore.V10_KEYS == ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation"] and SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"] and SaveStore.V12_KEYS == SaveStore.V11_KEYS + ["pending_legacy_mercenaries"], "Save v10 sections unchanged; v11 adds only the roster (P01.5; P05 v12 only the pending list)")
+	_check(SaveStore.VERSION == 14 and SaveStore.V10_KEYS == ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation"] and SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"] and SaveStore.V12_KEYS == SaveStore.V11_KEYS + ["pending_legacy_mercenaries"], "Save v10 sections unchanged; v11 adds only the roster (P01.5; P05 v12 only the pending list)")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/character_panel.gd", "res://scripts/progression_state.gd", "res://scripts/character_stats.gd"]:
 		var code := _code_only(path)
 		# Stage 8 P04 (approved) wired combat_battle / combat_view /

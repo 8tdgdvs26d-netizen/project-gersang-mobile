@@ -47,7 +47,31 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 9 P05: Final iPhone acceptance fixes (on top of P04). Save version stays 13 (unchanged
+Stage 10 P00: Persistent Character Condition (Save v14 + Combat state persistence). Prerequisite
+for the Stage 10 Hospital; no Hospital, recovery or penalty here.
+
+- `CharacterCondition`: one record per character (the Hero + every owned Mercenary, by stable id):
+  current HP, current MP, dead (dead exactly when HP is 0). Identity and the effective maxima come
+  from `CharacterCarrying` (is_character / get_stats: Level, allocation, equipment)
+- approved rules: actual values, never scaled; when a Max changes the current value stays and is
+  only clamped to the new Max (no heal on Level-up, allocation or equipment); no passive recovery
+  (movement, time, city, scene change, reload); no victory heal; no silent revival
+- Save v14 = v13 + `condition` ({id: {hp, mp, dead}}, exactly the Hero + owned Mercenaries,
+  strictly validated). v1-v13 saves load with everyone full / alive at the effective maxima
+  (nothing was stored); every other section unchanged. Every save is clamped first (`_persist`
+  syncs; a failed save restores the condition exactly)
+- Combat: battle units start from the persistent HP / MP (`get_combat_conditions` ->
+  `CombatBattle.from_party / create_party`); a dead deployed Mercenary takes no part; a dead Hero
+  is in the battle as a dead unit; with no living friendly unit the battle is a DEFEAT at once.
+  `commit_battle_result` writes every participant's final HP / MP / death back (victory, defeat,
+  retreat; non-participants untouched); like the EXP, a failed save does not undo it (C02 / D4)
+- deployment: a dead Mercenary cannot be deployed (`PartyService.ERR_DEAD`, 此傭兵已陣亡，無法出戰);
+  it stays owned with its Level, EXP, stats, equipment and carrying
+- tests: `tests/verify_s10_p00_character_condition.gd` (stress seed via `-- --seed=<n>`); older
+  tests updated to v14 (version pins, v13 fixtures, and the approved changes: no battle-start
+  fill, dead Mercenaries excluded)
+
+Previous: Stage 9 P05: Final iPhone acceptance fixes (on top of P04). Save version stays 13 (unchanged
 schema, no migration).
 
 - 轉移 (approved rule): an UNEQUIPPED carried equipment item may move between the Hero and any

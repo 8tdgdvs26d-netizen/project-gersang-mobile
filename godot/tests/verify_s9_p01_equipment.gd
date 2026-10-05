@@ -287,7 +287,7 @@ func _verify_mercenary() -> void:
 # --- Save v13 ---------------------------------------------------------------------------------------------
 
 func _verify_save() -> void:
-	_check(SaveStore.VERSION == 13 and SaveStore.INVENTORY_VERSIONS == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] and SaveStore.V13_KEYS == SaveStore.V12_KEYS + ["carrying"], "Save v13 = v12 + carrying")
+	_check(SaveStore.VERSION == 14 and SaveStore.INVENTORY_VERSIONS == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14] and SaveStore.V13_KEYS == SaveStore.V12_KEYS + ["carrying"], "Save v13 = v12 + carrying")
 	# Clean / empty round trip.
 	var empty := _party(["GUARDIAN"])
 	var data := _serialize(empty)
@@ -371,7 +371,7 @@ func _verify_save() -> void:
 		_check(int((loaded["wallet"] as Wallet).get_balance()) == 4321 and (loaded["inventory"] as CharacterInventory).get_items() == {"test_good_03": 4}, "v%d -> v13: money and Hero goods kept" % version)
 		_check((["hero"] + owned_ids).all(func(id: String) -> bool: return lc.get_equipment(id).is_empty() and (id == "hero" or lc.get_inventory(id).is_empty())), "v%d -> v13: equipment empty for the Hero and %s, Mercenary goods empty" % [version, str(owned_ids)])
 		var rewritten := _serialize_loaded(loaded)
-		_check(int(rewritten["version"]) == 13 and rewritten.keys().size() == 13 and (rewritten["carrying"] as Dictionary).size() == 1 + owned_ids.size(), "v%d -> rewritten as v13" % version)
+		_check(int(rewritten["version"]) == 14 and rewritten.keys().size() == 14 and (rewritten["carrying"] as Dictionary).size() == 1 + owned_ids.size(), "v%d -> rewritten as v13" % version)
 		if version >= 3:
 			_check(rewritten["market"] == old["market"], "v%d -> v13: market kept" % version)
 		if version >= 5:
@@ -393,10 +393,10 @@ func _verify_save() -> void:
 		var again := _load(rewritten)
 		_check(not again.is_empty() and JSON.stringify(_serialize_loaded(again)) == JSON.stringify(rewritten), "v%d -> v13 -> reload: stable" % version)
 	# Future version.
-	var future := _with(_serialize(full), {"version": 14})
+	var future := _with(_serialize(full), {"version": 15})  # Stage 10 P00: v14 is current
 	_write_text(TEST_SAVE, JSON.stringify(future))
 	var inspected := SaveStore.inspect(TEST_SAVE)
-	_check(inspected["status"] == SaveStore.STATUS_UNREADABLE and inspected["reason"] == SaveStore.REASON_FUTURE, "A future v14 save is unreadable (future), never loaded")
+	_check(inspected["status"] == SaveStore.STATUS_UNREADABLE and inspected["reason"] == SaveStore.REASON_FUTURE, "A future v15 save is unreadable (future), never loaded")
 	# Failed saves leave the existing file intact.
 	_clean()
 	var saved_ok := _save(full, TEST_SAVE)
@@ -430,7 +430,7 @@ func _verify_game() -> void:
 	_check(not result["success"] and result["reason"] == "ERR_HAS_ITEMS" and main.mercenary_roster.get_mercenary("merc_2") != null, "main: dismissing merc_2 (carrying gear) refused")
 	_check(main._persist(), "Saved")
 	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(raw["version"]) == 13 and raw["carrying"]["merc_2"]["carried_equipment"] == {W2: 2.0} or raw["carrying"]["merc_2"]["carried_equipment"] == {W2: 2}, "The file is v13 with merc_2's 2 x 測試武器二")
+	_check(int(raw["version"]) == 14 and raw["carrying"]["merc_2"]["carried_equipment"] == {W2: 2.0} or raw["carrying"]["merc_2"]["carried_equipment"] == {W2: 2}, "The file is v13 with merc_2's 2 x 測試武器二")
 	var state := _state_text(carrying, ["hero", "merc_1", "merc_2"])
 	await _destroy(main)
 	main = await _new_main()
@@ -579,7 +579,7 @@ func _verify_stress() -> void:
 				continue
 			var rewritten := _serialize_loaded(loaded)
 			var again := _load(rewritten)
-			if again.is_empty() or JSON.stringify(_serialize_loaded(again)) != JSON.stringify(rewritten) or int(rewritten["version"]) != 13:
+			if again.is_empty() or JSON.stringify(_serialize_loaded(again)) != JSON.stringify(rewritten) or int(rewritten["version"]) != 14:
 				migrate_bad += 1
 	_check(migrate_bad == 0, "Stress: 40 x 12 legacy versions -> v13 -> reload, all stable (%d)" % migrate_bad)
 	# Real main: repeated restart cycles with gear.
@@ -669,6 +669,7 @@ func _all_versions(levels: Dictionary, points: Dictionary) -> Dictionary:
 	var current: Dictionary = _json(SaveStore.serialize(wallet, inventory, MarketState.create_default(), PlayerLocation.new(), warehouses, null, null, ProgressionState.from_hero(levels["hero"][0], levels["hero"][1]), {"hero": hero}, roster))
 	var v12: Dictionary = current.duplicate(true)
 	v12.erase("carrying")
+	v12.erase("condition")  # Stage 10 P00 (v14)
 	v12["version"] = 12
 	var v11: Dictionary = v12.duplicate(true)
 	v11.erase("pending_legacy_mercenaries")

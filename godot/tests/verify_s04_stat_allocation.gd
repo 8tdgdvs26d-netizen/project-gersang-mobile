@@ -194,7 +194,7 @@ func _verify_save_and_scope() -> void:
 	stats.confirm_allocation({"str": 4, "hp": 2})
 	var progression := ProgressionState.from_dict({"hero": {"level": 3, "exp": 0}})
 	var data := SaveStore.serialize(Wallet.new(), CharacterInventory.new("player", stats), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression)
-	_check(SaveStore.VERSION == 13 and data["version"] == 13, "AC23 SaveStore.VERSION (S05: 10)")
+	_check(SaveStore.VERSION == 14 and data["version"] == 14, "AC23 SaveStore.VERSION (S05: 10)")
 	# S05 superseded AC24: the save now holds the allocation point counts (only).
 	_check(data["character"]["stats"] == {"strength": 10} and SaveStore.STATS_KEYS == ["strength"] and data["progression"]["hero"] == {"level": 3, "exp": 0} and data["allocation"]["hero"] == {"hp": 0, "str": 0, "agi": 0, "int": 0}, "AC24 (S05) stats {strength: Base STR}, progression {level, exp}; allocation counts in their own section")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()

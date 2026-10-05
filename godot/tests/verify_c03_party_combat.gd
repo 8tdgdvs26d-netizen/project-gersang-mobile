@@ -54,7 +54,7 @@ func _verify_static() -> void:
 	_check(CombatConfig.HERO == {"max_hp": 300, "attack_damage": 20, "attack_range": 1, "attack_interval_ms": 1000, "move_speed": 4.0}, "Hero stats unchanged")
 	_check(CombatConfig.PREPARATION_MS == 3000 and CombatConfig.PREPARATION_COLUMNS == 3 and CombatConfig.PREPARATION_FIRST_COLUMN == 1 and CombatConfig.ROWS == 5 and CombatConfig.COLUMNS == 61, "3 s preparation, 5 x 3 area (C05: columns 1-3), 5 x 61 grid (C05)")
 	_check(EncounterContext.PLANNED_COMBAT_ENEMIES == {1: 10, 2: 15, 3: 20}, "Encounter scaling unchanged")
-	_check(SaveStore.VERSION == 13 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 13 (Stage 9 P01), unchanged sections")
+	_check(SaveStore.VERSION == 14 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 13 (Stage 9 P01), unchanged sections")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()
 	# P01.5 (Save v11) brought the Stage 8 Mercenary roster into the save; the
 	# fixed combat Mercenaries, the party and Combat stay unknown to it.
@@ -447,7 +447,7 @@ func _verify_in_game() -> void:
 	_check(battle.get_result().is_committed() and session.get_phase() == EncounterSession.Phase.NONE and main.get_combat() == null, "C02 lifecycle: DEFEAT committed, encounter ended, battle closed")
 	_check(group_3.global_position == HOMES[2] and not group_3.is_held() and session.get_protection_remaining_ms() == 5000, "C02 DEFEAT: group reset home, 5 s protection")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(saved != null and int(saved["version"]) == 13 and _only_progression_mentions_mercs(saved) and main.wallet.get_balance() == money, "Saved once: v11, no Mercenary battle data (C05: only their Level / EXP; S05: their allocation counts; P01.5 / P04: the roster's instances only), no money reward or penalty")
+	_check(saved != null and int(saved["version"]) == 14 and _only_progression_mentions_mercs(saved) and main.wallet.get_balance() == money, "Saved once: v11, no Mercenary battle data (C05: only their Level / EXP; S05: their allocation counts; P01.5 / P04: the roster's instances only), no money reward or penalty")
 	await _destroy(main)
 	# VICTORY with the Hero dead, through the C02 lifecycle.
 	main = await _new_main("")
@@ -515,6 +515,15 @@ func _only_progression_mentions_mercs(saved: Dictionary) -> bool:
 	if rest.get("carrying") != {"hero": empty, "merc_1": mercenary_empty, "merc_2": mercenary_empty}:
 		return false
 	rest.erase("carrying")
+	# Stage 10 P00 (v14, approved): the one battle consequence that is saved —
+	# each character's condition (exactly hp / mp / dead, by stable id).
+	var condition: Variant = rest.get("condition")
+	if typeof(condition) != TYPE_DICTIONARY or condition.keys() != ["hero", "merc_1", "merc_2"]:
+		return false
+	for id in condition:
+		if typeof(condition[id]) != TYPE_DICTIONARY or condition[id].keys().size() != 3 or not condition[id].has_all(CharacterCondition.SAVE_KEYS):
+			return false
+	rest.erase("condition")
 	if typeof(allocation) != TYPE_DICTIONARY or allocation.keys() != ["hero"]:
 		return false
 	for slot in allocation:

@@ -189,7 +189,7 @@ func _verify_save_and_scope() -> void:
 	_check(legacy_levels.size() == 3 and legacy_levels["merc_b"] == [100, 0] and ProgressionState.from_dict({"hero": {"level": 100, "exp": 0}}).get_level("hero") == 100, "Saved Levels up to 100 load")
 	var progression := ProgressionState.from_dict({"hero": {"level": 4, "exp": 120}})
 	var data := SaveStore.serialize(Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression)
-	_check(SaveStore.VERSION == 13 and data["version"] == 13 and data["progression"] == {"hero": {"level": 4, "exp": 120}}, "17. Save v12: progression still exactly {level, exp} (the Hero's)")
+	_check(SaveStore.VERSION == 14 and data["version"] == 14 and data["progression"] == {"hero": {"level": 4, "exp": 120}}, "17. Save v12: progression still exactly {level, exp} (the Hero's)")
 	_check(data["character"]["stats"] == {"strength": 10} and SaveStore.STATS_KEYS == ["strength"], "17. No Growth / Stat Points written")
 	# A C05 save banked EXP at the Lv2 ceiling: it loads, carried through the S03 curve.
 	var legacy := ProgressionState.parse_legacy({"hero": {"level": 2, "exp": 400}, "merc_a": {"level": 2, "exp": 149}, "merc_b": {"level": 1, "exp": 99}})
@@ -230,13 +230,15 @@ func _verify_in_game() -> void:
 	_check(hero.hp == 100, "11. The settled battle's Hero stays at 100 HP (no refill)")
 	_check(main.inventory.get_max_capacity() == 10 + 11 * 9 and not "merc_stats" in main and main.mercenary_roster.get_owned().all(func(m: Mercenary) -> bool: return m.get_level() == 1 and m.get_exp() == 0), "Hero backpack Capacity 109; the dead Mercs gained nothing")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 13 and int(saved["progression"]["hero"]["level"]) == 2 and (saved["character"]["stats"] as Dictionary).keys() == ["strength"], "Saved v9: Level 2, stats still only strength")
+	_check(int(saved["version"]) == 14 and int(saved["progression"]["hero"]["level"]) == 2 and (saved["character"]["stats"] as Dictionary).keys() == ["strength"], "Saved v9: Level 2, stats still only strength")
 	await _destroy(main)
 	main = await _new_main()
 	var reloaded: CharacterStats = main.character_stats
 	_check(main.progression.get_level("hero") == 2 and reloaded.get_growth("str") == 1 and reloaded.get_unspent_points() == 3 and reloaded.get_base_strength() == 10, "Relaunch: Growth and points follow the saved Level 2 (Base STR still 10)")
 	var next := await _locked_battle(main)
-	_check(next.get_hero().max_hp == 320 and next.get_hero().hp == 320, "The next battle starts the Hero at its new Max HP (battle start fills, as before)")
+	# Stage 10 P00 (approved, replaces "battle start fills"): HP persists and a
+	# Level-up raises only the Max — the Hero starts at its saved 100 HP.
+	_check(next.get_hero().max_hp == 320 and next.get_hero().hp == 100, "The next battle starts the Hero at its persisted 100 HP of the new Max 320 (no Level-up heal)")
 	await _destroy(main)
 	_delete(TEST_SAVE)
 	_sections_done.append("in_game")

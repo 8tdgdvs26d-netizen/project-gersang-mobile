@@ -54,7 +54,7 @@ func _verify_static() -> void:
 	_check(CombatConfig.HERO == {"max_hp": 300, "attack_damage": 20, "attack_range": 1, "attack_interval_ms": 1000, "move_speed": 4.0}, "Hero Prototype stats as approved")
 	_check(CombatConfig.ENEMY == {"max_hp": 40, "attack_damage": 4, "attack_range": 1, "attack_interval_ms": 1500, "move_speed": 2.0}, "Enemy Prototype stats as approved (one archetype)")
 	_check(EncounterContext.PLANNED_COMBAT_ENEMIES == {1: 10, 2: 15, 3: 20} and EncounterHandoff.MAX_GROUPS == 3, "1 / 2 / 3 groups -> 10 / 15 / 20 enemies, at most 3 groups")
-	_check(SaveStore.VERSION == 13 and not _code_only("res://scripts/save_store.gd").to_lower().contains("combat"), "Save version 13 (Stage 9 P01); the save knows nothing about Combat")
+	_check(SaveStore.VERSION == 14 and not _code_only("res://scripts/save_store.gd").to_lower().contains("combat"), "Save version 13 (Stage 9 P01); the save knows nothing about Combat")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd"]:
 		var code := _code_only(path).to_lower()
 		# C03 brought the fixed Prototype Mercenaries into scope ("merc" left the list).
@@ -426,7 +426,7 @@ func _verify_locked_to_combat() -> void:
 		battle.resolve_damage(hero, unit, 1000)
 	await _process_frames(2)
 	_check(battle.get_phase() == CombatBattle.Phase.VICTORY and status.text == "勝利" and exit.visible and exit.text == "返回世界", "VICTORY: 勝利 and 返回世界 (C02 lifecycle)")
-	_check(main.save_world_position() and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("combat") and int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 13, "Saving during Combat: version 9, nothing about Combat")
+	_check(main.save_world_position() and not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("combat") and int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 14, "Saving during Combat: version 9, nothing about Combat")
 	exit.pressed.emit()
 	# C02 replaced the C01 bridge: VICTORY removes the participating group 3
 	# (verify_c02_world_lifecycle covers the lifecycle); groups 1 and 2 stay.

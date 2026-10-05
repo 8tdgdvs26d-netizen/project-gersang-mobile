@@ -240,7 +240,7 @@ func _verify_lifecycle() -> void:
 
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 13 and SaveStore.V13_KEYS.size() == 13, "AC25 Save v13, no new section")
+	_check(SaveStore.VERSION == 14 and SaveStore.V14_KEYS == SaveStore.V13_KEYS + ["condition"], "AC25 Save v13, no new section")
 	var combat := ""
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_view.gd", "res://scripts/combat_config.gd"]:
 		combat += _code_only(path).to_lower()

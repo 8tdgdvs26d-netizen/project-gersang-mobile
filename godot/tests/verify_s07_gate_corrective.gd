@@ -160,7 +160,7 @@ func _verify_schedule() -> void:
 
 
 func _verify_static() -> void:
-	_check(SaveStore.VERSION == 13 and SaveStore.V10_KEYS == SaveStore.V9_KEYS + ["allocation"], "Save v13 (Stage 9 P01), sections unchanged")
+	_check(SaveStore.VERSION == 14 and SaveStore.V10_KEYS == SaveStore.V9_KEYS + ["allocation"], "Save v13 (Stage 9 P01), sections unchanged")
 	var save := _code_only("res://scripts/save_store.gd").to_lower()
 	for word in ["respawn", "monster", "group", "victory"]:
 		_check(not save.contains(word), "save_store.gd knows nothing about %s" % word)
@@ -251,7 +251,7 @@ func _verify_victory_and_respawn() -> void:
 	_check(not main.commit_battle_result(battle.get_result()) and _commits.size() == 1 and main.progression.get_exp("hero") == hero_exp + share, "No second settlement")
 	var saved_text := FileAccess.get_file_as_string(TEST_SAVE)
 	var saved: Variant = JSON.parse_string(saved_text)
-	_check(int(saved["version"]) == 13 and (saved as Dictionary).keys().size() == SaveStore.V13_KEYS.size() and not saved_text.to_lower().contains("monster") and not saved_text.to_lower().contains("respawn"), "Saved as v12 (P05) with no group / respawn data")
+	_check(int(saved["version"]) == 14 and (saved as Dictionary).keys().size() == SaveStore.V14_KEYS.size() and not saved_text.to_lower().contains("monster") and not saved_text.to_lower().contains("respawn"), "Saved as v12 (P05) with no group / respawn data")
 	# No immediate respawn; still gone just before 10 s.
 	await _settle()
 	_check(not main.has_node(NODES[2]) and main._world_monsters.size() == 2, "No immediate respawn")
