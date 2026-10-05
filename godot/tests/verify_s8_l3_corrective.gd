@@ -14,8 +14,12 @@ extends SceneTree
 ##                 values unchanged
 ##   ice_wall      AC05 軍師 冰牆: ground-targeted, 2 columns x 5 rows (not a
 ##                 cross), enemies cannot step onto it while it stands (several
-##                 enemies), enemies inside get the existing Slow, friends pass,
-##                 melts after SKILL_EFFECT_MS, then enemies pass again
+##                 enemies), enemies inside are Frozen (Stage 8 Final
+##                 Corrective; not the Slow), friends pass, melts after
+##                 SKILL_EFFECT_MS, then enemies pass again
+##   frozen        Stage 8 Final Corrective (Charlie: B = true Frozen): A-R —
+##                 no move / step / Basic Attack / cooldown progress for 5 s,
+##                 exact thaw, no burst, outside / dead untouched, Slow != Frozen
 ##   invalid       aim cancel, off-grid / wrong-skill / not-ready refusals
 ##   countdown     AC06 dismissal: 確定解僱（5）…（1） disabled, then 確定解僱;
 ##                 取消 always; reopen restarts at 5; deployed refused first;
@@ -25,6 +29,8 @@ extends SceneTree
 ##   scope         no Save schema change, no new number, no new system
 ##   stress        TARGETED: repeated skills / walls / blocking / aim / cancel,
 ##                 countdown open / cancel / reopen, tab swipes vs taps
+##   frozen_stress TARGETED: walls on moving / attacking enemies, random
+##                 tick sizes, thaw, Victory / Retreat
 
 const TEST_SAVE := "user://s8_l3_corrective_test.json"
 const T0 := 1800000000000
@@ -42,12 +48,14 @@ func _initialize() -> void:
 	_verify_mage()
 	_verify_hero()
 	_verify_ice_wall()
+	_verify_frozen()
 	_verify_invalid()
 	await _verify_countdown()
 	await _verify_lifecycle()
 	_verify_scope()
 	await _verify_stress()
-	_check(_sections_done.size() == 10, "Every test section must run to completion (%s)" % str(_sections_done))
+	_verify_frozen_stress()
+	_check(_sections_done.size() == 12, "Every test section must run to completion (%s)" % str(_sections_done))
 	_clean()
 	if _failures == 0:
 		print("S8 iPhone L3 corrective verification passed (%d checks)" % _checks)
@@ -300,7 +308,7 @@ func _verify_ice_wall() -> void:
 	_check(battle.get_ice_walls().is_empty() and not battle.is_ice_wall_cell(Vector2i(20, 2)), "AC05 After 5 s the wall is removed")
 	battle.advance(3000)
 	_check(enemies.any(func(e: CombatUnit) -> bool: return e.cell.x <= 21), "AC05 After it melts the enemies walk through again")
-	# Enemies inside when it rises: the existing Slow; one mid-step stops.
+	# Enemies inside when it rises: Frozen (not the Slow); one mid-step stops.
 	var inside := _party_fight(["STRATEGIST"], 10, 5)
 	var inside_caster := inside.get_friends()[1]
 	var e := inside.get_enemies()
@@ -313,8 +321,8 @@ func _verify_ice_wall() -> void:
 	e[4].step_progress_ms = 200
 	var hp := e.map(func(u: CombatUnit) -> int: return u.hp)
 	inside._raise_ice_wall(inside_caster, Vector2i(20, 1))
-	_check(inside.get_slow_remaining(e[0]) == CombatConfig.SKILL_EFFECT_MS and inside.get_slow_remaining(e[1]) == CombatConfig.SKILL_EFFECT_MS, "AC05 Enemies inside the wall cells at creation: the existing Slow (freeze), 5 s")
-	_check(inside.get_slow_remaining(e[2]) == 0 and inside.get_slow_remaining(e[3]) == 0 and inside.get_slow_remaining(e[4]) == 0, "AC05 Enemies outside: not slowed")
+	_check(inside.get_frozen_remaining(e[0]) == CombatConfig.SKILL_EFFECT_MS and inside.get_frozen_remaining(e[1]) == CombatConfig.SKILL_EFFECT_MS and inside.get_slow_remaining(e[0]) == 0 and inside.get_slow_remaining(e[1]) == 0, "AC05 Enemies inside the wall cells at creation: Frozen 5 s (not slowed)")
+	_check([2, 3, 4].all(func(i: int) -> bool: return inside.get_frozen_remaining(e[i]) == 0 and inside.get_slow_remaining(e[i]) == 0), "AC05 Enemies outside: neither Frozen nor slowed")
 	_check(e[4].next_cell == Vector2i(22, 2) and e[4].step_progress_ms == 0 and e[4].cell == Vector2i(22, 2), "AC05 An enemy stepping into the wall at creation stops on its own cell")
 	_check(e.all(func(u: CombatUnit) -> bool: return u.hp == hp[e.find(u)]), "AC05 The wall deals no damage")
 	_check(inside.get_last_aoe()["kind"] == "ice_field" and inside.get_last_aoe()["damage"] == 0 and inside.get_last_aoe()["cells"] == expected, "The wall is marked (presentation)")
@@ -349,6 +357,291 @@ func _verify_ice_wall() -> void:
 	retreat.advance(8000)
 	_check(retreat.get_phase() == CombatBattle.Phase.RETREAT, "A retreat through a wall still reaches the Retreat Zone")
 	_sections_done.append("ice_wall")
+
+
+# --- Stage 8 Final Corrective: true Frozen ---------------------------------------------------------
+
+## A battle with the Strategist, the friends far left and unkillable, the
+## first `alive` enemies alive.
+func _frozen_fight(alive: int) -> CombatBattle:
+	var battle := _party_fight(["STRATEGIST"], 10, alive)
+	for friend in battle.get_friends():
+		friend.max_hp = 1000000
+		friend.hp = 1000000
+	_place(battle.get_hero(), Vector2i(5, 2))
+	_place(battle.get_friends()[1], Vector2i(5, 0))
+	return battle
+
+
+func _verify_frozen() -> void:
+	# A / B / F / G / J / K / L: positions, duration, thaw.
+	var battle := _frozen_fight(5)
+	var e := battle.get_enemies()
+	_place(e[0], Vector2i(20, 1))
+	_place(e[1], Vector2i(21, 4))
+	_place(e[2], Vector2i(23, 0))
+	_place(e[3], Vector2i(19, 3))
+	_place(e[4], Vector2i(20, 3))
+	battle.resolve_damage(battle.get_hero(), e[4], 1000000)
+	var t0 := battle.get_elapsed_ms()
+	battle._raise_ice_wall(battle.get_friends()[1], Vector2i(20, 2))
+	_check(CombatBattle.ice_wall_cells(Vector2i(20, 2)).size() == 10 and battle.get_ice_walls()[0]["cells"] == CombatBattle.ice_wall_cells(Vector2i(20, 2)), "L. The wall is exactly 2 x 5")
+	_check(e[0].frozen_until_ms == t0 + CombatConfig.SKILL_EFFECT_MS and e[1].frozen_until_ms == t0 + CombatConfig.SKILL_EFFECT_MS and battle.get_frozen_remaining(e[0]) == 5000, "A / F. Enemies on wall cells: Frozen for exactly 5000 ms")
+	_check(e[2].frozen_until_ms == 0 and e[3].frozen_until_ms == 0 and battle.get_frozen_remaining(e[2]) == 0, "J. Enemies outside the wall cells: not Frozen")
+	_check(not e[4].alive and e[4].frozen_until_ms == 0 and battle.get_frozen_remaining(e[4]) == 0 and e[4].hp == 0, "K. A dead enemy on a wall cell: untouched, still dead")
+	_check(battle.get_slow_remaining(e[0]) == 0 and not e[0].slowed and e[0].step_ms() == roundi(1000.0 / e[0].move_speed), "SLOW != FROZEN: a Frozen enemy is not slowed")
+	var start := [e[0].cell, e[1].cell]
+	var moved := false
+	var outside_moved := false
+	var e2_start := e[2].cell
+	while battle.get_elapsed_ms() < t0 + 4990:
+		battle.advance(10)
+		moved = moved or e[0].cell != start[0] or e[1].cell != start[1] or e[0].is_moving() or e[1].is_moving() or e[0].step_progress_ms != 0 or e[1].step_progress_ms != 0
+		outside_moved = outside_moved or e[2].cell != e2_start
+	_check(not moved, "B. Frozen enemies: no cell change, no step started, no step progress for the whole 4990 ms")
+	_check(battle.get_frozen_remaining(e[0]) == 10, "F. 10 ms before the end: still Frozen")
+	_check(outside_moved, "J. The enemy outside kept moving meanwhile")
+	_check(not e[4].alive and e[4].hp == 0, "K. The dead enemy stays dead")
+	battle.advance(10)
+	_check(battle.get_frozen_remaining(e[0]) == 0 and battle.get_frozen_remaining(e[1]) == 0, "F. At 5000 ms the Frozen ends")
+	var thawed_at := battle.get_elapsed_ms()
+	for step in range(150):
+		battle.advance(10)
+	_check(e[0].cell.x < 20, "G. After the thaw the enemy walks again (%s)" % str(e[0].cell))
+	_check(e[1].cell.x >= 21 or not battle.get_ice_walls().is_empty() or battle.get_elapsed_ms() >= thawed_at, "G. Movement after the thaw is ordinary (no stuck state)")
+	_check(battle.get_ice_walls().is_empty() and not battle.is_ice_wall_cell(Vector2i(20, 1)), "The wall melted with the Frozen")
+	# C. Mid-step: an enemy already moving stops while Frozen.
+	var mid := _frozen_fight(1)
+	var walker := mid.get_enemies()[0]
+	_place(walker, Vector2i(20, 2))
+	walker.next_cell = Vector2i(19, 2)
+	walker.step_progress_ms = 300
+	mid._raise_ice_wall(mid.get_friends()[1], Vector2i(20, 2))
+	_check(walker.cell == Vector2i(20, 2) and walker.next_cell == Vector2i(20, 2) and walker.step_progress_ms == 0 and walker.visual_cell() == Vector2(20, 2), "C. An enemy mid-step is stopped on its cell (no step progress kept)")
+	var stayed := true
+	for step in range(499):
+		mid.advance(10)
+		stayed = stayed and walker.cell == Vector2i(20, 2) and not walker.is_moving() and walker.step_progress_ms == 0
+	_check(stayed, "C. It stays put for the whole Frozen")
+	for step in range(100):
+		mid.advance(10)
+	_check(walker.cell.x < 20, "C. After the thaw it moves on (%s)" % str(walker.cell))
+	# D / E / H / I: attacks. A Frozen enemy next to the Hero, attack ready.
+	# (Hits are recorded with the battle time of the tick they happen in: its start.)
+	var fight := _frozen_fight(1)
+	var biter := fight.get_enemies()[0]
+	var hero := fight.get_hero()
+	_place(hero, Vector2i(19, 1))
+	_place(biter, Vector2i(20, 1))
+	biter.attack_damage = 7
+	biter.attack_cooldown_ms = 0
+	var hits := []
+	fight.damage_dealt.connect(func(attacker: CombatUnit, target: CombatUnit, amount: int) -> void: hits.append([attacker, fight.get_elapsed_ms(), amount]))
+	var hero_hp := hero.hp
+	var f0 := fight.get_elapsed_ms()
+	fight._raise_ice_wall(fight.get_friends()[1], Vector2i(20, 2))
+	var cooldown_kept := true
+	while fight.get_elapsed_ms() < f0 + 5000:
+		fight.advance(10)
+		cooldown_kept = cooldown_kept and biter.attack_cooldown_ms == 0
+	var biter_hits := hits.filter(func(h: Array) -> bool: return h[0] == biter)
+	_check(biter_hits.is_empty() and hero.hp == hero_hp, "D / E. Attack ready next to the Hero: no Basic Attack started, no damage for the whole 5 s")
+	_check(cooldown_kept and biter.cell == Vector2i(20, 1), "E. Its ready attack stays ready, unspent (no hidden attack)")
+	fight.advance(10)
+	biter_hits = hits.filter(func(h: Array) -> bool: return h[0] == biter)
+	_check(biter_hits.size() == 1 and biter_hits[0][1] == f0 + 5000 and hero_hp - hero.hp == 7, "H. Thawed: exactly one attack in the first thawed tick (5000-5010 ms, 7 damage)")
+	_check(biter.attack_cooldown_ms == biter.attack_interval_ms, "H. A normal attack interval follows (%d)" % biter.attack_cooldown_ms)
+	while fight.get_elapsed_ms() < f0 + 5000 + biter.attack_interval_ms:
+		fight.advance(10)
+	biter_hits = hits.filter(func(h: Array) -> bool: return h[0] == biter)
+	_check(biter_hits.size() == 1, "I. No burst: no second attack inside the interval after the thaw")
+	fight.advance(10)
+	biter_hits = hits.filter(func(h: Array) -> bool: return h[0] == biter)
+	_check(biter_hits.size() == 2 and biter_hits[1][1] - biter_hits[0][1] == biter.attack_interval_ms and hero_hp - hero.hp == 14, "H / I. The next attack exactly one interval later (%s)" % str(biter_hits.map(func(h: Array) -> int: return h[1])))
+	# E. An attack interval half run when frozen: it pauses and resumes.
+	var paused := _frozen_fight(1)
+	var mid_biter := paused.get_enemies()[0]
+	var paused_hero := paused.get_hero()
+	_place(paused_hero, Vector2i(19, 1))
+	_place(mid_biter, Vector2i(20, 1))
+	mid_biter.attack_cooldown_ms = 700
+	var paused_hits := []
+	paused.damage_dealt.connect(func(attacker: CombatUnit, target: CombatUnit, amount: int) -> void:
+		if attacker == mid_biter:
+			paused_hits.append(paused.get_elapsed_ms()))
+	var p0 := paused.get_elapsed_ms()
+	paused._raise_ice_wall(paused.get_friends()[1], Vector2i(20, 2))
+	while paused.get_elapsed_ms() < p0 + 5000:
+		paused.advance(10)
+	_check(paused_hits.is_empty() and mid_biter.attack_cooldown_ms == 700, "E. A running interval is paused while Frozen (700 ms left, %d)" % mid_biter.attack_cooldown_ms)
+	while paused.get_elapsed_ms() < p0 + 5800:
+		paused.advance(10)
+	_check(paused_hits.size() == 1 and paused_hits[0] == p0 + 5690, "E. After the thaw the remaining 700 ms run (the tick 5690-5700 ms), then one attack (%s)" % str(paused_hits))
+	# A tick spanning the thaw: only its thawed part runs (no double action).
+	var span := _frozen_fight(1)
+	var span_biter := span.get_enemies()[0]
+	_place(span.get_hero(), Vector2i(19, 1))
+	_place(span_biter, Vector2i(20, 1))
+	span_biter.attack_cooldown_ms = 0
+	var span_hits := []
+	span.damage_dealt.connect(func(attacker: CombatUnit, target: CombatUnit, amount: int) -> void:
+		if attacker == span_biter:
+			span_hits.append(span.get_elapsed_ms()))
+	span._raise_ice_wall(span.get_friends()[1], Vector2i(20, 2))
+	span.advance(4000)
+	_check(span_hits.is_empty(), "A big tick inside the Frozen: nothing")
+	span.advance(2000)
+	_check(span_hits.size() == 1 and span_biter.cell == Vector2i(20, 1), "A tick spanning the thaw: one attack only (%d)" % span_hits.size())
+	# A tick spanning the thaw counts only its thawed time: 700 ms of a
+	# paused interval, a 1500 ms tick of which 500 ms are thawed -> 200 left.
+	var part := _frozen_fight(1)
+	var part_biter := part.get_enemies()[0]
+	_place(part.get_hero(), Vector2i(19, 1))
+	_place(part_biter, Vector2i(20, 1))
+	part_biter.attack_cooldown_ms = 700
+	var part_hits := []
+	part.damage_dealt.connect(func(attacker: CombatUnit, target: CombatUnit, amount: int) -> void:
+		if attacker == part_biter:
+			part_hits.append(part.get_elapsed_ms()))
+	part._raise_ice_wall(part.get_friends()[1], Vector2i(20, 2))
+	part.advance(4000)
+	part.advance(1500)
+	_check(part_hits.is_empty() and part_biter.attack_cooldown_ms == 200, "Only the thawed part of a tick runs (700 - 500 = 200 ms left, %d)" % part_biter.attack_cooldown_ms)
+	# Re-frozen by a second wall: refreshed, not stacked.
+	var again := _frozen_fight(1)
+	var held := again.get_enemies()[0]
+	_place(held, Vector2i(20, 2))
+	var a0 := again.get_elapsed_ms()
+	again._raise_ice_wall(again.get_friends()[1], Vector2i(20, 2))
+	again.advance(3000)
+	again._raise_ice_wall(again.get_friends()[1], Vector2i(20, 2))
+	_check(held.frozen_until_ms == a0 + 3000 + 5000 and again.get_frozen_remaining(held) == 5000, "A second wall refreshes the Frozen to 5 s (not 7 s)")
+	# M. Blocking still works while enemies inside are Frozen.
+	var block := _frozen_fight(3)
+	var b := block.get_enemies()
+	_place(b[0], Vector2i(21, 2))
+	_place(b[1], Vector2i(24, 0))
+	_place(b[2], Vector2i(25, 4))
+	block._raise_ice_wall(block.get_friends()[1], Vector2i(20, 2))
+	var crossed := false
+	for step in range(490):
+		block.advance(10)
+		crossed = crossed or (b[1].cell.x <= 21) or (b[2].cell.x <= 21) or b[0].cell != Vector2i(21, 2)
+	_check(not crossed and block.get_frozen_remaining(b[0]) > 0 and block.get_frozen_remaining(b[1]) == 0, "M. The wall still blocks the others; the Frozen one stays")
+	# N. The Hero's Slow is still the Slow (never Frozen).
+	var slow := _frozen_fight(3)
+	var slowed := slow.get_enemies()
+	slow.select_unit(slow.get_hero())
+	slow.start_skill_aim()
+	slow.advance(CombatConfig.SKILL_CAST_MS)
+	_check(slowed.slice(0, 3).all(func(u: CombatUnit) -> bool: return slow.get_slow_remaining(u) == 5000 and slow.get_frozen_remaining(u) == 0 and u.frozen_until_ms == 0), "N. 緩速: Slow 5 s, never Frozen")
+	var before := slowed[0].cell
+	for step in range(200):
+		slow.advance(10)
+	_check(slowed[0].cell != before and slowed[0].step_ms() == roundi(1000.0 / slowed[0].move_speed) * CombatConfig.SLOW_FACTOR, "N. Slowed enemies still move, at half speed (x2 steps)")
+	_check(CombatConfig.SLOW_FACTOR == 2 and CombatConfig.HERO_SKILL == {"kind": "slow", "range": 3, "target": "all_enemies"}, "N. Slow values unchanged")
+	# O. Mage unchanged.
+	_check(CombatConfig.MERC_B_SKILL == {"kind": "aoe", "range": 5, "target": "ground"} and CombatConfig.AOE_DAMAGE == 40, "O. 法師 skill unchanged")
+	# P. Victory / Retreat with Frozen enemies.
+	var win := _frozen_fight(2)
+	_place(win.get_enemies()[0], Vector2i(20, 0))
+	_place(win.get_enemies()[1], Vector2i(21, 3))
+	win._raise_ice_wall(win.get_friends()[1], Vector2i(20, 2))
+	for enemy in win.get_enemies():
+		win.resolve_damage(win.get_hero(), enemy, 1000000)
+	_check(win.get_phase() == CombatBattle.Phase.VICTORY and win.get_result().is_victory(), "P. Killing Frozen enemies: Victory as usual")
+	_check(win.get_enemies().all(func(u: CombatUnit) -> bool: return win.get_frozen_remaining(u) == 0), "P. The dead report no Frozen")
+	var run := _frozen_fight(2)
+	_place(run.get_enemies()[0], Vector2i(20, 0))
+	_place(run.get_enemies()[1], Vector2i(21, 3))
+	for friend in run.get_friends():
+		_place(friend, Vector2i(3, run.get_friends().find(friend)))
+	run._raise_ice_wall(run.get_friends()[1], Vector2i(20, 2))
+	_check(run.start_retreat(), "P. Retreat with Frozen enemies on the field")
+	run.advance(3000)
+	_check(run.get_phase() == CombatBattle.Phase.RETREAT, "P. The retreat completes")
+	# Q. Save version.
+	_check(SaveStore.VERSION == 12, "Q. Save version still 12")
+	_sections_done.append("frozen")
+
+
+## Frozen stress: 40 seeded battles, walls raised on moving / attacking enemies
+## at random times, random tick sizes; per tick every fully-Frozen enemy must
+## keep its cell, step and cooldown and deal nothing; no enemy ever attacks
+## twice within its interval; no Frozen outlives 5 s; Victory / Retreat end.
+func _verify_frozen_stress() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5150
+	var frozen_moved := 0
+	var frozen_hits := 0
+	var bursts := 0
+	var too_long := 0
+	var walls := 0
+	var froze := 0
+	var ends := {"victory": 0, "retreat": 0}
+	for run in range(40):
+		var battle := _party_fight(["STRATEGIST", "STRATEGIST", "MAGE"], 20)
+		for friend in battle.get_friends():
+			friend.max_hp = 1000000
+			friend.hp = 1000000
+			_place(friend, Vector2i(rng.randi_range(10, 30), battle.get_friends().find(friend)))
+		for enemy in battle.get_enemies():
+			_place(enemy, Vector2i(rng.randi_range(14, 40), rng.randi_range(0, 4)))
+		var last_hit := {}
+		var tick_hits := []
+		battle.damage_dealt.connect(func(attacker: CombatUnit, target: CombatUnit, amount: int) -> void: tick_hits.append(attacker))
+		for tick in range(300):
+			if battle.is_over():
+				break
+			if rng.randi_range(0, 9) == 0:
+				var caster: CombatUnit = battle.get_friends()[rng.randi_range(1, 2)]
+				var spot := Vector2i(rng.randi_range(12, 38), rng.randi_range(0, 4))
+				var before_frozen := battle.get_enemies().filter(func(u: CombatUnit) -> bool: return battle.get_frozen_remaining(u) > 0).size()
+				battle._raise_ice_wall(caster, spot)
+				walls += 1
+				froze += battle.get_enemies().filter(func(u: CombatUnit) -> bool: return battle.get_frozen_remaining(u) > 0).size() - before_frozen
+			var ms := rng.randi_range(10, 120)
+			var tick_end := battle.get_elapsed_ms() + ms
+			var held := {}
+			for enemy in battle.get_enemies():
+				if enemy.alive and enemy.frozen_until_ms >= tick_end:
+					held[enemy] = [enemy.cell, enemy.next_cell, enemy.step_progress_ms, enemy.attack_cooldown_ms]
+				if enemy.alive and enemy.frozen_until_ms > battle.get_elapsed_ms() + CombatConfig.SKILL_EFFECT_MS:
+					too_long += 1
+			tick_hits.clear()
+			battle.advance(ms)
+			for enemy: CombatUnit in held:
+				if [enemy.cell, enemy.next_cell, enemy.step_progress_ms, enemy.attack_cooldown_ms] != held[enemy]:
+					frozen_moved += 1
+			for attacker: CombatUnit in tick_hits:
+				if attacker.team != CombatUnit.Team.ENEMY:
+					continue
+				if held.has(attacker):
+					frozen_hits += 1
+				var now := battle.get_elapsed_ms()
+				if last_hit.has(attacker) and now - int(last_hit[attacker]) < attacker.attack_interval_ms - 120:
+					bursts += 1
+				last_hit[attacker] = now
+		if not battle.is_over():
+			if run % 2 == 0:
+				for enemy in battle.get_enemies():
+					battle.resolve_damage(battle.get_hero(), enemy, 1000000)
+			else:
+				battle.start_retreat()
+				for step in range(400):
+					if battle.is_over():
+						break
+					battle.advance(50)
+		if battle.get_phase() == CombatBattle.Phase.VICTORY:
+			ends["victory"] += 1
+		elif battle.get_phase() == CombatBattle.Phase.RETREAT:
+			ends["retreat"] += 1
+	_check(walls > 300 and froze > 100, "Frozen stress: %d walls, %d enemies frozen" % [walls, froze])
+	_check(frozen_moved == 0 and frozen_hits == 0, "Frozen stress: a fully Frozen enemy never moved, stepped, used its cooldown or hit (%d / %d)" % [frozen_moved, frozen_hits])
+	_check(bursts == 0, "Frozen stress: no enemy attacked twice within its interval (%d)" % bursts)
+	_check(too_long == 0, "Frozen stress: no Frozen ever longer than 5 s (%d)" % too_long)
+	_check(ends["victory"] + ends["retreat"] == 40 and ends["victory"] > 0 and ends["retreat"] > 0, "Frozen stress: every battle ended in Victory / Retreat (%s)" % str(ends))
+	_sections_done.append("frozen_stress")
 
 
 # --- Invalid targets, cancel -------------------------------------------------------------------------
@@ -501,7 +794,7 @@ func _verify_lifecycle() -> void:
 	for step in range(150):
 		battle.advance(10)
 	await process_frame
-	_check(battle.get_ice_walls().size() == 1 and battle.get_enemies().filter(func(e: CombatUnit) -> bool: return e.alive).all(func(e: CombatUnit) -> bool: return battle.get_slow_remaining(e) > 0 or not e.alive), "In game: the wall stands, the enemies slowed")
+	_check(battle.get_ice_walls().size() == 1 and battle.get_enemies().filter(func(e: CombatUnit) -> bool: return e.alive).all(func(e: CombatUnit) -> bool: return battle.get_slow_remaining(e) > 0 or not e.alive), "In game: the wall stands, the enemies slowed (by 緩速)")
 	# Basic regression: Select All + Move, Basic Attack target.
 	_check(battle.select_all() and battle.command_move_selection(Vector2i(4, 2)), "Select All + Move still work")
 	battle.select_unit(hero)
@@ -519,6 +812,7 @@ func _verify_lifecycle() -> void:
 	_check(main.mercenary_roster.get_mercenary("merc_1").get_exp() > 0 and main.mercenary_roster.get_mercenary("merc_2").get_exp() > 0, "EXP settled for both Mercenaries")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE)) if FileAccess.file_exists(TEST_SAVE) else null
 	_check(saved != null and int(saved["version"]) == 12, "Saved as v12")
+	_check(not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("frozen"), "R. Frozen is never saved (battle runtime only)")
 	var snapshot := JSON.stringify(main.mercenary_roster.get_snapshot())
 	await _destroy(main)
 	main = await _new_main()
@@ -533,6 +827,7 @@ func _verify_scope() -> void:
 	_check(SaveStore.VERSION == 12, "Save schema: still v12 (no version bump)")
 	for path in ["res://scripts/save_store.gd", "res://scripts/main.gd", "res://scripts/mercenary_roster.gd", "res://scripts/mercenary.gd", "res://scripts/progression_state.gd"]:
 		var code := _code_only(path).to_lower()
+		_check(not code.contains("frozen"), "%s: no Frozen (runtime only, Q / R)" % path.get_file())
 		_check(not code.contains("ice_wall") and not code.contains("countdown") and not code.contains("skill_at") and not code.contains("tab_touch"), "%s: nothing from this corrective (no save change)" % path.get_file())
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd"]:
 		var code := _code_only(path).to_lower()

@@ -479,6 +479,11 @@ func get_slow_remaining(unit: CombatUnit) -> int:
 	return maxi(unit.slow_until_ms - _elapsed_ms, 0) if unit.alive else 0
 
 
+## Stage 8: how long the unit stays Frozen (冰牆; 0 when not frozen or dead).
+func get_frozen_remaining(unit: CombatUnit) -> int:
+	return maxi(unit.frozen_until_ms - _elapsed_ms, 0) if unit.alive else 0
+
+
 func get_guard_remaining(unit: CombatUnit) -> int:
 	return maxi(unit.guard_until_ms - _elapsed_ms, 0) if unit.alive else 0
 
@@ -942,6 +947,14 @@ func _tick(ms: int) -> void:
 func _update_unit(unit: CombatUnit, ms: int) -> void:
 	if not unit.alive or is_over():
 		return
+	# Stage 8 Frozen: no movement, no step progress, no Basic Attack and no
+	# attack cooldown progress while frozen; a tick the freeze ends in runs
+	# only its thawed part (timing resumes exactly where it stopped).
+	if unit.frozen_until_ms > _elapsed_ms:
+		unit.claim = unit.cell
+		if unit.frozen_until_ms >= _tick_end_ms:
+			return
+		ms = _tick_end_ms - unit.frozen_until_ms
 	if _phase == Phase.FIGHTING:
 		unit.attack_cooldown_ms = maxi(unit.attack_cooldown_ms - ms, 0)
 	# C06: a casting unit stays where it is until the cast resolves.
@@ -1123,8 +1136,9 @@ func _ice_wall_detour(unit: CombatUnit, destination: Vector2i) -> Vector2i:
 
 
 ## Stage 8 冰牆 Ice Wall (Prototype): the wall's cells stand for
-## SKILL_EFFECT_MS; enemies already on them get the C06 Slow (refreshed,
-## never stacked); an enemy stepping onto one stops where it was. No damage.
+## SKILL_EFFECT_MS; alive enemies already on them are Frozen for
+## SKILL_EFFECT_MS (no move, no step, no Basic Attack; refreshed, never
+## stacked); an enemy stepping onto one stops where it was. No damage.
 func _raise_ice_wall(unit: CombatUnit, center: Vector2i) -> void:
 	var cells := ice_wall_cells(center)
 	_ice_walls.append({"cells": cells, "until_ms": _tick_end_ms + CombatConfig.SKILL_EFFECT_MS, "caster": unit.id})
@@ -1133,9 +1147,14 @@ func _raise_ice_wall(unit: CombatUnit, center: Vector2i) -> void:
 		if not enemy.alive:
 			continue
 		if cells.has(enemy.cell):
-			enemy.slow_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
-			enemy.slowed = true
-		if enemy.is_moving() and cells.has(enemy.next_cell):
+			# Frozen (not the Slow): an unfinished step is dropped so the
+			# unit stays exactly on its cell; re-freezing refreshes, never
+			# stacks.
+			enemy.frozen_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
+			enemy.next_cell = enemy.cell
+			enemy.step_progress_ms = 0
+			enemy.claim = enemy.cell
+		elif enemy.is_moving() and cells.has(enemy.next_cell):
 			enemy.next_cell = enemy.cell
 			enemy.step_progress_ms = 0
 			enemy.claim = enemy.cell

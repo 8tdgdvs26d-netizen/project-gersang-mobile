@@ -108,8 +108,9 @@ const MERC_B_SKILL := {"kind": "aoe", "range": 5, "target": "ground"}
 ## kind id "ice_field" is kept from P04). Ground-targeted: from the chosen
 ## cell's column, ICE_WALL_COLUMNS columns (shifted left at the grid's right
 ## edge) x every row. For SKILL_EFFECT_MS no enemy may step onto a wall cell
-## (friends are not blocked); enemies already on a wall cell when it rises
-## get the C06 Slow (the existing freeze). No damage. It uses only existing
+## (friends are not blocked); alive enemies already on a wall cell when it
+## rises are Frozen for SKILL_EFFECT_MS (no movement, no step progress, no
+## Basic Attack — not the Slow). No damage. It uses only existing
 ## C06 values: SKILL_MP_COST, SKILL_CAST_MS, SKILL_COOLDOWN_MS,
 ## SKILL_EFFECT_MS, SLOW_FACTOR and the AoE range 5.
 const STRATEGIST_SKILL := {"kind": "ice_field", "range": 5, "target": "ground"}

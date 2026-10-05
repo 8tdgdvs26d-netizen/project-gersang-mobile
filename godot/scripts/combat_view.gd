@@ -105,6 +105,8 @@ const GESTURE_OPEN_STATE := "畫符中…"
 const GESTURE_CASTING_STATE := "施法完成後可用"
 const AIM_HINT_TEXT := "點戰場位置施放技能　再按技能取消"
 const SLOW_MARK_TEXT := "緩"
+## Stage 8: a Frozen enemy's mark (冰牆; not the Slow).
+const FROZEN_MARK_TEXT := "凍"
 const AOE_TEXT := "範圍 -%d"
 ## Stage 8: the 冰牆 Ice Wall cells' mark (no damage).
 const ICE_FIELD_TEXT := "冰牆"
@@ -1211,6 +1213,10 @@ class Field extends Control:
 			for unit: CombatUnit in battle.get_last_gesture()["targets"]:
 				draw_arc(_p(view.cell_center(unit.visual_cell())), 24.0, 0.0, TAU, 32, Color(1.0, 0.95, 0.3), 4.0)
 		for unit in battle.get_enemies():
+			if battle.get_frozen_remaining(unit) > 0:
+				_draw_unit(unit, Color(0.55, 0.85, 1.0))
+				draw_string(get_theme_default_font(), _p(view.cell_center(unit.visual_cell())) + Vector2(-10.0, 8.0), CombatView.FROZEN_MARK_TEXT, HORIZONTAL_ALIGNMENT_CENTER, 20.0, 18, Color(0.1, 0.15, 0.25))
+				continue
 			_draw_unit(unit, Color(0.55, 0.3, 0.85) if battle.get_slow_remaining(unit) > 0 else Color(0.85, 0.25, 0.2))
 			if battle.get_slow_remaining(unit) > 0:
 				draw_string(get_theme_default_font(), _p(view.cell_center(unit.visual_cell())) + Vector2(-10.0, 8.0), CombatView.SLOW_MARK_TEXT, HORIZONTAL_ALIGNMENT_CENTER, 20.0, 18, Color.WHITE)

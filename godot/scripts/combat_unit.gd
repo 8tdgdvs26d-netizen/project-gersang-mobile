@@ -80,6 +80,10 @@ var skill_ready_at_ms := 0
 ## Slow / Guard are active while the battle time is below these.
 var slow_until_ms := 0
 var guard_until_ms := 0
+## Stage 8 冰牆 Frozen (enemies caught on a new Ice Wall; battle runtime
+## only, never saved): while the battle time is below this the unit does
+## nothing at all (CombatBattle._update_unit). Not the Slow.
+var frozen_until_ms := 0
 ## Whether Slow applies to this unit's steps / new Basic Attack intervals
 ## (kept current by CombatBattle).
 var slowed := false
