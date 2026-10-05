@@ -147,6 +147,7 @@ func _ready() -> void:
 	_city_hub.deployment_requested.connect(_on_deployment_requested)
 	_city_hub.dismiss_requested.connect(_on_dismiss_requested)
 	_city_hub.claim_requested.connect(_on_claim_requested)
+	_city_hub.equipment_buy_requested.connect(_on_equipment_buy_requested)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	for child in $Actors.get_children():
 		if child is WorldMonster:
@@ -549,6 +550,42 @@ func _refresh_hub_summary() -> void:
 		view_city = current_city_id
 	_city_hub.show_warehouse(get_warehouse_view(view_city), inventory.get_items(), inventory.get_used_capacity(), inventory.get_max_capacity(), _next_request_id())
 	_refresh_mercenary_view()
+	_city_hub.show_equipment_shop(get_equipment_recipients())
+
+
+## Stage 9 P02: the 裝備商店 receiving characters — the Hero, then every owned
+## Mercenary (never a pending one) — by stable id, each with its own load /
+## Capacity (CharacterCarrying).
+func get_equipment_recipients() -> Array:
+	var recipients := [{"id": Mercenary.HERO_ID, "name": CharacterConfig.DISPLAY_NAMES["hero"], "load": carrying.get_load(Mercenary.HERO_ID), "capacity": carrying.get_capacity(Mercenary.HERO_ID)}]
+	for mercenary in mercenary_roster.get_owned():
+		var id := mercenary.get_id()
+		recipients.append({"id": id, "name": RecruitmentService.label(mercenary), "load": carrying.get_load(id), "capacity": carrying.get_capacity(id)})
+	return recipients
+
+
+## Stage 9 P02: buys one `item_id` at the 裝備商店 of the current city for
+## the character `character_id` (stable id): paid, added to its carried
+## equipment (not equipped) and saved as one transaction
+## (EquipmentShopService); a failure changes nothing.
+func buy_equipment(character_id: Variant, item_id: Variant) -> Dictionary:
+	if not is_in_city():
+		return {"success": false, "reason": "ERR_NOT_IN_CITY", "character_id": character_id if typeof(character_id) == TYPE_STRING else "", "item_id": item_id if typeof(item_id) == TYPE_STRING else "", "price": EquipmentShopService.get_price(item_id)}
+	var result := EquipmentShopService.buy(wallet, carrying, character_id, item_id, _persist)
+	_refresh_hub_summary()
+	return result
+
+
+func _on_equipment_buy_requested(character_id: String, item_id: String) -> void:
+	var result := buy_equipment(character_id, item_id)
+	var item_name: String = EquipmentCatalog.get_item(item_id).get("display_name", item_id)
+	_city_hub.show_equipment_feedback(result, item_name, _character_label(character_id))
+
+
+func _character_label(character_id: String) -> String:
+	if character_id == Mercenary.HERO_ID:
+		return CharacterConfig.DISPLAY_NAMES["hero"]
+	return _party_label(character_id)
 
 
 ## Stage 8 P02 / P03: the Mercenary Center's held count, owned list and
