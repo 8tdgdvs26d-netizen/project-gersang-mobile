@@ -194,7 +194,12 @@ static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYP
 ## (CombatConfig.MERCENARY_SKILLS), its own label, start cell
 ## PARTY_START_CELLS[i]. Null when the list is not 0-3 valid instances
 ## with distinct ids.
-static func create_party(enemy_count: int, hero_stats: CharacterStats, mercenaries: Array) -> CombatBattle:
+## Stage 9 P04: `mercenary_stats` (instance id -> CharacterStats) gives a
+## Mercenary's authoritative stats — the game passes CharacterCarrying's
+## (Base + Growth + Allocation + its own Equipment, by stable id); an id not
+## given falls back to CharacterStats.for_mercenary (no equipment: test
+## fixtures). The battle copies each profile once, at creation.
+static func create_party(enemy_count: int, hero_stats: CharacterStats, mercenaries: Array, mercenary_stats: Dictionary = {}) -> CombatBattle:
 	if mercenaries.size() > CombatConfig.PARTY_START_CELLS.size():
 		return null
 	var battle := CombatBattle.new()
@@ -204,7 +209,11 @@ static func create_party(enemy_count: int, hero_stats: CharacterStats, mercenari
 		if not mercenaries[index] is Mercenary:
 			return null
 		var mercenary: Mercenary = mercenaries[index]
-		var stats := CharacterStats.for_mercenary(mercenary)
+		var stats: CharacterStats = null
+		if mercenary_stats.has(mercenary.get_id()):
+			stats = mercenary_stats[mercenary.get_id()] as CharacterStats
+		else:
+			stats = CharacterStats.for_mercenary(mercenary)
 		if stats == null or ids.has(mercenary.get_id()) or not CombatConfig.MERCENARY_SKILLS.has(mercenary.get_type()):
 			return null
 		ids[mercenary.get_id()] = true
@@ -265,10 +274,10 @@ static func from_encounter(context: EncounterContext, party_stats: Dictionary = 
 ## Stage 8 P04: the game's battle for a LOCKED encounter (as from_encounter)
 ## with the Hero + the deployed roster Mercenaries (create_party). Null when
 ## the context or the party is invalid.
-static func from_party(context: EncounterContext, hero_stats: CharacterStats, mercenaries: Array) -> CombatBattle:
+static func from_party(context: EncounterContext, hero_stats: CharacterStats, mercenaries: Array, mercenary_stats: Dictionary = {}) -> CombatBattle:
 	if context == null or context.get_planned_combat_enemy_count() <= 0:
 		return null
-	var battle := create_party(context.get_planned_combat_enemy_count(), hero_stats, mercenaries)
+	var battle := create_party(context.get_planned_combat_enemy_count(), hero_stats, mercenaries, mercenary_stats)
 	if battle == null:
 		return null
 	battle.encounter_id = context.encounter_id

@@ -35,6 +35,13 @@ extends CanvasLayer
 ## unequip_handler: EquipmentService transactions, saved; a failure changes
 ## nothing and says so).
 
+## Stage 9 P05 (approved): 轉移 — the chosen UNEQUIPPED carried item goes to
+## another character shown here (the Hero or an owned Mercenary, by stable
+## id). 轉移 (next to the chosen row) opens a picker over the panel: one row
+## per other character with its load, then 取消 / 確定轉移. transfer_handler
+## does it (EquipmentTransferService: capacity checked, saved; a failure
+## changes nothing and says so). The item is never equipped on arrival.
+
 signal opened
 signal closed
 signal allocation_confirmed(character_id: String)
@@ -93,6 +100,22 @@ const VALUE_NAMES := ["血量", "魔力", "力量", "敏捷", "智力", "物理�
 ## The current-values line of the 裝備 view (subset of VALUE_NAMES).
 const CURRENT_NAMES := ["力量", "智力", "物理攻擊", "魔法攻擊", "物理防禦", "魔法防禦"]
 const MAX_CARRIED_ROWS := 4
+## Stage 9 P05: the carried rows leave room for 轉移 beside the chosen one.
+const CARRIED_ROW_WIDTH := 480.0
+const TRANSFER_TEXT := "轉移"
+const TRANSFER_TITLE := "將%s轉移給："
+const TRANSFER_ROW_TEXT := "%s　負重 %d / %d"
+const TRANSFER_CANCEL_TEXT := "取消"
+const TRANSFER_CONFIRM_TEXT := "確定轉移"
+const TRANSFERRED_FEEDBACK := "已將%s轉移給%s"
+const TRANSFER_CAPACITY_TEXT := "%s負重不足，無法轉移"
+const TRANSFER_SAVE_FAILED_TEXT := "無法儲存，轉移已取消"
+const TRANSFER_FAILED_TEXT := "無法轉移裝備"
+## The picker panel (inside the 720 x 1280 canvas) and its rows: every
+## other character (the Hero + 5 owned Mercenaries, one of them selected).
+const TRANSFER_PANEL_RECT := Rect2(40.0, 240.0, 640.0, 800.0)
+const TRANSFER_ROW_SIZE := Vector2(592.0, 88.0)
+const TRANSFER_ROWS := 5
 
 ## Stage 8 P05: the characters shown, in order (main.gd: the Hero, then the
 ## owned Mercenaries): [{"id", "name", "stats": CharacterStats, "level",
@@ -112,6 +135,8 @@ var preview_provider: Callable
 ## Stage 9 P03: (id, item id) / (id, slot) -> EquipmentService result.
 var equip_handler: Callable
 var unequip_handler: Callable
+## Stage 9 P05: (from id, to id, item id) -> EquipmentTransferService result.
+var transfer_handler: Callable
 
 var _open_button: Button
 var _panel: Control
@@ -148,6 +173,15 @@ var _carried_title: Label
 var _carried_rows: Array[Button] = []
 var _preview_label: Label
 var _selected_item := ""
+## Stage 9 P05: 轉移 and its picker (the item being moved, the chosen
+## destination id, the destination rows).
+var _transfer_button: Button
+var _transfer_modal: Control
+var _transfer_title: Label
+var _transfer_rows: Array[Button] = []
+var _transfer_confirm: Button
+var _transfer_item := ""
+var _transfer_destination := ""
 
 
 func _ready() -> void:
@@ -272,6 +306,7 @@ func close() -> void:
 	if not is_open():
 		return
 	_pending.clear()
+	close_transfer()
 	_panel.visible = false
 	closed.emit()
 
@@ -284,6 +319,7 @@ func select_character(id: String) -> void:
 	_selected = id
 	_pending.clear()
 	_selected_item = ""
+	close_transfer()
 	_feedback_label.text = ""
 	_refresh()
 
@@ -516,7 +552,7 @@ func _build_equipment_view() -> void:
 	_carried_title = _label("CarriedTitle", CARRIED_TITLE, Vector2(32.0, 590.0), Vector2(656.0, 36.0), 24)
 	_equipment_view.add_child(_carried_title)
 	for index in range(MAX_CARRIED_ROWS):
-		var row := _button("Carried%d" % index, "", Vector2(32.0, 632.0 + index * 88.0), Vector2(656.0, 80.0), 22)
+		var row := _button("Carried%d" % index, "", Vector2(32.0, 632.0 + index * 88.0), Vector2(CARRIED_ROW_WIDTH, 80.0), 22)
 		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		row.add_theme_color_override("font_disabled_color", Color(1.0, 0.85, 0.4))
 		row.pressed.connect(_on_carried_row_pressed.bind(index))
@@ -526,6 +562,11 @@ func _build_equipment_view() -> void:
 	_preview_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_preview_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	_equipment_view.add_child(_preview_label)
+	# Stage 9 P05: 轉移, beside the chosen carried row.
+	_transfer_button = _button("TransferButton", TRANSFER_TEXT, Vector2(32.0 + CARRIED_ROW_WIDTH + 16.0, 632.0), Vector2(160.0, 80.0), 30)
+	_transfer_button.pressed.connect(open_transfer)
+	_equipment_view.add_child(_transfer_button)
+	_build_transfer_modal()
 
 
 func get_view() -> String:
@@ -543,6 +584,7 @@ func show_view(view: String) -> void:
 	_view = view
 	_pending.clear()
 	_selected_item = ""
+	close_transfer()
 	_feedback_label.text = ""
 	_refresh()
 
@@ -663,8 +705,160 @@ func _refresh_equipment_view() -> void:
 		var item := EquipmentCatalog.get_item(item_id)
 		row.text = CARRIED_ROW_TEXT % [item["display_name"], int(carried[item_id]), EquipmentCatalog.slot_name(item["slot"]), EquipmentCatalog.describe_bonuses(item_id), int(item["capacity_cost"])]
 		row.disabled = item_id == _selected_item
+	# Stage 9 P05: 轉移 sits beside the chosen row (only while one is chosen).
+	var chosen := ids.find(_selected_item)
+	_transfer_button.visible = chosen >= 0 and chosen < _carried_rows.size()
+	if _transfer_button.visible:
+		_transfer_button.position.y = 632.0 + chosen * 88.0
+	_transfer_button.disabled = _transfer_destinations().is_empty()
 	_preview_label.text = _preview_text(stats, equipped)
 	_equip_button.disabled = _selected_item == ""
+
+
+# --- Stage 9 P05: 轉移 ---------------------------------------------------------
+
+func _build_transfer_modal() -> void:
+	_transfer_modal = ColorRect.new()
+	_transfer_modal.name = "TransferModal"
+	(_transfer_modal as ColorRect).color = Color(0.0, 0.0, 0.0, 0.7)
+	_transfer_modal.position = Vector2.ZERO
+	_transfer_modal.size = Vector2(720.0, 1280.0)
+	_transfer_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	_transfer_modal.visible = false
+	_panel.add_child(_transfer_modal)
+	var box := Panel.new()
+	box.name = "TransferPanel"
+	box.position = TRANSFER_PANEL_RECT.position
+	box.size = TRANSFER_PANEL_RECT.size
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.1, 0.12, 0.13)
+	style.border_color = Color(0.88, 0.75, 0.36)
+	style.set_border_width_all(3)
+	box.add_theme_stylebox_override("panel", style)
+	_transfer_modal.add_child(box)
+	_transfer_title = _label("TransferTitle", "", Vector2(24.0, 24.0), Vector2(592.0, 64.0), 30, HORIZONTAL_ALIGNMENT_CENTER)
+	_transfer_title.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+	box.add_child(_transfer_title)
+	for index in range(TRANSFER_ROWS):
+		var row := _button("Destination%d" % index, "", Vector2(24.0, 104.0 + index * 100.0), TRANSFER_ROW_SIZE, 26)
+		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		row.add_theme_color_override("font_disabled_color", Color(1.0, 0.85, 0.4))
+		row.pressed.connect(_on_destination_pressed.bind(index))
+		box.add_child(row)
+		_transfer_rows.append(row)
+	var cancel := _button("TransferCancel", TRANSFER_CANCEL_TEXT, Vector2(24.0, TRANSFER_PANEL_RECT.size.y - 120.0), Vector2(280.0, 96.0), 30)
+	cancel.pressed.connect(close_transfer)
+	box.add_child(cancel)
+	_transfer_confirm = _button("TransferConfirm", TRANSFER_CONFIRM_TEXT, Vector2(336.0, TRANSFER_PANEL_RECT.size.y - 120.0), Vector2(280.0, 96.0), 30)
+	_transfer_confirm.pressed.connect(confirm_transfer)
+	box.add_child(_transfer_confirm)
+
+
+## The characters the chosen item may go to: every character shown except
+## the selected one (the provider's order: the Hero, then owned Mercenaries).
+func _transfer_destinations() -> Array:
+	return get_characters().filter(func(entry: Dictionary) -> bool: return entry["id"] != _selected)
+
+
+## 轉移: opens the picker for the chosen carried item. False when nothing is
+## chosen or no other character exists.
+func open_transfer() -> bool:
+	if _selected_item == "" or _transfer_destinations().is_empty():
+		return false
+	_transfer_item = _selected_item
+	_transfer_destination = ""
+	_feedback_label.text = ""
+	_transfer_modal.visible = true
+	_refresh_transfer()
+	return true
+
+
+func close_transfer() -> void:
+	_transfer_item = ""
+	_transfer_destination = ""
+	if _transfer_modal != null:
+		_transfer_modal.visible = false
+
+
+func is_transfer_open() -> bool:
+	return _transfer_modal != null and _transfer_modal.visible
+
+
+## Chooses the destination (a character the picker lists). False otherwise.
+func choose_destination(id: String) -> bool:
+	if not is_transfer_open() or not _transfer_destinations().any(func(entry: Dictionary) -> bool: return entry["id"] == id):
+		return false
+	_transfer_destination = id
+	_refresh_transfer()
+	return true
+
+
+## The picker's destination ids, in order (for checks).
+func get_transfer_destination_ids() -> Array:
+	return _transfer_destinations().map(func(entry: Dictionary) -> String: return entry["id"])
+
+
+## {"title", "rows": [text], "destination", "confirm_disabled"} (checks).
+func get_transfer_state() -> Dictionary:
+	var rows := []
+	for row in _transfer_rows:
+		if row.visible:
+			rows.append(row.text)
+	return {"open": is_transfer_open(), "item": _transfer_item, "title": _transfer_title.text, "rows": rows, "destination": _transfer_destination, "confirm_disabled": _transfer_confirm.disabled}
+
+
+## 確定轉移: moves the item (transfer_handler, saved) and closes the picker;
+## the result is shown either way.
+func confirm_transfer() -> bool:
+	if not is_transfer_open() or _transfer_destination == "" or not transfer_handler.is_valid():
+		return false
+	var item_id := _transfer_item
+	var destination := _transfer_destination
+	var destination_name: String = _entry(destination).get("name", "")
+	var result: Dictionary = transfer_handler.call(_selected, destination, item_id)
+	close_transfer()
+	_selected_item = ""
+	var item_name: String = EquipmentCatalog.get_item(item_id).get("display_name", item_id)
+	if result.get("success", false):
+		_feedback_label.text = TRANSFERRED_FEEDBACK % [item_name, destination_name]
+		equipment_changed.emit(_selected)
+		equipment_changed.emit(destination)
+	else:
+		_feedback_label.text = {
+			"ERR_OVER_CAPACITY": TRANSFER_CAPACITY_TEXT % destination_name,
+			"ERR_SAVE_FAILED": TRANSFER_SAVE_FAILED_TEXT,
+		}.get(result.get("reason", ""), TRANSFER_FAILED_TEXT)
+	_refresh()
+	return result.get("success", false)
+
+
+func _on_destination_pressed(index: int) -> void:
+	var destinations := _transfer_destinations()
+	if index < destinations.size():
+		choose_destination(destinations[index]["id"])
+
+
+func _refresh_transfer() -> void:
+	if not is_transfer_open():
+		return
+	var destinations := _transfer_destinations()
+	if not EquipmentCatalog.has_item(_transfer_item) or destinations.is_empty():
+		close_transfer()
+		return
+	if not destinations.any(func(entry: Dictionary) -> bool: return entry["id"] == _transfer_destination):
+		_transfer_destination = ""
+	_transfer_title.text = TRANSFER_TITLE % EquipmentCatalog.get_item(_transfer_item)["display_name"]
+	for index in range(_transfer_rows.size()):
+		var row := _transfer_rows[index]
+		row.visible = index < destinations.size()
+		if not row.visible:
+			continue
+		var id: String = destinations[index]["id"]
+		var state: Variant = equipment_provider.call(id) if equipment_provider.is_valid() else {}
+		state = state if typeof(state) == TYPE_DICTIONARY else {}
+		row.text = TRANSFER_ROW_TEXT % [destinations[index]["name"], int(state.get("load", 0)), int(state.get("capacity", 0))]
+		row.disabled = id == _transfer_destination
+	_transfer_confirm.disabled = _transfer_destination == ""
 
 
 ## "裝備X後：力量 10 → 12　…" from the preview stats (preview_provider: a

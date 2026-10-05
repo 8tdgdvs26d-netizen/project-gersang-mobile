@@ -47,7 +47,38 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 9 P03: Equip / Unequip + Character Equipment UI. Save version stays 13 (unchanged schema).
+Stage 9 P05: Final iPhone acceptance fixes (on top of P04). Save version stays 13 (unchanged
+schema, no migration).
+
+- 轉移 (approved rule): an UNEQUIPPED carried equipment item may move between the Hero and any
+  owned Mercenary (stable ids). In the Character UI 裝備 view, choosing a carried item shows
+  轉移 beside its row; the picker lists every other character with its load, then 取消 /
+  確定轉移. `EquipmentTransferService.transfer` moves one item through the P01
+  `CharacterCarrying.transfer_equipment` (the one equipment model): equipped items must be
+  unequipped first; the destination's existing Capacity rules decide (`can_add_equipment`);
+  unknown / pending / dismissed ids refused (no Hero fallback); never auto-equipped; saved at
+  once, any failure (save included) restores both characters exactly; refused during a battle.
+  Equipment only (goods / cargo never move)
+- Combat ⓘ info: friendly units show 物理防禦 / 魔法防禦, read from the CombatUnit (the values
+  damage mitigation uses; nothing recalculated)
+- 解僱 refused because the Mercenary holds goods or equipment (unchanged ERR_HAS_ITEMS rule):
+  a 無法解僱 modal (此傭兵仍攜帶物品或裝備。請先清空後再解僱。 / 確定) instead of a line in the
+  Mercenary Center page; one modal, never stacked; nothing changes
+- tests: `tests/verify_s9_p05_final_iphone_fixes.gd`
+
+Previous: Stage 9 P04: Equipment Stats -> Combat Integration. Save version stays 13 (unchanged schema).
+
+- one chain into battle: EquipmentCatalog -> CharacterCarrying -> CharacterStats ->
+  get_combat_profile() -> CombatUnit -> the existing damage / Skill paths (no formula in Combat)
+- fixed gap: deployed Mercenaries were rebuilt with `CharacterStats.for_mercenary` (no
+  equipment); `CombatBattle.create_party / from_party` now take `mercenary_stats` (stable id ->
+  authoritative stats) and main passes `CharacterCarrying.get_stats` for every deployed
+  Mercenary. The Hero already fought with its live character_stats (equipment included)
+- each battle copies the profiles once at creation; equipment cannot change during a battle (P03)
+- tests: `tests/verify_s9_p04_equipment_combat.gd` (real Basic Attacks, Gesture, Mage AoE,
+  incoming physical / magic hits, same-type Mercenaries, equip / unequip / save -> battle)
+
+Previous: Stage 9 P03: Equip / Unequip + Character Equipment UI. Save version stays 13 (unchanged schema).
 
 - the Character UI (角色) gets two views: 屬性 (the Stage 7 stats / allocation, unchanged) and
   裝備; the bottom bar holds the view switch, 確認分配 / 裝備 and 關閉
