@@ -485,8 +485,14 @@ func _verify_scope() -> void:
 	var code := ""
 	for path in ["res://scripts/character_condition.gd", "res://scripts/main.gd", "res://scripts/combat_battle.gd", "res://scripts/party_service.gd", "res://scripts/save_store.gd"]:
 		code += _code_only(path).to_lower()
+	# Stage 10 P01 / P02 add the Hospital in their own files and main.gd's
+	# entry points; P00's model, combat, party and save code still have none.
+	var outside_main := ""
+	for path in ["res://scripts/character_condition.gd", "res://scripts/combat_battle.gd", "res://scripts/party_service.gd", "res://scripts/save_store.gd"]:
+		outside_main += _code_only(path).to_lower()
 	for word in ["hospital", "revive", "penalty", "regenerat", "recover_hp", "heal("]:
-		_check(not code.contains(word), "No %s added (Hospital / penalties are later WPs)" % word)
+		var scope := outside_main if word == "hospital" else code
+		_check(not scope.contains(word), "No %s added (Hospital / penalties are later WPs)" % word)
 	var combat := ""
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_view.gd", "res://scripts/combat_config.gd"]:
 		combat += _code_only(path).to_lower()

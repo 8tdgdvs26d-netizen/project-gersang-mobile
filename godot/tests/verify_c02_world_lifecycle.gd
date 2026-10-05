@@ -59,7 +59,10 @@ func _verify_static() -> void:
 		if path.get_file() not in ["main.gd", "encounter_handoff.gd"]:
 			words.append("respawn")
 		for word in words:
-			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
+			# Stage 10 P02 brought the Hospital into main.gd: there the check
+			# narrows to the battle result's commit.
+			var scope := _commit_body() if word == "hospital" and path.get_file() == "main.gd" else code
+			_check(not scope.contains(word), "%s has no %s" % [path.get_file(), word])
 	var main := (load("res://scenes/main.tscn") as PackedScene).instantiate()
 	_check(main.combat_enabled, "Combat is on in the game")
 	main.free()
@@ -368,6 +371,15 @@ func _settle() -> void:
 	for frame in range(4):
 		await physics_frame
 	await process_frame
+
+
+## Stage 10 P02 (approved): the Hospital lives in main.gd now (the 醫院 view's
+## entry points); the battle result itself still never routes to it.
+func _commit_body() -> String:
+	var code := _code_only("res://scripts/main.gd").to_lower()
+	var start := code.find("func commit_battle_result")
+	var end := code.find("\nfunc ", start + 1)
+	return code.substr(start, end - start) if start >= 0 else ""
 
 
 func _code_only(path: String) -> String:

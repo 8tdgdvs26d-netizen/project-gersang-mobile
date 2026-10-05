@@ -205,8 +205,11 @@ func _verify_save_and_scope() -> void:
 	# Stage 9 P03 (approved) brought Equip / Unequip into the Character UI:
 	# "equip_slot" (no equipment in S04) is superseded by "helmet" (still no
 	# slot beyond WEAPON / ARMOR).
+	# Stage 10 P02 (approved) brought the Hospital into main.gd: "hospital" is
+	# checked on the Character UI / stats alone.
 	for word in ["mercenary_center", "helmet", "weapon", "armor", "hospital", "reset_stat", "merc_c", "crit", "dodge"]:
-		_check(not code.contains(word), "AC28 No %s" % word)
+		var scope := (_code_only("res://scripts/character_panel.gd") + _code_only("res://scripts/character_stats.gd")).to_lower() if word == "hospital" else code
+		_check(not scope.contains(word), "AC28 No %s" % word)
 	# Stage 8 P02 brought recruitment into main.gd (the Mercenary Center);
 	# the Character UI and the stats still know nothing about it.
 	var character_code := (_code_only("res://scripts/character_panel.gd") + _code_only("res://scripts/character_stats.gd")).to_lower()

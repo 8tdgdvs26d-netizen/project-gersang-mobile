@@ -61,7 +61,10 @@ func _verify_static() -> void:
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/battle_result.gd", "res://scripts/progression_state.gd", "res://scripts/main.gd", "res://scripts/combat_view.gd"]:
 		var code := _code_only(path).to_lower()
 		for word in ["loot", "drop", "chest", "rarity", "last_hit", "contribution", "bonus", "hospital", "revive", "penalty"]:
-			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
+			# Stage 10 P02 brought the Hospital into main.gd: there the check
+			# narrows to the battle result's commit.
+			var scope := _commit_body() if word == "hospital" and path.get_file() == "main.gd" else code
+			_check(not scope.contains(word), "%s has no %s" % [path.get_file(), word])
 	_sections_done.append("static")
 
 
@@ -557,6 +560,15 @@ func _delete(path: String) -> void:
 	for p in [path, path + ".tmp"]:
 		if FileAccess.file_exists(p):
 			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+
+
+## Stage 10 P02 (approved): the Hospital lives in main.gd now (the 醫院 view's
+## entry points); the battle result itself still never routes to it.
+func _commit_body() -> String:
+	var code := _code_only("res://scripts/main.gd").to_lower()
+	var start := code.find("func commit_battle_result")
+	var end := code.find("\nfunc ", start + 1)
+	return code.substr(start, end - start) if start >= 0 else ""
 
 
 func _code_only(path: String) -> String:

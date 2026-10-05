@@ -3,7 +3,7 @@ extends SceneTree
 ## Stage 10 P02: Hospital UI + player recovery flow (the real City Hub).
 ##   availability  City A / B have 醫院 (WorldLayout.HOSPITAL_CITY_IDS); C / D
 ##                 not; never in the world or a battle
-##   hero          state, 免費恢復 (independent of money / Mercenaries / the
+##   hero          state, 免費治療 (independent of money / Mercenaries / the
 ##                 selection), never a paid choice
 ##   mercenary     selectable only when it needs recovery (hurt, MP only,
 ##                 dead), same-type isolation, select / deselect / refresh
@@ -108,7 +108,7 @@ func _verify_hero() -> void:
 	var max_hp: int = c.get_condition("hero")["max_hp"]
 	var max_mp: int = c.get_condition("hero")["max_mp"]
 	_check(texts["NameLabel"] == "主角" and texts["HpMpLabel"] == "血量 50 / %d　魔力 10 / %d" % [max_hp, max_mp] and texts["StateLabel"] == "【受傷】需要治療" and texts["PriceLabel"] == "治療費用：免費", "6 / 8 Injured Hero: HP / MP, 【受傷】需要治療, 治療費用：免費 (%s)" % str(texts))
-	_check(texts["button"] == "免費恢復" and not hub.get_hospital_hero_button().disabled, "9 / 10 The Hero's own 免費恢復, enabled with $0")
+	_check(texts["button"] == "免費治療" and not hub.get_hospital_hero_button().disabled, "9 / 10 The Hero's own 免費治療, enabled with $0")
 	_check(not hub.get_hospital_ids().has("hero") and hub.get_hospital_select_button("hero") == null, "13 The Hero is never a paid selection")
 	# 7 Dead.
 	c.set_condition("hero", 0, 0)
@@ -122,8 +122,8 @@ func _verify_hero() -> void:
 	hub.get_hospital_hero_button().pressed.emit()
 	await process_frame
 	texts = hub.get_hospital_row_texts("hero")
-	_check(main.wallet.get_balance() == 0 and not c.is_dead("hero") and texts["HpMpLabel"] == "血量 %d / %d　魔力 %d / %d" % [max_hp, max_hp, max_mp, max_mp] and texts["StateLabel"] == "【狀態良好】無需治療", "11 / 12 / 34 免費恢復 at $0: the Hero revived, full HP / MP shown at once")
-	_check(hub.get_feedback_text() == "主角已完全恢復" and hub.get_hospital_hero_button().disabled and texts["PriceLabel"] == "治療費用：不需要", "主角已完全恢復; the button disabled once healthy")
+	_check(main.wallet.get_balance() == 0 and not c.is_dead("hero") and texts["HpMpLabel"] == "血量 %d / %d　魔力 %d / %d" % [max_hp, max_hp, max_mp, max_mp] and texts["StateLabel"] == "【狀態良好】無需治療", "11 / 12 / 34 免費治療 at $0: the Hero revived, full HP / MP shown at once")
+	_check(hub.get_feedback_text() == "主角已完全康復" and hub.get_hospital_hero_button().disabled and texts["PriceLabel"] == "治療費用：不需要", "主角已完全康復; the button disabled once healthy")
 	_check(c.is_dead("merc_1") and hub.get_hospital_selection() == ["merc_1"], "The Mercenary choice is untouched by the Hero's recovery")
 	var saved: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
 	_check(saved["condition"]["hero"]["dead"] == false and int(saved["money"]) == 0, "Saved at once (v14)")
@@ -170,7 +170,7 @@ func _verify_mercenaries() -> void:
 	var dead_4 := c.get_condition("merc_4")
 	hub.get_hospital_confirm_button().pressed.emit()
 	await process_frame
-	_check(main.wallet.get_balance() == 900 and hub.get_feedback_text() == "已恢復 1 名傭兵，費用 $100", "35 / 36 確認治療: 已恢復 1 名傭兵，費用 $100; $1,000 -> $900")
+	_check(main.wallet.get_balance() == 900 and hub.get_feedback_text() == "已治療 1 名傭兵，費用 $100", "35 / 36 確認治療: 已治療 1 名傭兵，費用 $100; $1,000 -> $900")
 	var row := hub.get_hospital_row_texts("merc_1")
 	var max_hp_1: int = c.get_condition("merc_1")["max_hp"]
 	var max_mp_1: int = c.get_condition("merc_1")["max_mp"]
@@ -212,7 +212,7 @@ func _verify_pricing() -> void:
 	hub.get_hospital_confirm_button().pressed.emit()
 	await process_frame
 	_check(main.wallet.get_balance() == 50 and not c.is_dead("hero") and not c.is_dead("merc_1") and not c.is_dead("merc_2") and c.is_dead("merc_3"), "28 Two recovered for $200 ($50 left), the Hero free, 軍師 #3 still dead")
-	_check(hub.get_feedback_text() == "主角已完全恢復；已恢復 2 名傭兵，費用 $200", "Feedback names the Hero and the two (%s)" % hub.get_feedback_text())
+	_check(hub.get_feedback_text() == "主角已完全康復；已治療 2 名傭兵，費用 $200", "Feedback names the Hero and the two (%s)" % hub.get_feedback_text())
 	await _destroy(main)
 	# 31 $100 / 32 $99.
 	main = await _hospital_game(["GUARDIAN"], 100)
@@ -258,14 +258,14 @@ func _verify_feedback() -> void:
 	_check(_hospital_texts(hub) == shown and hub.get_hospital_selection() == ["merc_1", "merc_2"], "39 The refreshed view shows the restored state (no success shown), the choice kept for a retry")
 	hub.get_hospital_hero_button().pressed.emit()
 	await process_frame
-	_check(hub.get_feedback_text() == "無法儲存，治療已取消" and c.is_dead("hero"), "39 免費恢復 save failure: the Hero still dead, no success")
+	_check(hub.get_feedback_text() == "無法儲存，治療已取消" and c.is_dead("hero"), "39 免費治療 save failure: the Hero still dead, no success")
 	main.save_path = TEST_SAVE
 	hub.get_hospital_confirm_button().pressed.emit()
 	await process_frame
-	_check(main.wallet.get_balance() == 100 and not c.is_dead("hero") and hub.get_feedback_text() == "主角已完全恢復；已恢復 2 名傭兵，費用 $200", "Retry after the failure succeeds")
+	_check(main.wallet.get_balance() == 100 and not c.is_dead("hero") and hub.get_feedback_text() == "主角已完全康復；已治療 2 名傭兵，費用 $200", "Retry after the failure succeeds")
 	# Nothing to recover.
 	hub.get_hospital_hero_button().pressed.emit()
-	_check(hub.get_hospital_hero_button().disabled, "Healthy Hero: 免費恢復 disabled")
+	_check(hub.get_hospital_hero_button().disabled, "Healthy Hero: 免費治療 disabled")
 	hub.show_hospital_feedback(main.hospital_recover_hero(), true)
 	_check(hub.get_feedback_text() == "沒有需要治療的角色", "沒有需要治療的角色 (no raw code)")
 	# Every expected reason has player words (never a raw code).
@@ -469,7 +469,7 @@ func _verify_stress() -> void:
 		var changed := _main_state(main) != before
 		if main.wallet.get_balance() < 0:
 			negative += 1
-		if feedback.begins_with("主角已完全恢復") or feedback.begins_with("已恢復"):
+		if feedback.begins_with("主角已完全康復") or feedback.begins_with("已治療"):
 			successes += 1
 			if fail or not changed:
 				false_success += 1

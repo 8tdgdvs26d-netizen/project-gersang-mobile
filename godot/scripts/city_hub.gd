@@ -28,7 +28,7 @@ signal dismiss_requested(mercenary_id: String)
 signal claim_requested(mercenary_id: String)
 ## Stage 9 P02: buy one `item_id` for the character `character_id` (stable id).
 signal equipment_buy_requested(character_id: String, item_id: String)
-## Stage 10 P02: 醫院 — the Hero's free recovery, and the chosen Mercenaries'
+## Stage 10 P02: 醫院 — the Hero's free treatment, and the chosen Mercenaries'
 ## paid recovery (stable ids).
 signal hospital_hero_requested
 signal hospital_recover_requested(mercenary_ids: Array)
@@ -48,7 +48,7 @@ const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE, FA
 ## Stage 10 P02: 醫院 texts (RecoveryService decides who needs recovery and
 ## the prices; the hub only shows them and passes stable ids back).
 const HOSPITAL_NOTE := "開發原型：主角治療免費；每名傭兵治療 $%s（不論傷勢）"
-const HOSPITAL_HERO_BUTTON_TEXT := "免費恢復"
+const HOSPITAL_HERO_BUTTON_TEXT := "免費治療"
 const HOSPITAL_SELECT_TEXT := "選擇"
 const HOSPITAL_SELECTED_TEXT := "已選擇"
 const HOSPITAL_CONFIRM_TEXT := "確認治療"
@@ -62,8 +62,8 @@ const HOSPITAL_NO_PRICE_TEXT := "治療費用：不需要"
 const HOSPITAL_NO_MERCENARY_TEXT := "尚未持有傭兵"
 const HOSPITAL_SUMMARY_TEXT := "已選傭兵 %d 名　合計 $%s　持有金錢 $%s"
 const HOSPITAL_SHORT_TEXT := "持有金錢不足，請減少選擇的傭兵"
-const HOSPITAL_HERO_SUCCESS_TEXT := "主角已完全恢復"
-const HOSPITAL_SUCCESS_TEXT := "已恢復 %d 名傭兵，費用 $%s"
+const HOSPITAL_HERO_SUCCESS_TEXT := "主角已完全康復"
+const HOSPITAL_SUCCESS_TEXT := "已治療 %d 名傭兵，費用 $%s"
 const HOSPITAL_FAILURE_MESSAGES := {
 	"ERR_INSUFFICIENT_FUNDS": HOSPITAL_SHORT_TEXT,
 	"ERR_NOTHING_TO_RECOVER": "沒有需要治療的角色",
@@ -77,6 +77,8 @@ const HOSPITAL_FAILURE_MESSAGES := {
 	"ERR_NO_HOSPITAL": "此城市沒有醫院",
 }
 const HOSPITAL_GENERIC_FAILURE := "治療失敗"
+## The Hero's stable id (the hub never reads the roster model).
+const HOSPITAL_HERO_ID := "hero"
 const HOSPITAL_ROW_BUTTON_SIZE := Vector2(160, 88)
 const HOSPITAL_INFO_WIDTH := 440.0
 ## The Mercenary list scrolls past this height (five rows fit on 720 x 1280).
@@ -1209,7 +1211,7 @@ func get_hospital_confirm_button() -> Button:
 
 ## The texts of the Hero row ("hero") or a Mercenary row (stable id).
 func get_hospital_row_texts(id: String) -> Dictionary:
-	var row: Node = _hospital_hero_row if id == Mercenary.HERO_ID else _hospital_rows.get(id)
+	var row: Node = _hospital_hero_row if id == HOSPITAL_HERO_ID else _hospital_rows.get(id)
 	if row == null:
 		return {}
 	var texts := {}
@@ -1223,7 +1225,7 @@ func get_hospital_summary_texts() -> Dictionary:
 	return {"summary": _hospital_summary_label.text, "short": _hospital_short_label.text, "confirm": _hospital_confirm_button.text}
 
 
-## The result of 免費恢復 / 確認治療 (RecoveryService via main.gd). On success
+## The result of 免費治療 / 確認治療 (RecoveryService via main.gd). On success
 ## the selection is cleared; on a stale choice it is dropped. main.gd then
 ## shows the fresh status (refused / failed: the restored state).
 func show_hospital_feedback(result: Dictionary, hero_only: bool) -> void:
