@@ -49,7 +49,7 @@ func _verify_static() -> void:
 	_check(CombatConfig.GESTURE_MP_COST == 50 and CombatConfig.GESTURE_FAIL_MP_COST == 25 and CombatConfig.GESTURE_COOLDOWN_MS == 15000 and CombatConfig.GESTURE_WINDOW_MS == 10000, "Gesture 50 MP (Fail 25), cooldown 15 s, window 10 s")
 	_check(CombatConfig.GESTURE_BASE_DAMAGE == 100 and CombatConfig.GESTURE_DAMAGE_PERCENT == [120, 100, 50, 0] and CombatConfig.GESTURE_MAX_TARGETS == 10, "Damage 120 / 100 / 50 / 0, at most 10 targets")
 	_check(CombatConfig.COMBAT_TIME_LIMIT_MS == 300000 and CombatConfig.PREPARATION_MS == 3000, "Combat Clock limit 05:00, preparation 3 s")
-	_check(CombatConfig.SKILL_COOLDOWN_MS == 8000 and CombatConfig.SKILL_CAST_MS == 1000 and CombatConfig.MERC_B_SKILL == {"kind": "aoe", "range": 5}, "C06 values unchanged")
+	_check(CombatConfig.SKILL_COOLDOWN_MS == 8000 and CombatConfig.SKILL_CAST_MS == 1000 and CombatConfig.MERC_B_SKILL == {"kind": "aoe", "range": 5, "target": "ground"}, "C06 values unchanged (Stage 8: the AoE is ground-targeted)")
 	_check(SaveStore.VERSION == 12 and SaveStore.V9_KEYS.size() == 9, "Save v12 (P05) (S05 adds only the allocation)")
 	for path in ["res://scripts/save_store.gd", "res://scripts/progression_state.gd", "res://scripts/main.gd", "res://scripts/battle_result.gd"]:
 		var code := _code_only(path).to_lower()
@@ -146,21 +146,21 @@ func _verify_normal_skill_interplay() -> void:
 	_check(hero.skill_state == CombatUnit.SkillState.CASTING and battle.get_gesture_readiness() == CombatBattle.GestureReadiness.CASTING and not battle.open_gesture() and not battle.is_gesture_open(), "Hero casting Slow: Gesture refused")
 	battle.advance(1000)
 	_check(hero.skill_state == CombatUnit.SkillState.NONE and battle.get_gesture_readiness() == CombatBattle.GestureReadiness.READY, "Cast done: Gesture ready")
-	# Pending (approaching) Slow: the Gesture replaces it.
+	# Stage 8 iPhone L3 corrective: the Hero's Slow needs no target, so it
+	# never waits (no pending Slow for the Gesture to replace): even with
+	# every enemy far away it casts at once and the Gesture waits for it.
 	var pending := _fight(10, 3)
 	var pending_hero := pending.get_hero()
 	var far := pending.get_enemies()[0]
 	var attacked := pending.get_enemies()[1]
 	pending.command_target(attacked)
 	pending.command_skill(far)
-	pending.advance(100)
-	_check(pending_hero.skill_state == CombatUnit.SkillState.PENDING and pending_hero.mp == 200, "Hero approaching for Slow")
-	_check(pending.open_gesture(), "Gesture opened over the pending Slow")
-	_check(pending_hero.skill_state == CombatUnit.SkillState.NONE and pending_hero.skill_target == null and pending_hero.mp == 200 and pending.get_skill_cooldown_remaining(pending_hero) == 0, "Pending Slow replaced: no MP, no cooldown, no second active action")
+	_check(pending_hero.skill_state == CombatUnit.SkillState.CASTING and pending_hero.mp == 175 and pending_hero.target == null, "Far enemies: the Slow casts at once (never pending)")
+	_check(not pending.open_gesture() and not pending.is_gesture_open(), "Gesture refused while that Slow casts")
+	pending.advance(1000)
+	_check(pending_hero.skill_state == CombatUnit.SkillState.NONE and pending.get_slow_remaining(far) > 0 and pending.get_skill_cooldown_remaining(pending_hero) == 8000, "Resolved: every enemy slowed (also the far one), cooldown started")
 	_check(pending_hero.target == attacked, "The order before the Slow comes back")
-	pending.submit_gesture(_ideal())
-	pending.advance(2000)
-	_check(pending_hero.skill_state == CombatUnit.SkillState.NONE and pending.get_slow_remaining(far) == 0, "The replaced Slow never casts")
+	_check(pending.open_gesture() and pending.is_gesture_open(), "Cast done: the Gesture opens")
 	_sections_done.append("normal_skill_interplay")
 
 

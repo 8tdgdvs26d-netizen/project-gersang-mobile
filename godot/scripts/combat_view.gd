@@ -87,26 +87,27 @@ const ROLE_TAGS := {CombatUnit.Role.HERO: "", CombatUnit.Role.MERC_A: "守護", 
 ## see unit_name().
 const ROLE_COLORS := {CombatUnit.Role.HERO: Color(0.95, 0.78, 0.3), CombatUnit.Role.MERC_A: Color(0.35, 0.65, 0.95), CombatUnit.Role.MERC_B: Color(0.55, 0.85, 0.5), CombatUnit.Role.GUARDIAN: Color(0.35, 0.65, 0.95), CombatUnit.Role.MAGE: Color(0.55, 0.85, 0.5), CombatUnit.Role.STRATEGIST: Color(0.7, 0.55, 0.95)}
 ## C06 / C07 Skills (C08 skill bar; MP is shown as 魔力).
-const SKILL_NAMES := {"slow": "緩速", "guard": "守護", "aoe": "範圍攻擊", "lightning": "閃電", "ice_field": "冰場"}
+const SKILL_NAMES := {"slow": "緩速", "guard": "守護", "aoe": "範圍攻擊", "lightning": "閃電", "ice_field": "冰牆"}
 ## Short identifier drawn in each skill icon (no emoji font needed).
 const SKILL_MARKS := {"slow": "緩", "guard": "守", "aoe": "爆", "lightning": "雷", "ice_field": "冰"}
 const NORMAL_SKILL_TEXT := "普通技能：%s　魔力 %d"
 const SPECIAL_SKILL_TEXT := "特殊技能：%s　魔力 %d"
 const SKILL_READY_STATE := "可用"
 const SKILL_PREPARATION_STATE := "戰鬥開始後可用"
-const SKILL_AIM_STATE := "選擇目標"
-const SKILL_PENDING_STATE := "接近目標"
+## Stage 8: only ground Skills are aimed (a battlefield location).
+const SKILL_AIM_STATE := "選擇位置"
+const SKILL_PENDING_STATE := "接近位置"
 const SKILL_CASTING_STATE := "施法中…"
 const SKILL_COOLDOWN_STATE := "冷卻 %.1f 秒"
 const SKILL_NO_MP_STATE := "魔力不足"
 const SKILL_UNAVAILABLE_STATE := "不可用"
 const GESTURE_OPEN_STATE := "畫符中…"
 const GESTURE_CASTING_STATE := "施法完成後可用"
-const AIM_HINT_TEXT := "點敵人施放技能　點其他地方取消"
+const AIM_HINT_TEXT := "點戰場位置施放技能　再按技能取消"
 const SLOW_MARK_TEXT := "緩"
 const AOE_TEXT := "範圍 -%d"
-## Stage 8 P04: the 冰場 cells' mark (no damage).
-const ICE_FIELD_TEXT := "冰場"
+## Stage 8: the 冰牆 Ice Wall cells' mark (no damage).
+const ICE_FIELD_TEXT := "冰牆"
 ## How long the AoE cells stay marked (battle time).
 const AOE_MARK_MS := 600
 const EXIT_TEXT := "返回世界"
@@ -473,12 +474,18 @@ func cell_center(cell: Vector2) -> Vector2:
 	return Vector2(cell.x * CELL_SIZE.x + CELL_SIZE.x / 2.0, FIELD_TOP + cell.y * CELL_SIZE.y + CELL_SIZE.y / 2.0) - _camera.offset
 
 
-## One tap / click on the battlefield.
+## One tap / click on the battlefield. Stage 8: a tap off the grid while
+## aiming a ground Skill is not a legal location: it cancels the aim.
 func tap_at(screen_position: Vector2) -> bool:
 	if _battle == null:
 		return false
 	var cell := cell_at(screen_position)
-	return cell != Vector2i(-1, -1) and _battle.tap(cell)
+	if cell == Vector2i(-1, -1):
+		if _battle.is_aiming():
+			_battle.cancel_skill_aim()
+			_refresh()
+		return false
+	return _battle.tap(cell)
 
 
 ## C08 battlefield press / drag / release (screen pixels) of one pointer. A
@@ -827,8 +834,9 @@ func press_skill_slot(slot: SkillSlot) -> void:
 	press_skill_entry(slot.entry)
 
 
-## C06: the selected unit's Skill: Guard at once, Slow / AoE start aiming
-## (the next tap on an enemy); pressed while aiming it cancels the aim.
+## C06: the selected unit's Skill: Guard / the Hero's Slow at once; Stage 8:
+## AoE / Ice Wall start aiming (the next tap on a battlefield cell); pressed
+## while aiming it cancels the aim.
 func press_skill() -> bool:
 	if _battle == null:
 		return false
@@ -1184,6 +1192,12 @@ class Field extends Control:
 		for row in range(CombatConfig.ROWS + 1):
 			var y := origin.y + row * cell_size.y
 			draw_line(Vector2(origin.x, y), Vector2(origin.x + width, y), Color(1, 1, 1, 0.08), 1.0)
+		# Stage 8: the standing Ice Walls (until they melt).
+		for wall in battle.get_ice_walls():
+			for cell: Vector2i in wall["cells"]:
+				var rect := Rect2(origin + Vector2(cell) * cell_size, cell_size)
+				draw_rect(rect, Color(0.6, 0.85, 1.0, 0.35))
+				draw_rect(rect.grow(-2.0), Color(0.75, 0.92, 1.0, 0.9), false, 2.0)
 		# C06: the last AoE's cells, briefly.
 		var aoe := battle.get_last_aoe()
 		if not aoe.is_empty() and battle.get_elapsed_ms() - int(aoe["at_ms"]) < CombatView.AOE_MARK_MS:
@@ -1211,8 +1225,12 @@ class Field extends Control:
 			if unit.skill_state == CombatUnit.SkillState.CASTING:
 				var done := 1.0 - float(battle.get_cast_remaining(unit)) / CombatConfig.SKILL_CAST_MS
 				draw_arc(at, 31.0, -PI / 2.0, -PI / 2.0 + TAU * done, 32, Color(1.0, 0.95, 0.5), 4.0)
-			elif unit.skill_state == CombatUnit.SkillState.PENDING and unit.skill_target != unit:
+			elif unit.skill_state == CombatUnit.SkillState.PENDING and unit.skill_target != null and unit.skill_target != unit:
 				draw_arc(_p(view.cell_center(unit.skill_target.visual_cell())), 26.0, 0.0, TAU, 32, Color(0.75, 0.45, 1.0), 3.0)
+			elif unit.skill_state == CombatUnit.SkillState.PENDING and unit.skill_cell != CombatUnit.NO_CELL:
+				# Stage 8: a ground Skill's chosen location.
+				var spot := _p(view.cell_center(Vector2(unit.skill_cell)))
+				draw_rect(Rect2(spot - Vector2(24, 24), Vector2(48, 48)), Color(0.75, 0.45, 1.0), false, 3.0)
 			# C08: every selected unit ringed; the Active Caster in gold.
 			if selection.has(unit):
 				var caster := unit == battle.get_selected()

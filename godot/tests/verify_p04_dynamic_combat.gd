@@ -9,8 +9,10 @@ extends SceneTree
 ##   party        Hero + 0 / 1 / 2 / 3 deployed -> 1 / 2 / 3 / 4 units (ids,
 ##                roles, labels, cells, skills, HP / MP); invalid lists refused
 ##   independence two 守衛: own selection, Skill, HP / MP, orders
-##   ice field    冰場 slows every alive enemy on the 5 cells, no damage, MP /
-##                cooldown as C06, refresh not stack
+##   ice field    (Stage 8 iPhone L3 corrective: now the 冰牆 Ice Wall, 2
+##                columns x 5 rows from the chosen cell) slows every alive
+##                enemy on its 10 cells, no damage, MP / cooldown as C06,
+##                refresh not stack (blocking: verify_s8_l3_corrective)
 ##   settlement   PartyProgression: all survivors divide, the Hero's share to
 ##                its slot, each Mercenary's to its own Level / EXP; DEFEAT /
 ##                RETREAT / dead; roster before legacy slots; never twice
@@ -58,7 +60,7 @@ func _initialize() -> void:
 func _verify_config() -> void:
 	_check(CharacterConfig.MERCENARY_PROFILE == {"GUARDIAN": "merc_a", "MAGE": "merc_b", "STRATEGIST": "merc_b"}, "AC01 守衛 uses merc_a, 法師 merc_b, 軍師 merc_b (Prototype)")
 	_check(CombatConfig.MERCENARY_SKILLS["GUARDIAN"] == CombatConfig.MERC_A_SKILL and CombatConfig.MERCENARY_SKILLS["MAGE"] == CombatConfig.MERC_B_SKILL, "AC01 守衛 Guard, 法師 AoE (the existing Skills)")
-	_check(CombatConfig.STRATEGIST_SKILL == {"kind": "ice_field", "range": CombatConfig.MERC_B_SKILL["range"]} and CombatConfig.MERCENARY_SKILLS["STRATEGIST"] == CombatConfig.STRATEGIST_SKILL, "AC02 軍師 冰場, range = the AoE range 5")
+	_check(CombatConfig.STRATEGIST_SKILL == {"kind": "ice_field", "range": CombatConfig.MERC_B_SKILL["range"], "target": "ground"} and CombatConfig.MERCENARY_SKILLS["STRATEGIST"] == CombatConfig.STRATEGIST_SKILL, "AC02 軍師 冰牆 (ground), range = the AoE range 5")
 	# Approved numbers unchanged (no new value hidden in the existing ones).
 	_check(CharacterConfig.BASE.keys() == ["hero", "merc_a", "merc_b"] and CharacterConfig.COMBAT_COMPAT.keys() == ["hero", "merc_a", "merc_b"] and CharacterConfig.GROWTH_PER_LEVEL.keys() == ["hero", "merc_a", "merc_b"], "No new stat profile was added")
 	_check(CharacterConfig.BASE["merc_a"] == {"hp": 200, "mp": 100, "str": 10, "agi": 10, "int": 10} and CharacterConfig.BASE["merc_b"] == {"hp": 150, "mp": 100, "str": 10, "agi": 10, "int": 10}, "Base values unchanged")
@@ -79,7 +81,7 @@ func _verify_config() -> void:
 		var at := text.find("STRATEGIST")
 		var before := text.substr(maxi(at - 700, 0), 700)
 		_check(at >= 0 and before.contains("PROTOTYPE"), "AC02 %s marks the Strategist settings PROTOTYPE" % path.get_file())
-	_check(CombatView.SKILL_NAMES["ice_field"] == "冰場" and CombatView.SKILL_MARKS["ice_field"] == "冰", "冰場 / 冰 names")
+	_check(CombatView.SKILL_NAMES["ice_field"] == "冰牆" and CombatView.SKILL_MARKS["ice_field"] == "冰", "冰牆 / 冰 names")
 	_sections_done.append("config")
 
 
@@ -166,7 +168,10 @@ func _verify_ice_field() -> void:
 	var strategist := battle.get_friends()[1]
 	var enemies := battle.get_enemies()
 	# Fixture: enemies frozen in place (no step finishes) so the cells are exact.
-	var spots := [Vector2i(5, 1), Vector2i(5, 0), Vector2i(5, 2), Vector2i(4, 1), Vector2i(6, 1), Vector2i(6, 2), Vector2i(5, 3)]
+	# Stage 8: the wall from (5,1) covers columns 5-6, rows 0-4; the first 5
+	# spots are inside it (also the old cross's diagonal / far rows), the
+	# last 2 just outside.
+	var spots := [Vector2i(5, 1), Vector2i(5, 0), Vector2i(5, 4), Vector2i(6, 1), Vector2i(6, 3), Vector2i(4, 1), Vector2i(7, 2)]
 	for index in range(enemies.size()):
 		var enemy := enemies[index]
 		enemy.move_speed = 0.001
@@ -174,7 +179,7 @@ func _verify_ice_field() -> void:
 			_place(enemy, spots[index])
 	battle.advance(CombatConfig.PREPARATION_MS)
 	var hp_before := enemies.map(func(e: CombatUnit) -> int: return e.hp)
-	_check(battle.select_unit(strategist) and battle.command_skill(enemies[0]), "AC08 軍師 orders 冰場 on the enemy at (5,1)")
+	_check(battle.select_unit(strategist) and battle.command_skill(enemies[0]), "AC08 軍師 orders 冰牆 on the enemy's cell (5,1)")
 	var resolved := []
 	battle.skill_resolved.connect(func(unit: CombatUnit) -> void: resolved.append(battle.get_elapsed_ms()))
 	battle.advance(50)
@@ -185,9 +190,9 @@ func _verify_ice_field() -> void:
 		var inside := index < 5
 		_check(battle.get_slow_remaining(enemies[index]) > 0 == inside, "AC08 Enemy at %s %s" % [str(spots[index]), "slowed" if inside else "not slowed"])
 	_check(battle.get_slow_remaining(enemies[0]) <= CombatConfig.SKILL_EFFECT_MS and battle.get_slow_remaining(enemies[0]) > CombatConfig.SKILL_EFFECT_MS - 100, "5 s Slow")
-	_check(enemies.all(func(e: CombatUnit) -> bool: return e.hp == hp_before[enemies.find(e)]), "AC08 冰場 deals no damage")
+	_check(enemies.all(func(e: CombatUnit) -> bool: return e.hp == hp_before[enemies.find(e)]), "AC08 冰牆 deals no damage")
 	var aoe := battle.get_last_aoe()
-	_check(aoe["kind"] == "ice_field" and aoe["damage"] == 0 and (aoe["cells"] as Array).size() == 5, "The 5 cells are marked as 冰場")
+	_check(aoe["kind"] == "ice_field" and aoe["damage"] == 0 and aoe["cells"] == CombatBattle.ice_wall_cells(Vector2i(5, 1)) and (aoe["cells"] as Array).size() == 10, "The 10 wall cells are marked as 冰牆")
 	_check(enemies[0].step_ms() == roundi(1000.0 / enemies[0].move_speed) * CombatConfig.SLOW_FACTOR, "Slowed steps take x2 (C06 Slow)")
 	_check(strategist.mp == strategist.max_mp - CombatConfig.SKILL_MP_COST, "MP 25 for the cast")
 	# Refresh, never stack: a second 軍師 re-applies 冰場 while the Slow runs.
@@ -203,7 +208,7 @@ func _verify_ice_field() -> void:
 	pair.command_skill(target)
 	pair.advance(50)
 	pair.advance(CombatConfig.SKILL_CAST_MS)
-	_check(pair.get_slow_remaining(target) > CombatConfig.SKILL_EFFECT_MS - 100, "First 冰場: 5 s")
+	_check(pair.get_slow_remaining(target) > CombatConfig.SKILL_EFFECT_MS - 100, "First 冰牆: 5 s")
 	pair.advance(3000)
 	var left := pair.get_slow_remaining(target)
 	pair.select_unit(second)

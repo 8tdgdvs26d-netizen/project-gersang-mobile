@@ -51,6 +51,11 @@ const SAVE_FAILED_TEXT := "無法儲存，分配已取消"
 ## Stage 8 P05: the tab strip and one tab.
 const TAB_STRIP_RECT := Rect2(24.0, 104.0, 672.0, 88.0)
 const TAB_SIZE := Vector2(208.0, 72.0)
+## Stage 8 iPhone L3 corrective (AC02): the whole tab strip takes a finger
+## swipe (TabTouch over the strip): a press that moves farther than this is
+## a horizontal scroll, not a tab tap; a press released without moving that
+## far selects the tab under it. The thin scrollbar is only an indicator.
+const TAB_DRAG_THRESHOLD := 12.0
 
 ## Stage 8 P05: the characters shown, in order (main.gd: the Hero, then the
 ## owned Mercenaries): [{"id", "name", "stats": CharacterStats, "level",
@@ -67,6 +72,13 @@ var _open_button: Button
 var _panel: Control
 var _tab_strip: ScrollContainer
 var _tab_row: HBoxContainer
+var _tab_touch: Control
+## The finger (or mouse) on the tab strip: its pointer id (-1: none), where
+## it pressed, the scroll then, and whether it became a swipe.
+var _tab_pointer := -1
+var _tab_press := Vector2.ZERO
+var _tab_press_scroll := 0
+var _tab_swiping := false
 var _tabs := {}
 var _info_labels: Array[Label] = []
 var _row_labels := {}
@@ -106,6 +118,15 @@ func _ready() -> void:
 	_tab_row.name = "Tabs"
 	_tab_row.add_theme_constant_override("separation", 12)
 	_tab_strip.add_child(_tab_row)
+	# Every touch on the strip goes to TabTouch (the tabs ignore input), so a
+	# swipe anywhere on the tabs scrolls and a still tap selects.
+	_tab_touch = Control.new()
+	_tab_touch.name = "TabTouch"
+	_tab_touch.position = TAB_STRIP_RECT.position
+	_tab_touch.size = TAB_STRIP_RECT.size
+	_tab_touch.mouse_filter = Control.MOUSE_FILTER_STOP
+	_tab_touch.gui_input.connect(_on_tab_touch_input)
+	_panel.add_child(_tab_touch)
 	for index in range(3):
 		var info := _label("Info%d" % index, "", Vector2(32.0, 196.0 + index * 40.0), Vector2(656.0, 40.0), 26)
 		if index == 0:
@@ -210,6 +231,65 @@ func get_characters() -> Array:
 ## Stage 8 P05: the ids of the tabs shown, in order.
 func get_tab_ids() -> Array:
 	return get_characters().map(func(entry: Dictionary) -> String: return entry["id"])
+
+
+## Stage 8 iPhone L3 corrective: one touch / mouse event on the tab strip
+## (positions local to the strip). Press: remember; move past
+## TAB_DRAG_THRESHOLD horizontally: scroll with the finger; release: a tap
+## (never moved that far) selects the tab under it.
+func _on_tab_touch_input(event: InputEvent) -> void:
+	var touch := event as InputEventScreenTouch
+	var drag := event as InputEventScreenDrag
+	var click := event as InputEventMouseButton
+	var motion := event as InputEventMouseMotion
+	if click != null and click.pressed and click.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_LEFT, MOUSE_BUTTON_WHEEL_DOWN, MOUSE_BUTTON_WHEEL_RIGHT]:
+		var step := -TAB_SIZE.x / 2.0 if click.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_LEFT] else TAB_SIZE.x / 2.0
+		_tab_strip.scroll_horizontal = int(_tab_strip.scroll_horizontal + step)
+		_tab_touch.accept_event()
+		return
+	if event is InputEventMouse and event.device == InputEvent.DEVICE_ID_EMULATION:
+		return
+	if touch != null or (click != null and click.button_index == MOUSE_BUTTON_LEFT):
+		var pointer: int = touch.index if touch != null else -2
+		var pressed: bool = touch.pressed if touch != null else click.pressed
+		var at: Vector2 = touch.position if touch != null else click.position
+		if pressed and _tab_pointer == -1:
+			_tab_pointer = pointer
+			_tab_press = at
+			_tab_press_scroll = _tab_strip.scroll_horizontal
+			_tab_swiping = false
+		elif not pressed and pointer == _tab_pointer:
+			if not _tab_swiping and not (touch != null and touch.canceled):
+				var tab_id := tab_at(at)
+				if tab_id != "":
+					select_character(tab_id)
+			_tab_pointer = -1
+		_tab_touch.accept_event()
+		return
+	if drag != null or (motion != null and motion.button_mask & MOUSE_BUTTON_MASK_LEFT):
+		var pointer: int = drag.index if drag != null else -2
+		if pointer != _tab_pointer:
+			return
+		var at: Vector2 = drag.position if drag != null else motion.position
+		if not _tab_swiping and absf(at.x - _tab_press.x) > TAB_DRAG_THRESHOLD:
+			_tab_swiping = true
+		if _tab_swiping:
+			_tab_strip.scroll_horizontal = roundi(_tab_press_scroll - (at.x - _tab_press.x))
+		_tab_touch.accept_event()
+
+
+## The id of the tab under `at` (strip-local), "" for none.
+func tab_at(at: Vector2) -> String:
+	var row_x := at.x + _tab_strip.scroll_horizontal
+	for id in _tabs:
+		var tab: Button = _tabs[id]
+		if row_x >= tab.position.x and row_x < tab.position.x + tab.size.x and at.y >= 0.0 and at.y < TAB_SIZE.y:
+			return id
+	return ""
+
+
+func get_tab_scroll() -> int:
+	return _tab_strip.scroll_horizontal
 
 
 ## Stage 8 P05: the tab button of `id` (null when not shown).
@@ -346,6 +426,7 @@ func _sync_tabs() -> void:
 			var entry: Dictionary = entries[index]
 			var tab := _button("Tab_" + entry["id"], entry["name"], Vector2.ZERO, TAB_SIZE, 28)
 			tab.custom_minimum_size = TAB_SIZE
+			tab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			tab.set_meta("key", wanted[index])
 			tab.pressed.connect(select_character.bind(entry["id"]))
 			# The selected (disabled) tab reads gold, not greyed out.

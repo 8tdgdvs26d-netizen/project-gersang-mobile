@@ -257,10 +257,12 @@ func _verify_skill_bar() -> void:
 	_check(entries[0]["text"].begins_with("主角") and entries[2]["text"].begins_with("傭兵A"), "Compact entries show their owner")
 	# 守護 (A's) while the Hero is the caster: A becomes caster, group stays.
 	_check(view.press_skill_entry(entries[2]) and battle.get_selected() == merc_a and merc_a.skill_state == CombatUnit.SkillState.CASTING and battle.get_selection() == [hero, merc_a], "守護 tapped: A Active Caster, Guard cast, Hero + A still selected")
-	# 緩速 (Hero's): caster Hero, aim, tap an enemy: pending, group stays.
+	# 緩速 (Hero's): caster Hero; Stage 8: no target, cast at once (no aim),
+	# group stays.
 	view.press_skill_entry(view.get_skill_bar_entries()[0])
-	var enemy := battle.get_enemies()[0]
-	_check(battle.get_selected() == hero and battle.is_aiming() and battle.tap(enemy.cell) and hero.skill_state == CombatUnit.SkillState.PENDING and battle.get_selection() == [hero, merc_a], "緩速 tapped: Hero caster, targeted, still Hero + A")
+	_check(battle.get_selected() == hero and not battle.is_aiming() and hero.skill_state == CombatUnit.SkillState.CASTING and hero.skill_target == null and battle.get_selection() == [hero, merc_a], "緩速 tapped: Hero caster, cast at once without a target, still Hero + A")
+	# (The Gesture waits for a casting Hero: let the Slow resolve first.)
+	battle.advance(CombatConfig.SKILL_CAST_MS)
 	# 閃電: the Gesture Window; the selection survives its resolution.
 	battle.select_group(0)
 	battle.set_active_caster(merc_a)
@@ -334,12 +336,14 @@ func _verify_lifecycle_rules() -> void:
 		defeat.resolve_damage(defeat.get_enemies()[0], friend, 100000)
 	_check(defeat.get_phase() == CombatBattle.Phase.DEFEAT and defeat.get_selection().is_empty() and defeat.get_selected() == null, "DEFEAT: nothing left selected")
 	# The aiming Active Caster dies: the next selected unit takes over, the aim ends.
+	# (Stage 8: only ground Skills aim, so Merc B's AoE is the aiming one.)
 	var aim := _fight(10, 3)
 	aim.select_all()
-	_check(aim.get_selected() == aim.get_hero() and aim.start_skill_aim() and aim.is_aiming(), "Setup: Hero aims Slow in a multi-selection")
-	aim.resolve_damage(aim.get_enemies()[0], aim.get_hero(), 100000)
-	var merc_a := aim.get_friends()[1]
-	_check(aim.get_selected() == merc_a and not aim.is_aiming() and aim.tap(aim.get_enemies()[0].cell) and merc_a.target == aim.get_enemies()[0] and merc_a.skill_state == CombatUnit.SkillState.NONE and merc_a.mp == merc_a.max_mp, "Aiming caster dies: A takes over, aim cleared, the next enemy tap is a target, no Guard cast")
+	var aim_mage := aim.get_friends()[2]
+	_check(aim.set_active_caster(aim_mage) and aim.start_skill_aim() and aim.is_aiming(), "Setup: Merc B aims its AoE in a multi-selection")
+	aim.resolve_damage(aim.get_enemies()[0], aim_mage, 100000)
+	var aim_hero := aim.get_hero()
+	_check(aim.get_selected() == aim_hero and not aim.is_aiming() and aim.tap(aim.get_enemies()[0].cell) and aim_hero.target == aim.get_enemies()[0] and aim_hero.skill_state == CombatUnit.SkillState.NONE and aim_hero.mp == aim_hero.max_mp, "Aiming caster dies: the Hero takes over, aim cleared, the next enemy tap is a target, no Slow cast")
 	var retreat := _fight(10, 3)
 	retreat.select_all()
 	_check(retreat.start_retreat() and not retreat.command_move_selection(Vector2i(5, 2)) and not retreat.attack_all() and retreat.cancel_retreat(), "Manual retreat: group commands refused, still cancellable")
@@ -392,7 +396,7 @@ func _verify_group_override() -> void:
 	battle.select_unit(merc_a)
 	_check(battle.command_skill() and merc_a.skill_state == CombatUnit.SkillState.CASTING and hero.target == enemy and merc_b.has_goal and merc_b.goal == Vector2i(25, 4), "C. Merc A Guard: Hero's target and B's move untouched")
 	battle.select_unit(hero)
-	_check(battle.start_skill_aim() and battle.tap(enemy.cell) and hero.skill_state == CombatUnit.SkillState.PENDING and merc_b.goal == Vector2i(25, 4) and merc_a.skill_state == CombatUnit.SkillState.CASTING, "C. Hero Slow on an enemy: B's move and A's cast untouched")
+	_check(battle.start_skill_aim() and hero.skill_state == CombatUnit.SkillState.CASTING and merc_b.goal == Vector2i(25, 4) and merc_a.skill_state == CombatUnit.SkillState.CASTING, "C. Hero Slow (no target, cast at once): B's move and A's cast untouched")
 	# Selecting through a portrait (the HUD) changes no order.
 	var main := Node.new()
 	var view := CombatView.new()
@@ -400,7 +404,7 @@ func _verify_group_override() -> void:
 	main.add_child(view)
 	view.open(battle)
 	view.press_all()
-	_check(view.press_portrait(merc_b) and battle.get_selection() == [merc_b] and merc_b.goal == Vector2i(25, 4) and hero.skill_state == CombatUnit.SkillState.PENDING, "Portrait tap selects B alone and changes no order")
+	_check(view.press_portrait(merc_b) and battle.get_selection() == [merc_b] and merc_b.goal == Vector2i(25, 4) and hero.skill_state == CombatUnit.SkillState.CASTING, "Portrait tap selects B alone and changes no order")
 	main.free()
 	_sections_done.append("group_override")
 
@@ -500,11 +504,13 @@ func _verify_attack_all_continuous() -> void:
 	var se := skills.get_enemies()
 	skills.select_unit(sf[1])
 	skills.command_skill()
-	skills.select_unit(sf[0])
+	# (Stage 8: only ground Skills wait, so Merc B's AoE is the pending one.)
+	_place(se[2], Vector2i(40, 0))
+	skills.select_unit(sf[2])
 	skills.command_skill(se[2])
-	_check(sf[1].skill_state == CombatUnit.SkillState.CASTING and sf[0].skill_state == CombatUnit.SkillState.PENDING, "F. Setup: A casting Guard, Hero approaching for Slow")
+	_check(sf[1].skill_state == CombatUnit.SkillState.CASTING and sf[2].skill_state == CombatUnit.SkillState.PENDING, "F. Setup: A casting Guard, B approaching for its AoE")
 	skills.attack_all()
-	_check(not sf[1].attack_all_intent and sf[1].skill_state == CombatUnit.SkillState.CASTING and sf[0].attack_all_intent and sf[0].skill_state == CombatUnit.SkillState.NONE and sf[0].mp == sf[0].max_mp, "F. 全體進攻: the casting unit refused (no intent), the pending Skill replaced (no MP)")
+	_check(not sf[1].attack_all_intent and sf[1].skill_state == CombatUnit.SkillState.CASTING and sf[2].attack_all_intent and sf[2].skill_state == CombatUnit.SkillState.NONE and sf[2].mp == sf[2].max_mp, "F. 全體進攻: the casting unit refused (no intent), the pending Skill replaced (no MP)")
 	skills.advance(CombatConfig.SKILL_CAST_MS)
 	_check(sf[1].skill_state == CombatUnit.SkillState.NONE and sf[1].target == null and not sf[1].attack_all_intent, "F. After its cast A does not join by itself")
 	# A Skill during the continuous attack: the unit resumes and keeps going.
@@ -598,18 +604,19 @@ func _verify_multi_touch() -> void:
 	await _touch(1, (view.get_node("AllButton") as Control).position + Vector2(20.0, 20.0), true)
 	await _touch(1, (view.get_node("AllButton") as Control).position + Vector2(20.0, 20.0), false)
 	_check(battle.get_selection().size() == 3, "Finger 1 presses 全體 while the navigator is held")
-	battle.select_unit(hero)
+	# (Stage 8: Merc B's AoE is the aimed Skill; its target is a location.)
+	battle.select_unit(merc_b)
 	view._refresh()
 	var slot := view.get_node("SkillSlot0") as Control
 	await _touch(1, slot.position + Vector2(40.0, 30.0), true)
 	await _touch(1, slot.position + Vector2(40.0, 30.0), false)
-	_check(battle.is_aiming(), "Finger 1 presses the Skill (緩速): aiming")
+	_check(battle.is_aiming(), "Finger 1 presses the Skill (範圍攻擊): aiming")
 	var enemy := battle.get_enemies()[0]
 	view.navigator_press((enemy.cell.x + 0.5) / CombatConfig.COLUMNS, 0)
 	var enemy_at := view.cell_center(Vector2(enemy.cell))
 	await _touch(1, enemy_at, true)
 	await _touch(1, enemy_at, false)
-	_check(hero.skill_state == CombatUnit.SkillState.PENDING and hero.skill_target == enemy, "Finger 1 picks the Skill target on the battlefield")
+	_check(merc_b.skill_state == CombatUnit.SkillState.PENDING and merc_b.skill_cell == enemy.cell, "Finger 1 picks the Skill location on the battlefield")
 	# E. Finger 0 lifts while finger 1 is pressing the battlefield: finger 1's tap still works.
 	battle.select_unit(merc_b)
 	var tap_at := Vector2(200.0, field_y)

@@ -68,6 +68,11 @@ const DISMISS_CONFIRM_TITLE := "確定解僱%s？"
 const DISMISS_CONFIRM_NOTE := "解僱後無法復原，亦不會退還招聘費用。"
 const DISMISS_CANCEL_TEXT := "取消"
 const DISMISS_CONFIRM_TEXT := "確定解僱"
+## Stage 8 iPhone L3 corrective (Charlie-approved): 確定解僱 waits a 5 s
+## safety countdown each time the confirmation opens (確定解僱（5）…（1）,
+## disabled); 取消 is always available.
+const DISMISS_COUNTDOWN_SECONDS := 5.0
+const DISMISS_COUNTDOWN_TEXT := "確定解僱（%d）"
 const DEPLOY_SUCCESS_TEXT := "%s已設為出戰"
 const UNDEPLOY_SUCCESS_TEXT := "%s已取消出戰"
 const DISMISS_SUCCESS_TEXT := "已解僱%s"
@@ -193,6 +198,9 @@ var _roster_empty_label: Label
 var _dismiss_modal: Control
 var _dismiss_title: Label
 var _dismiss_id := ""
+## Seconds the open confirmation has waited (UI time, restarts on every
+## open); 確定解僱 is enabled once it reaches DISMISS_COUNTDOWN_SECONDS.
+var _dismiss_waited := 0.0
 
 @onready var _city_label := $Center/Content/CityLabel as Label
 @onready var _leave_button := $Center/Content/LeaveButton as Button
@@ -966,12 +974,48 @@ func _on_dismiss_pressed(mercenary_id: String) -> void:
 		return
 	_dismiss_id = mercenary_id
 	_dismiss_title.text = DISMISS_CONFIRM_TITLE % _roster_entries[mercenary_id]["label"]
+	_dismiss_waited = 0.0
+	_update_dismiss_countdown()
 	_dismiss_modal.visible = true
+
+
+## Stage 8 iPhone L3 corrective: the open confirmation's safety countdown.
+func _process(delta: float) -> void:
+	if is_dismiss_confirm_open() and get_dismiss_countdown() > 0.0:
+		advance_dismiss_countdown(delta)
+
+
+## Runs the countdown for `seconds` (UI time; tests feed it directly).
+func advance_dismiss_countdown(seconds: float) -> void:
+	if not is_dismiss_confirm_open() or seconds <= 0.0:
+		return
+	_dismiss_waited = minf(_dismiss_waited + seconds, DISMISS_COUNTDOWN_SECONDS)
+	_update_dismiss_countdown()
+
+
+## Seconds left before 確定解僱 is enabled (0 once it is).
+func get_dismiss_countdown() -> float:
+	return DISMISS_COUNTDOWN_SECONDS - _dismiss_waited
+
+
+## 確定解僱（n） disabled while counting down (n = 5 for the first whole
+## second waited, then 4 … 1), then 確定解僱 enabled.
+func _update_dismiss_countdown() -> void:
+	var confirm := get_dismiss_confirm_button()
+	if get_dismiss_countdown() > 0.0:
+		confirm.text = DISMISS_COUNTDOWN_TEXT % (int(DISMISS_COUNTDOWN_SECONDS) - int(_dismiss_waited))
+		confirm.disabled = true
+	else:
+		confirm.text = DISMISS_CONFIRM_TEXT
+		confirm.disabled = false
 
 
 ## 確定解僱: sends the one pending dismissal and closes (a second tap finds
 ## nothing pending).
 func _on_dismiss_confirmed() -> void:
+	# The countdown must have run out (a press while disabled does nothing).
+	if get_dismiss_countdown() > 0.0:
+		return
 	var mercenary_id := _dismiss_id
 	close_dismiss_confirm()
 	if mercenary_id != "":

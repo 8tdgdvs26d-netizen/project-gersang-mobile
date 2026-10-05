@@ -236,12 +236,14 @@ func _verify_game_dismissal() -> void:
 	hub.get_dismiss_button("merc_2").pressed.emit()
 	await process_frame
 	_check(hub.is_dismiss_confirm_open() and hub.get_dismiss_confirm() == {"id": "merc_2", "title": "確定解僱守衛 #2？"} and (hub.get_node("DismissModal") as Control).mouse_filter == Control.MOUSE_FILTER_STOP, "AC15 解僱 opens the confirmation: 確定解僱守衛 #2？ (it takes every touch)")
-	_check((hub.get_node("DismissModal").find_child("NoteLabel", true, false) as Label).text == "解僱後無法復原，亦不會退還招聘費用。" and hub.get_dismiss_cancel_button().text == "取消" and hub.get_dismiss_confirm_button().text == "確定解僱", "The warning and 取消 / 確定解僱")
+	_check((hub.get_node("DismissModal").find_child("NoteLabel", true, false) as Label).text == "解僱後無法復原，亦不會退還招聘費用。" and hub.get_dismiss_cancel_button().text == "取消" and hub.get_dismiss_confirm_button().text == "確定解僱（5）", "The warning and 取消 / 確定解僱 (Stage 8 L3 corrective: a 5 s countdown first, 確定解僱（5）)")
 	hub.get_dismiss_cancel_button().pressed.emit()
 	_check(not hub.is_dismiss_confirm_open() and JSON.stringify(main.mercenary_roster.get_snapshot()) == before and main.wallet.get_balance() == money, "AC16 取消: nothing changes")
 	# Confirm (with repeated taps).
 	_delete(TEST_SAVE)
 	hub.get_dismiss_button("merc_2").pressed.emit()
+	# Stage 8 L3 corrective: the 5 s safety countdown runs out first.
+	hub.advance_dismiss_countdown(CityHub.DISMISS_COUNTDOWN_SECONDS)
 	var confirm := hub.get_dismiss_confirm_button()
 	confirm.pressed.emit()
 	confirm.pressed.emit()
@@ -254,6 +256,7 @@ func _verify_game_dismissal() -> void:
 	main.save_path = BAD_SAVE
 	before = JSON.stringify(main.mercenary_roster.get_snapshot())
 	hub.get_dismiss_button("merc_3").pressed.emit()
+	hub.advance_dismiss_countdown(CityHub.DISMISS_COUNTDOWN_SECONDS)
 	hub.get_dismiss_confirm_button().pressed.emit()
 	_check(hub.get_feedback_text() == "無法儲存，解僱已取消" and JSON.stringify(main.mercenary_roster.get_snapshot()) == before and main.mercenary_roster.get_mercenary("merc_3") != null and hub.get_roster_ids().has("merc_3") and main.wallet.get_balance() == money, "AC21 Save failure: 無法儲存，解僱已取消, merc_3 back, money unchanged")
 	main.save_path = TEST_SAVE
@@ -263,6 +266,7 @@ func _verify_game_dismissal() -> void:
 	hub.get_dismiss_button("merc_3").pressed.emit()
 	main.set_mercenary_deployed("merc_3", true)
 	_check(hub.is_dismiss_confirm_open(), "The confirmation is still open while merc_3 got deployed elsewhere")
+	hub.advance_dismiss_countdown(CityHub.DISMISS_COUNTDOWN_SECONDS)
 	hub.get_dismiss_confirm_button().pressed.emit()
 	_check(main.mercenary_roster.get_mercenary("merc_3") != null and hub.get_feedback_text() == "請先取消出戰，再解僱傭兵", "A stale confirmation is refused by the service (deployed now)")
 	main.set_mercenary_deployed("merc_3", false)

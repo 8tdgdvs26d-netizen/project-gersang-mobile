@@ -47,7 +47,27 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 8 P05: Legacy Mercenary Migration & Final Integration. Save version 12.
+Stage 8 iPhone L3 Corrective (on top of P05). Save version stays 12 (unchanged schema).
+
+- World Map: the 《萬行誌：白手》 / 開發原型：基本市場 / 走到 A 城或 B 城… text block that covered
+  the player is removed (nothing else on the map changed)
+- Character UI: the whole tab strip takes a horizontal finger swipe (a move past 12 px scrolls;
+  a still tap selects the tab under the finger; a swipe selects / allocates nothing)
+- Skills get a target type (`CombatConfig` "target"; damage, MP, cast time, cooldown, effect time
+  and ranges unchanged): 守護 self; 主角 緩速 needs no target and slows every alive enemy (cast at
+  once); 法師 範圍攻擊 and 軍師 冰牆 are aimed at a battlefield cell (點戰場位置施放技能; the
+  Skill button again or a tap off the field cancels), approach until it is within range 5, then
+  resolve there
+- 軍師 冰牆 (Prototype, replaces the P04 冰場 cross): 2 columns x all 5 rows from the chosen
+  cell's column (shifted left at the right edge), standing SKILL_EFFECT_MS (5 s). Enemies cannot
+  step onto it (they queue on their side, one per cell); enemies already on it get the existing
+  Slow; friends pass; no damage, no terrain / element / pathfinding system
+- 解僱 confirmation: 確定解僱（5）…（1） disabled, then 確定解僱; 取消 always works; every open
+  restarts at 5; a deployed Mercenary is still refused first; dismissal stays permanent, no refund
+- tests: `tests/verify_s8_l3_corrective.gd`; C06 / C07 / C08 / P03 / P04 / M2-07A updated to the
+  approved behaviour (no count lowered)
+
+Previous: Stage 8 P05: Legacy Mercenary Migration & Final Integration. Save version 12.
 
 - the roster is the only Mercenary source (Level, EXP, allocation, combat stats); `main.merc_stats`
   is gone; runtime `ProgressionState` / allocation hold the Hero only
