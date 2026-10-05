@@ -329,7 +329,9 @@ func _verify_scope() -> void:
 	var start_body := main_code.substr(start, main_code.find("\nfunc ", start + 1) - start)
 	# Stage 8 P04 (approved): combat starts from the Hero + the deployed roster
 	# (read only: it never deploys / dismisses).
-	_check(start > 0 and start_body.contains("CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed())") and not start_body.contains("set_deployed") and not start_body.contains("dismiss") and not start_body.contains("PartyService"), "AC24 Combat starts from the Hero + the roster deployment (P04), read only")
+	# Stage 9 P04 (approved): plus each deployed Mercenary's authoritative
+	# stats (CharacterCarrying, by stable id).
+	_check(start > 0 and start_body.contains("CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed(), get_deployed_combat_stats())") and not start_body.contains("set_deployed") and not start_body.contains("dismiss") and not start_body.contains("PartyService"), "AC24 Combat starts from the Hero + the roster deployment (P04), read only")
 	var party_start := main_code.find("func get_party_stats()")
 	_check(party_start > 0 and not main_code.substr(party_start, main_code.find("\nfunc ", party_start + 1) - party_start).contains("mercenary_roster"), "get_party_stats() is still the fixed Hero / merc_a / merc_b")
 	var party := _code_only("res://scripts/party_service.gd")
