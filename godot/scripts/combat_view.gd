@@ -128,6 +128,9 @@ const DEFEATED_TEXT := "擊敗敵人 %d 名"
 const RESULT_EXP_TEXT := "%s　經驗 +%d"
 ## C08 character info (only values the systems already have).
 const INFO_TEXT := "%s\n血量 %d / %d　魔力 %d / %d\n攻擊 %d　攻擊距離 %d 格\n攻擊間隔 %.1f 秒　移動速度 %.1f 格／秒"
+## Stage 9 P05: a friendly unit's two defenses, read from the CombatUnit
+## (the values damage mitigation uses; nothing recalculated here).
+const INFO_DEFENSE_TEXT := "\n物理防禦 %d　魔法防禦 %d"
 const INFO_PROGRESS_TEXT := "\n等級 %d　經驗 %d"
 const INFO_SKILL_TEXT := "\n%s（%s）"
 const INFO_GUARD_TEXT := "\n守護中 %.1f 秒"
@@ -732,6 +735,8 @@ func get_info_text(unit: CombatUnit) -> String:
 	if _battle == null or unit == null:
 		return ""
 	var text: String = INFO_TEXT % [unit_label(unit), unit.hp, unit.max_hp, unit.mp, unit.max_mp, unit.attack_damage, unit.attack_range, unit.attack_interval_ms / 1000.0, unit.move_speed]
+	if unit.team == CombatUnit.Team.FRIEND:
+		text += INFO_DEFENSE_TEXT % [unit.physical_defense, unit.magic_defense]
 	var mercenary := roster.get_mercenary(unit.id) if roster != null and unit.label != "" else null
 	if mercenary != null:
 		text += INFO_PROGRESS_TEXT % [mercenary.get_level(), mercenary.get_exp()]

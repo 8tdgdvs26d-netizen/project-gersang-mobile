@@ -117,6 +117,12 @@ const PARTY_FAILURE_MESSAGES := {
 }
 const DEPLOY_SAVE_FAILED_TEXT := "無法儲存，隊伍變更已取消"
 const DISMISS_SAVE_FAILED_TEXT := "無法儲存，解僱已取消"
+## Stage 9 P05 (iPhone acceptance): a dismissal refused because the
+## Mercenary still holds goods or equipment (ERR_HAS_ITEMS, the unchanged
+## P01 rule) opens this modal notice instead of a line in the page.
+const DISMISS_BLOCKED_TITLE := "無法解僱"
+const DISMISS_BLOCKED_LINES := ["此傭兵仍攜帶物品或裝備。", "請先清空後再解僱。"]
+const DISMISS_BLOCKED_OK_TEXT := "確定"
 ## Stage 8 P05: the pending legacy Mercenaries (我的傭兵, above the roster).
 const PENDING_TITLE_TEXT := "暫存傳承傭兵"
 const PENDING_ROW_TEXT := "%s　Lv.%d"
@@ -227,6 +233,9 @@ var _roster_empty_label: Label
 var _dismiss_modal: Control
 var _dismiss_title: Label
 var _dismiss_id := ""
+## Stage 9 P05: the one 無法解僱 notice (reused, never stacked).
+var _blocked_modal: Control
+var _blocked_lines: Array[Label] = []
 ## Stage 9 P02: item id -> 裝備商店 row; the recipients ({id, name, load,
 ## capacity}, Hero first, then owned Mercenaries) and the chosen one's
 ## stable id.
@@ -320,6 +329,7 @@ func show_facility(facility: String) -> void:
 		return
 	_feedback_label.text = ""
 	close_dismiss_confirm()
+	close_dismiss_blocked()
 	if facility == FACILITY_MERCENARY and _facility != FACILITY_MERCENARY:
 		show_mercenary_view(MERCENARY_VIEW_RECRUIT)
 	_apply_view(facility)
@@ -566,12 +576,40 @@ func close_dismiss_confirm() -> void:
 		_dismiss_modal.visible = false
 
 
+## Stage 9 P05: the 無法解僱 notice (one node, shown again — never a second
+## window). It changes nothing; 確定 closes it.
+func show_dismiss_blocked() -> void:
+	close_dismiss_confirm()
+	_blocked_modal.visible = true
+
+
+func close_dismiss_blocked() -> void:
+	if _blocked_modal != null:
+		_blocked_modal.visible = false
+
+
+func is_dismiss_blocked_open() -> bool:
+	return _blocked_modal != null and _blocked_modal.visible
+
+
+func get_dismiss_blocked_ok_button() -> Button:
+	return _blocked_modal.find_child("OkButton", true, false) as Button
+
+
+## {"title", "lines"} of the notice.
+func get_dismiss_blocked_text() -> Dictionary:
+	return {"title": (_blocked_modal.find_child("TitleLabel", true, false) as Label).text, "lines": _blocked_lines.map(func(label: Label) -> String: return label.text)}
+
+
 ## Stage 8 P03: the result of 設為出戰 / 取消出戰 ("deploy" / "undeploy") or
 ## 解僱 ("dismiss") for the Mercenary shown as `label`.
 func show_party_feedback(action: String, result: Dictionary, label: String) -> void:
 	if result.get("success", false):
 		var success := {"deploy": DEPLOY_SUCCESS_TEXT, "undeploy": UNDEPLOY_SUCCESS_TEXT, "dismiss": DISMISS_SUCCESS_TEXT, "claim": CLAIM_SUCCESS_TEXT}
 		_feedback_label.text = success.get(action, "%s") % label
+	elif action == "dismiss" and result.get("reason", "") == "ERR_HAS_ITEMS":
+		# Stage 9 P05: a modal notice, not a line in the page.
+		show_dismiss_blocked()
 	elif result.get("reason", "") == "ERR_SAVE_FAILED":
 		_feedback_label.text = {"dismiss": DISMISS_SAVE_FAILED_TEXT, "claim": CLAIM_SAVE_FAILED_TEXT}.get(action, DEPLOY_SAVE_FAILED_TEXT)
 	else:
@@ -670,6 +708,7 @@ func show_trade_feedback(action: String, good_id: String, quantity: int, result:
 
 func close() -> void:
 	close_dismiss_confirm()
+	close_dismiss_blocked()
 	city_id = ""
 	_traveling = false
 	_travel_destination_label.text = ""
@@ -956,6 +995,7 @@ func _build_mercenary_panel() -> void:
 	_roster_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_roster_box.add_child(_roster_empty_label)
 	_build_dismiss_modal()
+	_build_dismiss_blocked_modal()
 	show_mercenary_view(MERCENARY_VIEW_RECRUIT)
 	for type in RecruitmentService.TYPES:
 		var row := HBoxContainer.new()
@@ -1139,6 +1179,44 @@ func _build_dismiss_modal() -> void:
 	panel.add_child(confirm)
 
 
+## Stage 9 P05: the 無法解僱 notice, built like the confirmation (a
+## full-screen dim in front of the hub that takes every touch).
+func _build_dismiss_blocked_modal() -> void:
+	_blocked_modal = ColorRect.new()
+	_blocked_modal.name = "DismissBlockedModal"
+	(_blocked_modal as ColorRect).color = Color(0.0, 0.0, 0.0, 0.7)
+	_blocked_modal.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_blocked_modal.mouse_filter = Control.MOUSE_FILTER_STOP
+	_blocked_modal.visible = false
+	add_child(_blocked_modal)
+	var panel := Panel.new()
+	panel.name = "DismissBlockedPanel"
+	panel.position = Vector2(60.0, 460.0)
+	panel.size = Vector2(600.0, 360.0)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.1, 0.12, 0.13)
+	style.border_color = Color(0.88, 0.75, 0.36)
+	style.set_border_width_all(3)
+	panel.add_theme_stylebox_override("panel", style)
+	_blocked_modal.add_child(panel)
+	var title := _make_label("TitleLabel", DISMISS_BLOCKED_TITLE, NAME_FONT_SIZE + 6)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.position = Vector2(20.0, 32.0)
+	title.size = Vector2(560.0, 60.0)
+	panel.add_child(title)
+	for index in range(DISMISS_BLOCKED_LINES.size()):
+		var line := _make_label("BodyLine%d" % index, DISMISS_BLOCKED_LINES[index], DETAIL_FONT_SIZE)
+		line.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		line.position = Vector2(30.0, 108.0 + index * 52.0)
+		line.size = Vector2(540.0, 52.0)
+		panel.add_child(line)
+		_blocked_lines.append(line)
+	var ok := _make_button("OkButton", DISMISS_BLOCKED_OK_TEXT, close_dismiss_blocked)
+	ok.position = Vector2(180.0, 240.0)
+	ok.size = Vector2(240.0, 88.0)
+	panel.add_child(ok)
+
+
 func _on_deploy_pressed(mercenary_id: String, deployed: bool) -> void:
 	deployment_requested.emit(mercenary_id, deployed)
 
@@ -1150,6 +1228,11 @@ func _on_dismiss_pressed(mercenary_id: String) -> void:
 		return
 	if _roster_entries[mercenary_id]["deployed"]:
 		_feedback_label.text = DEPLOYED_DISMISS_TEXT
+		return
+	# Stage 9 P05: holding goods or equipment -> the 無法解僱 notice at once
+	# (PartyService.dismiss would refuse it: ERR_HAS_ITEMS).
+	if _roster_entries[mercenary_id].get("holds_anything", false):
+		show_dismiss_blocked()
 		return
 	_dismiss_id = mercenary_id
 	_dismiss_title.text = DISMISS_CONFIRM_TITLE % _roster_entries[mercenary_id]["label"]

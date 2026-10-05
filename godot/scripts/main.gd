@@ -176,6 +176,8 @@ func _ready() -> void:
 	_character_panel.preview_provider = carrying_preview_equip
 	_character_panel.equip_handler = equip_character_item
 	_character_panel.unequip_handler = unequip_character_slot
+	# Stage 9 P05: 轉移 (an unequipped item to another owned character).
+	_character_panel.transfer_handler = transfer_character_item
 	add_child(_character_panel)
 	_character_panel.opened.connect(_on_character_panel_opened)
 	_character_panel.closed.connect(_on_character_panel_closed)
@@ -610,6 +612,16 @@ func unequip_character_slot(character_id: Variant, slot: Variant) -> Dictionary:
 	return EquipmentService.unequip(carrying, character_id, slot, _persist)
 
 
+## Stage 9 P05: transfers one unequipped carried `item_id` of `from_id` to
+## `to_id` (the Hero or an owned Mercenary, by stable id) and saves, as one
+## transaction (EquipmentTransferService); refused during a battle. A
+## failure changes nothing.
+func transfer_character_item(from_id: Variant, to_id: Variant, item_id: Variant) -> Dictionary:
+	if get_combat() != null:
+		return {"success": false, "reason": "ERR_IN_COMBAT", "from_id": from_id if typeof(from_id) == TYPE_STRING else "", "to_id": to_id if typeof(to_id) == TYPE_STRING else "", "item_id": item_id if typeof(item_id) == TYPE_STRING else ""}
+	return EquipmentTransferService.transfer(carrying, from_id, to_id, item_id, _persist)
+
+
 ## Stage 9 P02: buys one `item_id` at the 裝備商店 of the current city for
 ## the character `character_id` (stable id): paid, added to its carried
 ## equipment (not equipped) and saved as one transaction
@@ -670,6 +682,9 @@ func _mercenary_entry(mercenary: Mercenary) -> Dictionary:
 		"derived": derived_line,
 		"pending": "裝備：尚未開放",
 		"deployed": deployed,
+		# Stage 9 P05: 解僱 opens the 無法解僱 notice instead of the
+		# confirmation (the rule stays PartyService.dismiss / ERR_HAS_ITEMS).
+		"holds_anything": carrying.has_any_items(mercenary.get_id()),
 	}
 
 
