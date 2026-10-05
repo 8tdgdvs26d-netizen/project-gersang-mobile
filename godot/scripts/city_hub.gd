@@ -61,6 +61,9 @@ const EQUIPMENT_FAILURE_MESSAGES := {
 	"ERR_NOT_IN_CITY": "需要在城市內購買",
 }
 const EQUIPMENT_GENERIC_FAILURE := "購買失敗"
+## The recipient chosen first: the Hero's stable id (display data only; the
+## hub never holds the roster model).
+const EQUIPMENT_DEFAULT_RECIPIENT := "hero"
 const MERCENARY_COUNT_TEXT := "持有傭兵：%d / %d"
 const MERCENARY_NONE_TEXT := "尚未持有傭兵"
 const MERCENARY_PRICE_TEXT := "招聘費用：$%s"
@@ -231,7 +234,7 @@ var _dismiss_id := ""
 ## stable id.
 var _equipment_rows := {}
 var _equipment_recipients: Array = []
-var _equipment_recipient_id := Mercenary.HERO_ID
+var _equipment_recipient_id := EQUIPMENT_DEFAULT_RECIPIENT
 var _equipment_recipient_label: Label
 var _equipment_load_label: Label
 ## Seconds the open confirmation has waited (UI time, restarts on every
