@@ -320,7 +320,7 @@ func _verify_layout() -> void:
 # --- Scope -----------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 12, "AC23 Save v11")
+	_check(SaveStore.VERSION == 13, "AC23 Save v11")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/character_config.gd", "res://scripts/save_store.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("deploy") and not code.contains("dismiss") and not code.contains("partyservice"), "AC24 %s knows nothing about deployment / dismissal" % path.get_file())

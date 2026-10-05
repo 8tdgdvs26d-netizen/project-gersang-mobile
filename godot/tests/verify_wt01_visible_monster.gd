@@ -49,7 +49,7 @@ func _verify_static() -> void:
 	# WT05 patrol (verify_wt05_patrol); everything else stays out.
 	for word in ["encounter", "combat", "damage", "health", "respawn", "loot"]:
 		_check(not script.to_lower().contains(word), "No out-of-scope behaviour in the monster (%s)" % word)
-	_check(SaveStore.VERSION == 12, "No save schema change (P05: version 12)")
+	_check(SaveStore.VERSION == 13, "No save schema change (Stage 9 P01: version 13)")
 	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
 	_check(scene.count("world_monster.tscn") == 1 and scene.count("[node name=\"PrototypeMonster\"") == 1, "Exactly one monster in the main scene")
 	var monster_scene := FileAccess.get_file_as_string("res://scenes/world_monster.tscn")
@@ -248,7 +248,7 @@ func _verify_world_position_unchanged() -> void:
 	player.global_position = Vector2(1500.5, 2500.25)
 	_check(main.save_world_position(), "Exact world position saves")
 	var text := FileAccess.get_file_as_string(TEST_SAVE)
-	_check(not text.to_lower().contains("monster") and not text.to_lower().contains("threat") and int(JSON.parse_string(text)["version"]) == 12, "Nothing monster-related is saved; save version 9")
+	_check(not text.to_lower().contains("monster") and not text.to_lower().contains("threat") and int(JSON.parse_string(text)["version"]) == 13, "Nothing monster-related is saved; save version 9")
 	await _destroy(main)
 	main = await _new_main(TEST_SAVE, T0)
 	_check(main.get_world_position() == Vector2(1500.5, 2500.25) and FileAccess.get_file_as_string(TEST_SAVE) == text, "Reload restores the exact position; the save is not rewritten")

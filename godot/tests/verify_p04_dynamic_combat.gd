@@ -335,7 +335,7 @@ func _verify_game_party() -> void:
 	_check(main.progression.to_dict().keys() == ["hero"] and roster.get_mercenary("merc_a") == null, "AC10 No legacy Merc A / B progression (P05: the roster only)")
 	_check(not main.commit_battle_result(battle.get_result()) and roster.get_mercenary("merc_1").get_exp() == 33, "AC14 A second commit is refused: nothing settled twice")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(saved != null and int(saved["version"]) == 12 and saved.keys().size() == 12, "AC15 Saved: v12 (P05), same sections")
+	_check(saved != null and int(saved["version"]) == 13 and saved.keys().size() == 13, "AC15 Saved: v13 (Stage 9 P01: + carrying), same sections")
 	var saved_merc_3: Dictionary = (saved["mercenaries"]["owned"] as Array).filter(func(m: Dictionary) -> bool: return m["id"] == "merc_3")[0]
 	_check(int(saved_merc_3["level"]) == 2 and int(saved_merc_3["exp"]) == 13 and (saved_merc_3 as Dictionary).keys().size() == Mercenary.KEYS.size(), "AC15 The saved instance holds its new Level / EXP (nothing derived)")
 	await _destroy(main)
@@ -447,7 +447,7 @@ func _verify_mercenary_rows() -> void:
 # --- Scope ---------------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 12 and ProgressionState.LEGACY_SLOTS == ["hero", "merc_a", "merc_b"] and ProgressionState.SLOTS == ["hero"] and CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"], "AC19 Save v12 (P05 mapped the legacy slots; they are read only)")
+	_check(SaveStore.VERSION == 13 and ProgressionState.LEGACY_SLOTS == ["hero", "merc_a", "merc_b"] and ProgressionState.SLOTS == ["hero"] and CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"], "AC19 Save v12 (P05 mapped the legacy slots; they are read only)")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()
 	_check(not save_code.contains("partyprogression") and not save_code.contains("for_mercenary") and not save_code.contains("ice_field"), "AC19 The save knows nothing about P04")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/party_progression.gd"]:

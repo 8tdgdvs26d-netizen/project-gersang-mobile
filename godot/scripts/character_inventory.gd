@@ -11,6 +11,10 @@ extends RefCounted
 var character_id: String
 var _stats: CharacterStats
 var _capacity_cost_resolver: Callable
+## Stage 9 P01: the character's other carried load (its equipment, carried
+## and equipped; CharacterCarrying), counted with the goods against the one
+## Capacity. Unset: 0.
+var _extra_load_provider: Callable
 ## item_id -> {"quantity": positive int, "capacity_cost": positive int}
 ## capacity_cost is captured only from the authoritative resolver/catalog.
 var _items := {}
@@ -26,6 +30,34 @@ func get_stats() -> CharacterStats:
 	return _stats
 
 
+## Stage 9 P01: CharacterCarrying keeps a Mercenary's inventory on its
+## current stats (Level, allocation and equipment change them).
+func set_stats(stats: CharacterStats) -> void:
+	if stats != null:
+		_stats = stats
+
+
+## Stage 9 P01: sets the provider of the extra (equipment) load.
+func set_extra_load_provider(provider: Callable) -> void:
+	_extra_load_provider = provider
+
+
+## Stage 9 P01: the load of the goods alone (without the equipment).
+func get_goods_load() -> int:
+	var used := 0
+	for stack in _items.values():
+		used += stack["quantity"] * stack["capacity_cost"]
+	return used
+
+
+## Stage 9 P01: the extra (equipment) load, 0 without a provider.
+func get_extra_load() -> int:
+	if not _extra_load_provider.is_valid():
+		return 0
+	var value: Variant = _extra_load_provider.call()
+	return value if typeof(value) == TYPE_INT and value > 0 else 0
+
+
 func get_quantity(item_id: Variant) -> int:
 	return _items.get(item_id, {}).get("quantity", 0) if typeof(item_id) == TYPE_STRING else 0
 
@@ -34,11 +66,10 @@ func get_capacity_cost(item_id: Variant) -> int:
 	return _items.get(item_id, {}).get("capacity_cost", _resolve_capacity_cost(item_id)) if typeof(item_id) == TYPE_STRING else 0
 
 
+## Everything the character carries: its goods and (Stage 9 P01) its
+## equipment, carried and equipped.
 func get_used_capacity() -> int:
-	var used := 0
-	for stack in _items.values():
-		used += stack["quantity"] * stack["capacity_cost"]
-	return used
+	return get_goods_load() + get_extra_load()
 
 
 func get_max_capacity() -> int:

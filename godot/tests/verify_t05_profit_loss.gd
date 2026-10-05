@@ -92,7 +92,7 @@ func _initialize() -> void:
 # --- Static ------------------------------------------------------------------------------------
 
 func _verify_static() -> void:
-	_check(SaveStore.VERSION == 12 and SaveStore.V9_KEYS.has("cost_ledger") and SaveStore.V7_KEYS.has("cost_ledger") and SaveStore.V8_KEYS.has("cost_ledger"), "Save version 7 (and T06's 8) carries the cost ledger")
+	_check(SaveStore.VERSION == 13 and SaveStore.V9_KEYS.has("cost_ledger") and SaveStore.V7_KEYS.has("cost_ledger") and SaveStore.V8_KEYS.has("cost_ledger"), "Save version 7 (and T06's 8) carries the cost ledger")
 	var ledger := _code_only("res://scripts/trade_cost_ledger.gd")
 	_check(not ledger.contains("\"A\"") and not ledger.contains("\"B\"") and not ledger.contains("ACTIVE_CITY_IDS.size"), "The ledger has no fixed city ids or city count")
 	_check(not ledger.to_lower().contains("average") and not ledger.contains("/ total") and not ledger.contains("/ quantity"), "No average-cost accounting")
@@ -744,7 +744,7 @@ func _verify_save_validation() -> void:
 	v6_with["version"] = 6
 	_check(SaveStore.validate(v6_with).is_empty(), "A v6 save cannot carry v7 data")
 	var v8 := good.duplicate(true)
-	v8["version"] = 13  # P05: v12 is current; 13 is the unknown future
+	v8["version"] = 14  # Stage 9 P01: v13 is current; 14 is the unknown future
 	_check(SaveStore.validate(v8).is_empty(), "An unknown future version is rejected")
 	var broken := good.duplicate(true)
 	broken["cost_ledger"]["backpack"]["test_good_01"][0]["unit_cost"] = -1

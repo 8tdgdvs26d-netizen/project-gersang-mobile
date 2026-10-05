@@ -32,7 +32,15 @@ var current_city_id: String:
 ## Session-owned player character data. World/city transitions never reset it;
 ## valid local saves restore it on startup.
 var character_stats := CharacterStats.new()
-var inventory := CharacterInventory.new("player", character_stats)
+var inventory := CharacterInventory.new("player", character_stats):
+	set(value):
+		inventory = value
+		# Stage 9 P01: the Hero's carrying follows its backpack.
+		if value != null and carrying != null:
+			carrying.bind_hero(value)
+## Stage 9 P01: what every character carries (equipment; Mercenary goods),
+## keyed by stable character id, on the Hero's backpack and the roster.
+var carrying: CharacterCarrying
 ## Temporary code-compatibility alias for pre-M2-08 callers and historical
 ## regression scripts. Runtime trades and persistence use inventory directly.
 var cargo: CharacterInventory:
@@ -110,6 +118,15 @@ var _last_award := {}
 ## after the commit (runtime only, never saved).
 const WORLD_MONSTER_SCENE := preload("res://scenes/world_monster.tscn")
 var _group_respawn := GroupRespawn.new()
+
+
+func _init() -> void:
+	carrying = CharacterCarrying.new(inventory, _current_roster)
+
+
+## Stage 9 P01: the roster CharacterCarrying reads (tests may replace it).
+func _current_roster() -> MercenaryRoster:
+	return mercenary_roster
 
 
 func _ready() -> void:
@@ -427,6 +444,10 @@ func _load_saved_session() -> void:
 	var loaded: Dictionary = inspected["session"]
 	if not loaded.is_empty():
 		wallet = loaded["wallet"]
+		# Stage 9 P01: the loaded carrying first, so the backpack binds to it
+		# (never to the session's empty one).
+		carrying = loaded["carrying"]
+		carrying.set_roster_provider(_current_roster)
 		inventory = loaded["inventory"]
 		character_stats = loaded["character_stats"]
 		market = loaded["market"]
@@ -473,7 +494,7 @@ func _persist() -> bool:
 		return false
 	if location.is_in_world() and is_node_ready() and not location.set_world_position(_player.global_position):
 		return false
-	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats(), mercenary_roster)
+	var saved := save_path == "" or SaveStore.save(save_path, wallet, inventory, market, location, warehouses, market_recovery, cost_ledger, progression, get_party_stats(), mercenary_roster, carrying)
 	if saved:
 		_saved_world_position = location.get_world_position()
 	return saved
@@ -600,7 +621,7 @@ func set_mercenary_deployed(mercenary_id: Variant, deployed: bool) -> Dictionary
 func dismiss_mercenary(mercenary_id: Variant) -> Dictionary:
 	if not is_in_city():
 		return {"success": false, "reason": "ERR_NOT_IN_CITY", "mercenary_id": ""}
-	var result := PartyService.dismiss(mercenary_roster, mercenary_id, _persist)
+	var result := PartyService.dismiss(mercenary_roster, mercenary_id, _persist, carrying)
 	_refresh_hub_summary()
 	return result
 
@@ -798,7 +819,8 @@ func get_party_stats() -> Dictionary:
 func get_character_entries() -> Array:
 	var entries := [{"id": Mercenary.HERO_ID, "name": CharacterConfig.DISPLAY_NAMES["hero"], "stats": character_stats, "level": progression.get_level("hero"), "exp": progression.get_exp("hero")}]
 	for mercenary in mercenary_roster.get_owned():
-		entries.append({"id": mercenary.get_id(), "name": RecruitmentService.label(mercenary), "stats": CharacterStats.for_mercenary(mercenary), "level": mercenary.get_level(), "exp": mercenary.get_exp()})
+		# Stage 9 P01: with its equipment bonuses (none equipped: unchanged).
+		entries.append({"id": mercenary.get_id(), "name": RecruitmentService.label(mercenary), "stats": carrying.get_stats(mercenary.get_id()), "level": mercenary.get_level(), "exp": mercenary.get_exp()})
 	return entries
 
 

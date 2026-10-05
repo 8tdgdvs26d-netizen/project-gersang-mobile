@@ -47,7 +47,7 @@ func _verify_static() -> void:
 	_check(MarketRecovery.STEP_MS == 12000 and MarketRecovery.STOCK_PER_STEP == 1, "Approved rule: 1 stock unit every 12 seconds")
 	_check(MarketRecovery.MAX_ELAPSED_MS == 30 * 60 * 1000, "Approved offline cap: 30 minutes")
 	_check(MarketPrices.TARGET_STOCK == 100 and MarketPrices.INITIAL_STOCK == 100, "Target stock stays 100")
-	_check(SaveStore.VERSION == 12 and SaveStore.V9_KEYS.has("market_recovery") and SaveStore.V6_KEYS.has("market_recovery") and SaveStore.V7_KEYS.has("market_recovery") and SaveStore.V8_KEYS.has("market_recovery"), "Save version 6 (and T05's 7, T06's 8) carries the market recovery anchor")
+	_check(SaveStore.VERSION == 13 and SaveStore.V9_KEYS.has("market_recovery") and SaveStore.V6_KEYS.has("market_recovery") and SaveStore.V7_KEYS.has("market_recovery") and SaveStore.V8_KEYS.has("market_recovery"), "Save version 6 (and T05's 7, T06's 8) carries the market recovery anchor")
 	var recovery := _code_only("res://scripts/market_recovery.gd")
 	for clock in ["Time.", "OS.get_", "get_ticks"]:
 		_check(not recovery.contains(clock), "Recovery must take time from its caller, never read %s" % clock)
@@ -437,7 +437,7 @@ func _verify_save_reload() -> void:
 	var no_key := v6.duplicate(true)
 	no_key.erase("market_recovery")
 	var future_version := v6.duplicate(true)
-	future_version["version"] = 13  # P05: v12 is current; 13 is the unknown future
+	future_version["version"] = 14  # Stage 9 P01: v13 is current; 14 is the unknown future
 	var v5_with_key := v6.duplicate(true)
 	v5_with_key["version"] = 5
 	_check(SaveStore.validate(no_key).is_empty(), "A v6 save missing market_recovery is rejected as a whole")
@@ -477,6 +477,7 @@ func _verify_migration() -> void:
 	v5.erase("allocation")  # nor S05's (v10) allocation
 	v5.erase("mercenaries")  # nor P01.5's (v11) roster
 	v5.erase("pending_legacy_mercenaries")  # nor P05's (v12) pending list
+	v5.erase("carrying")  # nor Stage 9 P01's (v13) carrying
 	v5["version"] = 5
 	v5["warehouses"] = {"A": {"items": {"test_good_02": 5}}, "B": {"items": {"test_good_06": 1}}}
 	var v4 := v5.duplicate(true)

@@ -23,6 +23,9 @@ const ERR_CHANGE_FAILED := "ERR_CHANGE_FAILED"
 const ERR_SAVE_FAILED := "ERR_SAVE_FAILED"
 ## Stage 8 P05: claiming a pending legacy Mercenary needs a free place.
 const ERR_ROSTER_FULL := "ERR_ROSTER_FULL"
+## Stage 9 P01: the Mercenary still holds goods or equipment (carried or
+## equipped): nothing may be deleted, moved away or lost by a dismissal.
+const ERR_HAS_ITEMS := "ERR_HAS_ITEMS"
 
 
 ## Deploys (`deployed` true) or undeploys the owned `id`; saved at once.
@@ -54,19 +57,31 @@ static func set_deployed(roster: MercenaryRoster, id: Variant, deployed: bool, p
 
 
 ## Dismisses the owned, not deployed `id` for good (no refund); saved at once.
-static func dismiss(roster: MercenaryRoster, id: Variant, persist: Callable = Callable()) -> Dictionary:
+## Stage 9 P01: refused while it holds anything (`carrying`: goods, carried or
+## equipped equipment) — the player empties it first; nothing is deleted or
+## moved by a dismissal. Its (empty) carrying is forgotten with it.
+static func dismiss(roster: MercenaryRoster, id: Variant, persist: Callable = Callable(), carrying: CharacterCarrying = null) -> Dictionary:
 	if roster == null:
 		return _result(false, ERR_INVALID_STATE, id)
 	if roster.get_mercenary(id) == null:
 		return _result(false, ERR_UNKNOWN_MERCENARY, id)
 	if roster.is_deployed(id):
 		return _result(false, ERR_DEPLOYED, id)
+	if carrying != null and carrying.has_any_items(id):
+		return _result(false, ERR_HAS_ITEMS, id)
 	var snapshot := roster.get_snapshot()
+	var carried := carrying.get_snapshot() if carrying != null else {}
 	if not roster.remove(id):
 		roster.restore_snapshot(snapshot)
 		return _result(false, ERR_CHANGE_FAILED, id)
+	if carrying != null and not carrying.forget(id):
+		roster.restore_snapshot(snapshot)
+		carrying.restore_snapshot(carried)
+		return _result(false, ERR_CHANGE_FAILED, id)
 	if persist.is_valid() and not persist.call():
 		roster.restore_snapshot(snapshot)
+		if carrying != null:
+			carrying.restore_snapshot(carried)
 		return _result(false, ERR_SAVE_FAILED, id)
 	return _result(true, "", id)
 

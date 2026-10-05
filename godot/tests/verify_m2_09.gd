@@ -80,7 +80,7 @@ func _verify_static() -> void:
 	for path in ["res://scripts/transport_service.gd", "res://scripts/main.gd", "res://scripts/city_hub.gd"]:
 		var code := _code_only(path)
 		_check(not code.contains("90000") and not code.contains("300"), "%s must not hard-code fares or durations" % path)
-	_check(SaveStore.VERSION == 12, "Save version must be 4+ with location (T01 bumped it to 5 for warehouses, T04 to 6 for market recovery, T05 to 7 for the cost ledger, T06 to 8 for the exact world position); C05 to 9 for progression")
+	_check(SaveStore.VERSION == 13, "Save version must be 4+ with location (T01 bumped it to 5 for warehouses, T04 to 6 for market recovery, T05 to 7 for the cost ledger, T06 to 8 for the exact world position); C05 to 9 for progression")
 	_sections_done.append("_verify_static")
 
 
@@ -366,7 +366,7 @@ func _verify_save_versions() -> void:
 		var location := PlayerLocation.from_dict(data)
 		_check(SaveStore.save(TEST_SAVE, _wallet_with(5000), CharacterInventory.new(), MarketState.create_default(), location), "v4 save must write (%s)" % data["mode"])
 		var raw := _read_json()
-		_check(int(raw.get("version", 0)) == SaveStore.VERSION and raw.has("location") and raw.has("warehouses") and raw.has("market_recovery") and raw.has("cost_ledger") and raw.has("progression") and raw.keys().size() == 12, "The current save must hold version, money, character, market, location (and T01 warehouses, T04 market recovery, T05 cost ledger)")
+		_check(int(raw.get("version", 0)) == SaveStore.VERSION and raw.has("location") and raw.has("warehouses") and raw.has("market_recovery") and raw.has("cost_ledger") and raw.has("progression") and raw.keys().size() == 13, "The current save must hold version, money, character, market, location (and T01 warehouses, T04 market recovery, T05 cost ledger)")
 		var loaded := SaveStore.load_session(TEST_SAVE)
 		_check(not loaded.is_empty() and loaded["location"].to_dict() == data and loaded["wallet"].get_balance() == 5000, "v4 %s location must round-trip exactly" % data["mode"])
 
