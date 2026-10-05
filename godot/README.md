@@ -47,7 +47,25 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 10 P00: Persistent Character Condition (Save v14 + Combat state persistence). Prerequisite
+Stage 10 P01: Hospital / Recovery foundation (service layer only; stacked on P00). Save stays v14.
+
+- `RecoveryService` orchestrates `CharacterCondition` (HP / MP / dead, by stable id) and `Wallet`;
+  no state of its own. A character needs recovery when HP < Max HP, MP < Max MP or dead; recovery
+  sets HP / MP to the current maxima and revives
+- approved prices: the Hero is always free ($0, works with $0 and whatever the Mercenaries'
+  state); each chosen Mercenary costs $100 whatever is missing (1 HP, MP only, dead) and whatever
+  its Level / stats / equipment; nothing is recovered automatically; no penalty of any kind
+- `get_status` / `get_entry` / `quote` (reads only: who needs recovery, HP / MP / Max, dead,
+  price, total, affordable); `recover_hero` (the free Hero alone, never depends on money or
+  Mercenaries); `recover` (the Hero free + the chosen Mercenaries paid, saved once). Each is
+  all-or-nothing: duplicate / unknown / pending / dismissed / healthy ids, the Hero as a paid id
+  or an unaffordable choice refuse the whole request (nothing changes); a failed save restores
+  the wallet and every condition exactly
+- main: `get_recovery_status`, `recover_hero`, `recover_characters` (refused during a battle).
+  Not here: Hospital UI, which cities have a Hospital, defeat routing
+- tests: `tests/verify_s10_p01_recovery.gd` (stress seed via `-- --seed=<n>`)
+
+Previous: Stage 10 P00: Persistent Character Condition (Save v14 + Combat state persistence). Prerequisite
 for the Stage 10 Hospital; no Hospital, recovery or penalty here.
 
 - `CharacterCondition`: one record per character (the Hero + every owned Mercenary, by stable id):
