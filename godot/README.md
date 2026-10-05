@@ -47,7 +47,24 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 10 P01: Hospital / Recovery foundation (service layer only; stacked on P00). Save stays v14.
+Stage 10 P02: Hospital UI + player recovery flow (stacked on P00 -> P01). Save stays v14.
+
+- Prototype rule (approved): City A and City B have a Hospital (`WorldLayout.HOSPITAL_CITY_IDS`,
+  `city_has_hospital`); reserved C / D have none. No facility system
+- City Hub: a sixth facility tab 醫院; the six tabs share one row at 112 x 64, 8 px apart, font 24,
+  labels whole (approved option A; was five at 128 x 64). The tab shows only in a Hospital city
+- 醫院 view: the Hero row (HP / MP, 【陣亡】/【受傷】/【狀態良好】, 治療費用：免費, its own 免費恢復 —
+  never blocked by money, the choice or Mercenaries), one row per owned Mercenary by stable id
+  (選擇 / 已選擇 only when it needs recovery, $100), a scrolling list, the summary (已選傭兵 n 名
+  合計 $x 持有金錢 $y), 持有金錢不足 when short and 確認治療（$x）, disabled when nothing is chosen or
+  it is unaffordable. Results refresh the view at once; refusals and failures in plain words
+  (無法儲存，治療已取消 shows the restored state); a stale choice is dropped
+- main: `get_hospital_status`, `can_use_hospital`, `hospital_recover_hero`, `hospital_recover`
+  (only inside a Hospital city, never in a battle) over the P01 RecoveryService
+- tests: `tests/verify_s10_p02_hospital_ui.gd` (stress seed via `-- --seed=<n>`); Stage 8 / 9
+  tab-layout tests updated to six 112 x 64 tabs
+
+Previous: Stage 10 P01: Hospital / Recovery foundation (service layer only; stacked on P00). Save stays v14.
 
 - `RecoveryService` orchestrates `CharacterCondition` (HP / MP / dead, by stable id) and `Wallet`;
   no state of its own. A character needs recovery when HP < Max HP, MP < Max MP or dead; recovery

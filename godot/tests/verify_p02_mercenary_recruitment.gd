@@ -279,12 +279,13 @@ func _verify_layout() -> void:
 		await process_frame
 		var content := hub.get_node("Center/Content") as Control
 		_check(canvas.encloses(content.get_global_rect()), "AC20 %s view fits 720 x 1280 (%s)" % [facility, str(content.get_global_rect())])
-		_check(canvas.encloses(tabs.get_global_rect()), "AC20 The facility tabs (Stage 9 P02: five) fit the width in the %s view (%s)" % [facility, str(tabs.get_global_rect())])
+		_check(canvas.encloses(tabs.get_global_rect()), "AC20 The facility tabs (Stage 10 P02: six) fit the width in the %s view (%s)" % [facility, str(tabs.get_global_rect())])
 	for tab in tabs.get_children():
 		var rect := (tab as Control).get_global_rect()
 		# Stage 9 P02 (approved controlled update): a fifth facility (裝備商店)
 		# makes five tabs share the 720 px row: >= 128 x 64 each (was 150 wide).
-		_check(rect.size.x >= 128.0 and rect.size.y >= 64.0 and canvas.encloses(rect), "Tab %s: %s, a comfortable touch target (>= 128 x 64)" % [(tab as Button).text, str(rect.size)])
+		# Stage 10 P02 (approved option A): a sixth (醫院): >= 112 x 64 each.
+		_check(rect.size.x >= 112.0 and rect.size.y >= 64.0 and canvas.encloses(rect), "Tab %s: %s, a comfortable touch target (>= 112 x 64)" % [(tab as Button).text, str(rect.size)])
 	hub.show_facility(CityHub.FACILITY_MERCENARY)
 	await process_frame
 	for type in TYPES:

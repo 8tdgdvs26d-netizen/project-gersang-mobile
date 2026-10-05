@@ -10,7 +10,8 @@ extends SceneTree
 ##                unknown item / character, pending / dismissed, same-type
 ##                identity, repeated purchases, save success / failure
 ##                rollback (money + every character), no duplication / loss
-##   layout       five facility tabs in one row (128 x 64, 8 px), inside 720,
+##   layout       facility tabs in one row (Stage 10 P02, approved option A:
+##                six at 112 x 64; was five at 128 x 64), 8 px, inside 720,
 ##                not overlapping, labels readable, Leave City still clear of
 ##                the world Enter City button in every view
 ##   game         the real City Hub: 裝備商店 rows, recipient picker by
@@ -191,7 +192,8 @@ func _verify_layout() -> void:
 	var canvas := Rect2(0.0, 0.0, 720.0, 1280.0)
 	var tabs := hub.get_node("Center/Content/FacilityTabs") as Container
 	var buttons: Array = tabs.get_children()
-	_check(CityHub.FACILITIES == ["market", "transport", "warehouse", "mercenary", "equipment"] and buttons.size() == 5, "AC01 Five facilities, five tabs (裝備商店 the fifth)")
+	# Stage 10 P02 (approved option A): 醫院 is the sixth facility / tab.
+	_check(CityHub.FACILITIES == ["market", "transport", "warehouse", "mercenary", "equipment", "hospital"] and buttons.size() == 6, "AC01 Six facilities, six tabs (裝備商店 the fifth; Stage 10 P02: 醫院 the sixth)")
 	_check(tabs is HBoxContainer and tabs.get_theme_constant("separation") == 8, "One tab row (HBoxContainer), 8 px apart (no second row)")
 	_check((hub.get_node("Center/Content/FacilityTabs/EquipmentTabButton") as Button).text == "裝備商店", "AC01 The 裝備商店 tab")
 	var enter := (main.get_node("EnterControls/EnterCityButton") as Control).get_global_rect()
@@ -205,7 +207,7 @@ func _verify_layout() -> void:
 		for tab in buttons:
 			var button := tab as Button
 			var rect := button.get_global_rect()
-			ok = ok and canvas.encloses(rect) and is_equal_approx(rect.size.x, 128.0) and is_equal_approx(rect.size.y, 64.0)
+			ok = ok and canvas.encloses(rect) and is_equal_approx(rect.size.x, 112.0) and is_equal_approx(rect.size.y, 64.0)
 			ok = ok and button.get_minimum_size().x <= rect.size.x and not button.clip_text and button.text_overrun_behavior == TextServer.OVERRUN_NO_TRIMMING
 			if row_y < 0.0:
 				row_y = rect.position.y
@@ -213,7 +215,7 @@ func _verify_layout() -> void:
 			for other: Rect2 in rects:
 				ok = ok and not other.intersects(rect)
 			rects.append(rect)
-		_check(ok, "%s view: 5 tabs 128 x 64 in one row inside 720, no overlap, every label fully shown" % facility)
+		_check(ok and buttons.all(func(b: Button) -> bool: return b.visible and b.get_theme_font_size("font_size") == 24), "%s view: 6 tabs 112 x 64 (font 24) in one row inside 720, no overlap, every label fully shown" % facility)
 		var tabs_rect := tabs.get_global_rect()
 		var others := ["LeaveButton", "CityLabel", "NoteLabel", "MoneyLabel", "FeedbackLabel"]
 		var clear := true
