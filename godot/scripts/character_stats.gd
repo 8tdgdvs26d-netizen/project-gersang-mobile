@@ -16,7 +16,9 @@ extends RefCounted
 ##              ALLOCATION_VALUE (1 HP point = +10 Max HP); S05: the point
 ##              counts are saved (Save v10 `allocation`) and restored after
 ##              apply_level() on load
-##   Equipment  future equipment bonuses (Stage 9); 0, runtime only
+##   Equipment  Stage 9 P01: the bonuses of the equipped items
+##              (EquipmentCatalog via CharacterCarrying); recomputed from the
+##              equipped items, never saved; 0 with nothing equipped
 ##   Effective  Base + Growth + Allocated + Equipment — what every consumer
 ##              reads (each layer counted once)
 ## Derived (S02 formulas, CharacterConfig constants; every rounding rule is
@@ -30,6 +32,9 @@ extends RefCounted
 ##   Attack Interval   AGI diminishing curve, never below 300 ms (ms, rounded)
 ##   Move Speed        AGI diminishing curve, never above 7.0
 ## (STR / AGI / INT: Effective values; "- 10" never below 0.)
+## Stage 9 P01: equipment may also add to the two derived defenses directly
+## (armor: Physical / Magic Defense + its bonus); no other derived value has
+## an equipment layer.
 ##
 ## M2-08 API kept: CharacterStats.new(strength) is the Hero / player
 ## character; get_strength() is Effective STR, set_strength() sets Base STR.
@@ -43,6 +48,9 @@ var _base := {}
 var _growth := {}
 var _allocated := {}
 var _equipment := {}
+## Stage 9 P01: equipment bonuses to derived values (physical_defense /
+## magic_defense; EquipmentCatalog.DERIVED_BONUS_STATS). Runtime only.
+var _derived_equipment := {"physical_defense": 0, "magic_defense": 0}
 ## S03 / S04: Stat Points earned by the Level ((level - 1) x 3). The points
 ## spent are the allocated points; unspent = earned - spent (one source).
 var _earned_points := 0
@@ -86,6 +94,39 @@ func get_allocated_points(stat: String) -> int:
 
 func get_equipment_bonus(stat: String) -> int:
 	return int(_equipment.get(stat, 0))
+
+
+## Stage 9 P01: the equipment bonus to a derived value (physical_defense /
+## magic_defense; 0 for anything else).
+func get_derived_equipment_bonus(name: String) -> int:
+	return int(_derived_equipment.get(name, 0))
+
+
+## Stage 9 P01: replaces every equipment bonus (core stats and derived
+## defenses) with `bonuses` ({stat: amount}; missing ones become 0). Refused
+## as a whole (nothing changes) for an unknown stat or an amount that is not a
+## whole number 0..MAX_STAT.
+func apply_equipment_bonuses(bonuses: Dictionary) -> bool:
+	for stat in bonuses:
+		if not (CharacterConfig.STATS.has(stat) or _derived_equipment.has(stat)) or not _is_valid(bonuses[stat]):
+			return false
+	for stat in CharacterConfig.STATS:
+		_equipment[stat] = int(bonuses.get(stat, 0))
+	for name in _derived_equipment:
+		_derived_equipment[name] = int(bonuses.get(name, 0))
+	return true
+
+
+## Stage 9 P01: every equipment bonus now ({stat: amount}, non-zero ones).
+func get_equipment_bonuses() -> Dictionary:
+	var bonuses := {}
+	for stat in CharacterConfig.STATS:
+		if get_equipment_bonus(stat) != 0:
+			bonuses[stat] = get_equipment_bonus(stat)
+	for name in _derived_equipment:
+		if _derived_equipment[name] != 0:
+			bonuses[name] = _derived_equipment[name]
+	return bonuses
 
 
 func get_effective(stat: String) -> int:
@@ -207,6 +248,7 @@ func duplicate_stats() -> CharacterStats:
 	copy._growth = _growth.duplicate()
 	copy._allocated = _allocated.duplicate()
 	copy._equipment = _equipment.duplicate()
+	copy._derived_equipment = _derived_equipment.duplicate()
 	copy._earned_points = _earned_points
 	return copy
 
@@ -229,8 +271,8 @@ func set_allocated(stat: String, value: Variant) -> bool:
 	return true
 
 
-## Future equipment hook (Stage 9; no gameplay calls it in S01, every bonus
-## stays 0).
+## Equipment hook for one core stat (Stage 9 P01: CharacterCarrying sets
+## every bonus at once through apply_equipment_bonuses()).
 func set_equipment_bonus(stat: String, value: Variant) -> bool:
 	if not CharacterConfig.STATS.has(stat) or not _is_valid(value):
 		return false
@@ -278,11 +320,11 @@ func get_magic_attack() -> int:
 
 
 func get_physical_defense() -> int:
-	return defense_for(_above_baseline("str"))
+	return defense_for(_above_baseline("str")) + get_derived_equipment_bonus("physical_defense")
 
 
 func get_magic_defense() -> int:
-	return defense_for(_above_baseline("int"))
+	return defense_for(_above_baseline("int")) + get_derived_equipment_bonus("magic_defense")
 
 
 func get_attack_interval_ms() -> int:

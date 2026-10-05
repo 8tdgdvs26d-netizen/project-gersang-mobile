@@ -1,6 +1,18 @@
 class_name SaveStore
 extends RefCounted
 
+## Version 13 (Stage 9 P01) adds `carrying`: what every character carries
+## beyond the Hero's backpack goods (still in `character`, with the cost
+## ledger) — per stable character id (the Hero and every owned Mercenary,
+## exactly those): its equipped Weapon / Armor and carried equipment
+## (CharacterEquipment) and, for a Mercenary, its goods (P01: must be empty;
+## implementation gap, the cost ledger does not cover Mercenary goods yet).
+## CharacterCarrying.parse_save owns and validates it strictly (no pending /
+## unknown id, slot-correct known items, whole quantities); anything else
+## rejects the whole save. Equipment bonuses, Effective stats and Capacity are
+## rebuilt, never saved; over capacity is legal and loads as it is. v1-v12
+## saves load with empty carrying for the Hero and every owned Mercenary
+## (after the P05 legacy migration); the file becomes v13 at the next save.
 ## Version 12 (Stage 8 P05) makes the roster the only Mercenary source:
 ## `progression` and `allocation` hold only the Hero ({"hero": ...}; the old
 ## three-slot sections are refused in a v12 save) and
@@ -70,8 +82,8 @@ extends RefCounted
 ## returning any runtime object.
 
 const DEFAULT_PATH := "user://myrial_save.json"
-const VERSION := 12
-const INVENTORY_VERSIONS := [3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+const VERSION := 13
+const INVENTORY_VERSIONS := [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
 const LEGACY_CARGO_VERSIONS := [1, 2]
 const MAX_SAVED_MONEY := 9007199254740992
 ## The fixed capacity legacy v1/v2 Cargo had when those saves were written.
@@ -93,6 +105,8 @@ const V11_KEYS := ["version", "money", "character", "market", "location", "wareh
 ## Stage 8 P05: v11 + the pending legacy Mercenaries (progression / allocation
 ## now hold only the Hero).
 const V12_KEYS := ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation", "mercenaries", "pending_legacy_mercenaries"]
+## Stage 9 P01: v12 + every character's carrying (equipment; Mercenary goods).
+const V13_KEYS := ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation", "mercenaries", "pending_legacy_mercenaries", "carrying"]
 ## Stage 8 P05: inspect() results.
 const STATUS_MISSING := "missing"
 const STATUS_LOADED := "loaded"
@@ -119,8 +133,10 @@ const EARLY_V3_STACK_KEYS := ["quantity", "capacity_cost"]
 ## allocation; a missing character (or none given) is written with 0 points.
 ## P01.5: `roster` is written as `mercenaries` (none given: an empty roster).
 ## P05: progression / allocation of the Hero only; the roster's pending
-## legacy list as `pending_legacy_mercenaries`.
-static func serialize(wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null, progression: ProgressionState = null, characters: Dictionary = {}, roster: MercenaryRoster = null) -> Dictionary:
+## legacy list as `pending_legacy_mercenaries`. Stage 9 P01: `carrying` is
+## written as `carrying` (none given: empty for the Hero and every owned
+## Mercenary).
+static func serialize(wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null, progression: ProgressionState = null, characters: Dictionary = {}, roster: MercenaryRoster = null, carrying: CharacterCarrying = null) -> Dictionary:
 	var stored := warehouses if warehouses != null else WarehouseState.create_default()
 	var lots := ledger if ledger != null else TradeCostLedger.unknown_for(inventory.get_items(), stored)
 	var saved_items := {}
@@ -144,7 +160,20 @@ static func serialize(wallet: Wallet, inventory: CharacterInventory, market: Mar
 		"allocation": _allocation_snapshot(characters),
 		"mercenaries": (roster if roster != null else MercenaryRoster.new()).to_dict(),
 		"pending_legacy_mercenaries": (roster if roster != null else MercenaryRoster.new()).pending_to_list(),
+		"carrying": carrying.to_save() if carrying != null else _empty_carrying(roster),
 	}
+
+
+## Stage 9 P01: empty carrying for the Hero and every owned Mercenary.
+static func _empty_carrying(roster: MercenaryRoster) -> Dictionary:
+	var empty := CharacterEquipment.new().to_save()
+	var data := {CharacterCarrying.HERO_ID: empty.duplicate(true)}
+	if roster != null:
+		for member in roster.get_owned():
+			var entry := empty.duplicate(true)
+			entry["goods"] = {}
+			data[member.get_id()] = entry
+	return data
 
 
 ## S05: {character id: {hp, str, agi, int}} confirmed point counts.
@@ -156,7 +185,7 @@ static func _allocation_snapshot(characters: Dictionary) -> Dictionary:
 	return snapshot
 
 
-static func save(path: String, wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null, progression: ProgressionState = null, characters: Dictionary = {}, roster: MercenaryRoster = null) -> bool:
+static func save(path: String, wallet: Wallet, inventory: CharacterInventory, market: MarketState, location: PlayerLocation = null, warehouses: WarehouseState = null, recovery: MarketRecovery = null, ledger: TradeCostLedger = null, progression: ProgressionState = null, characters: Dictionary = {}, roster: MercenaryRoster = null, carrying: CharacterCarrying = null) -> bool:
 	if path == "" or wallet == null or inventory == null or market == null:
 		return false
 	# T06: never write an invalid location (e.g. world coordinates outside the
@@ -174,11 +203,19 @@ static func save(path: String, wallet: Wallet, inventory: CharacterInventory, ma
 		var reloaded := MercenaryRoster.from_dict(JSON.parse_string(JSON.stringify(roster.to_dict())))
 		if reloaded == null or not reloaded.restore_pending(JSON.parse_string(JSON.stringify(roster.pending_to_list()))):
 			return false
+	# Stage 9 P01: never write carrying that would not load back, or lose the
+	# state of a character that is no longer owned.
+	if carrying != null:
+		if carrying.has_orphans():
+			return false
+		var saved_roster := roster if roster != null else MercenaryRoster.new()
+		if CharacterCarrying.parse_save(JSON.parse_string(JSON.stringify(carrying.to_save())), saved_roster).is_empty():
+			return false
 	var temp_path := path + ".tmp"
 	var file := FileAccess.open(temp_path, FileAccess.WRITE)
 	if file == null:
 		return false
-	file.store_string(JSON.stringify(serialize(wallet, inventory, market, location, warehouses, recovery, ledger, progression, characters, roster), "", true, true))
+	file.store_string(JSON.stringify(serialize(wallet, inventory, market, location, warehouses, recovery, ledger, progression, characters, roster, carrying), "", true, true))
 	file.close()
 	var error := DirAccess.rename_absolute(ProjectSettings.globalize_path(temp_path), ProjectSettings.globalize_path(path))
 	return error == OK
@@ -262,7 +299,7 @@ static func validate(data: Variant) -> Dictionary:
 ## stored quantities; older versions get the default world location, empty
 ## warehouses, no recovery anchor and unknown-cost lots.
 static func _validate_inventory_save(data: Dictionary, version: int) -> Dictionary:
-	var keys: Array = {3: V3_KEYS, 4: V4_KEYS, 5: V5_KEYS, 6: V6_KEYS, 7: V7_KEYS, 8: V8_KEYS, 9: V9_KEYS, 10: V10_KEYS, 11: V11_KEYS, 12: V12_KEYS}[version]
+	var keys: Array = {3: V3_KEYS, 4: V4_KEYS, 5: V5_KEYS, 6: V6_KEYS, 7: V7_KEYS, 8: V8_KEYS, 9: V9_KEYS, 10: V10_KEYS, 11: V11_KEYS, 12: V12_KEYS, 13: V13_KEYS}[version]
 	if not _has_only_keys(data, keys) or not data.has_all(keys):
 		return {}
 	var location := PlayerLocation.new()
@@ -309,6 +346,13 @@ static func _validate_inventory_save(data: Dictionary, version: int) -> Dictiona
 		migration = LegacyMercenaryMigration.migrate(levels, allocation, roster)
 		if migration.is_empty():
 			return {}
+	# Stage 9 P01: v13 carries every character's carrying (validated against
+	# the final owned roster); v1-v12 start empty.
+	var carrying := CharacterCarrying.parse_save(_empty_carrying(roster), roster)
+	if version >= 13:
+		carrying = CharacterCarrying.parse_save(data["carrying"], roster)
+	if carrying.is_empty():
+		return {}
 	var recovery := MarketRecovery.new()
 	if version >= 6:
 		recovery = MarketRecovery.from_dict(data["market_recovery"])
@@ -339,7 +383,7 @@ static func _validate_inventory_save(data: Dictionary, version: int) -> Dictiona
 			return {}
 	if ledger == null:
 		return {}
-	return {"money": money, "character_id": character["id"], "strength": strength, "items": items, "market": market, "location": location, "warehouses": warehouses, "market_recovery": recovery, "cost_ledger": ledger, "progression": ProgressionState.from_hero(levels["hero"][0], levels["hero"][1]), "allocation": {"hero": allocation["hero"]}, "mercenaries": roster, "migration": migration}
+	return {"money": money, "character_id": character["id"], "strength": strength, "items": items, "market": market, "location": location, "warehouses": warehouses, "market_recovery": recovery, "cost_ledger": ledger, "progression": ProgressionState.from_hero(levels["hero"][0], levels["hero"][1]), "allocation": {"hero": allocation["hero"]}, "mercenaries": roster, "migration": migration, "carrying": carrying}
 
 
 static func _validate_legacy(data: Dictionary, version: int) -> Dictionary:
@@ -375,7 +419,10 @@ static func _validate_legacy(data: Dictionary, version: int) -> Dictionary:
 	var migration := LegacyMercenaryMigration.migrate(_default_levels(ProgressionState.LEGACY_SLOTS), _zero_allocation(ProgressionState.LEGACY_SLOTS), roster)
 	if migration.is_empty():
 		return {}
-	return {"money": money, "character_id": "player", "strength": CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "items": items, "market": market, "location": PlayerLocation.new(), "warehouses": WarehouseState.create_default(), "market_recovery": MarketRecovery.new(), "cost_ledger": TradeCostLedger.unknown_for(items, null), "progression": ProgressionState.new(), "allocation": {"hero": CharacterStats.zero_allocation()}, "mercenaries": roster, "migration": migration}
+	var carrying := CharacterCarrying.parse_save(_empty_carrying(roster), roster)
+	if carrying.is_empty():
+		return {}
+	return {"carrying": carrying, "money": money, "character_id": "player", "strength": CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "items": items, "market": market, "location": PlayerLocation.new(), "warehouses": WarehouseState.create_default(), "market_recovery": MarketRecovery.new(), "cost_ledger": TradeCostLedger.unknown_for(items, null), "progression": ProgressionState.new(), "allocation": {"hero": CharacterStats.zero_allocation()}, "mercenaries": roster, "migration": migration}
 
 
 ## P05: {slot: [START_LEVEL, 0]} (saves without progression).
@@ -487,9 +534,13 @@ static func _rebuild(payload: Dictionary) -> Dictionary:
 	var inventory := CharacterInventory.new(payload["character_id"], stats)
 	if not inventory.restore_items(payload["items"]):
 		return {}
-	if wallet.get_balance() != payload["money"] or payload["market"] == null or payload["location"] == null or payload["warehouses"] == null or payload["market_recovery"] == null or payload["cost_ledger"] == null or payload["progression"] == null or payload["allocation"] == null or payload["mercenaries"] == null:
+	if wallet.get_balance() != payload["money"] or payload["market"] == null or payload["location"] == null or payload["warehouses"] == null or payload["market_recovery"] == null or payload["cost_ledger"] == null or payload["progression"] == null or payload["allocation"] == null or payload["mercenaries"] == null or payload["carrying"] == null or (payload["carrying"] as Dictionary).is_empty():
 		return {}
-	return {"wallet": wallet, "inventory": inventory, "cargo": inventory, "character_stats": stats, "market": payload["market"], "location": payload["location"], "warehouses": payload["warehouses"], "market_recovery": payload["market_recovery"], "cost_ledger": payload["cost_ledger"], "progression": payload["progression"], "allocation": payload["allocation"], "mercenaries": payload["mercenaries"], "migration": payload["migration"]}
+	# Stage 9 P01: the characters' carrying on the loaded roster and backpack.
+	var roster: MercenaryRoster = payload["mercenaries"]
+	var carrying := CharacterCarrying.new(inventory, func() -> MercenaryRoster: return roster)
+	carrying.restore_save(payload["carrying"])
+	return {"carrying": carrying, "wallet": wallet, "inventory": inventory, "cargo": inventory, "character_stats": stats, "market": payload["market"], "location": payload["location"], "warehouses": payload["warehouses"], "market_recovery": payload["market_recovery"], "cost_ledger": payload["cost_ledger"], "progression": payload["progression"], "allocation": payload["allocation"], "mercenaries": payload["mercenaries"], "migration": payload["migration"]}
 
 
 static func _valid_money(value: Variant) -> int:

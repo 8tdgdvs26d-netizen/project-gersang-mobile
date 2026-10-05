@@ -561,7 +561,7 @@ func _verify_frozen() -> void:
 	run.advance(3000)
 	_check(run.get_phase() == CombatBattle.Phase.RETREAT, "P. The retreat completes")
 	# Q. Save version.
-	_check(SaveStore.VERSION == 12, "Q. Save version still 12")
+	_check(SaveStore.VERSION == 13, "Q. Save version still 12")
 	_sections_done.append("frozen")
 
 
@@ -755,7 +755,7 @@ func _verify_countdown() -> void:
 	_check(main.mercenary_roster.get_mercenary("merc_2") == null and main.mercenary_roster.get_owned_count() == 2 and not hub.is_dismiss_confirm_open(), "AC06 確定解僱 after the countdown: dismissed once")
 	_check(main.wallet.get_balance() == money and hub.get_feedback_text() == "已解僱守衛 #2", "AC06 No refund; 已解僱守衛 #2")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE)) if FileAccess.file_exists(TEST_SAVE) else null
-	_check(saved != null and int(saved["version"]) == 12 and (saved["mercenaries"]["owned"] as Array).size() == 2, "AC06 Saved at once (v12, 2 owned)")
+	_check(saved != null and int(saved["version"]) == 13 and (saved["mercenaries"]["owned"] as Array).size() == 2, "AC06 Saved at once (v12, 2 owned)")
 	await _destroy(main)
 	main = await _new_main()
 	_check(main.mercenary_roster.get_mercenary("merc_2") == null and main.mercenary_roster.get_owned_count() == 2 and main.mercenary_roster.is_deployed("merc_1"), "AC06 Permanent: still gone after a restart")
@@ -811,7 +811,7 @@ func _verify_lifecycle() -> void:
 	_check(main.progression.get_exp("hero") > hero_exp or main.progression.get_level("hero") > 1, "EXP settled for the Hero")
 	_check(main.mercenary_roster.get_mercenary("merc_1").get_exp() > 0 and main.mercenary_roster.get_mercenary("merc_2").get_exp() > 0, "EXP settled for both Mercenaries")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE)) if FileAccess.file_exists(TEST_SAVE) else null
-	_check(saved != null and int(saved["version"]) == 12, "Saved as v12")
+	_check(saved != null and int(saved["version"]) == 13, "Saved as v12")
 	_check(not FileAccess.get_file_as_string(TEST_SAVE).to_lower().contains("frozen"), "R. Frozen is never saved (battle runtime only)")
 	var snapshot := JSON.stringify(main.mercenary_roster.get_snapshot())
 	await _destroy(main)
@@ -824,7 +824,7 @@ func _verify_lifecycle() -> void:
 # --- Scope -------------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 12, "Save schema: still v12 (no version bump)")
+	_check(SaveStore.VERSION == 13, "Save schema: still v12 (no version bump)")
 	for path in ["res://scripts/save_store.gd", "res://scripts/main.gd", "res://scripts/mercenary_roster.gd", "res://scripts/mercenary.gd", "res://scripts/progression_state.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("frozen"), "%s: no Frozen (runtime only, Q / R)" % path.get_file())

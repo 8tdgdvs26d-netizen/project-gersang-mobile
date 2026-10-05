@@ -44,7 +44,7 @@ func _initialize() -> void:
 # --- Schema ------------------------------------------------------------------------------------
 
 func _verify_schema() -> void:
-	_check(SaveStore.VERSION == 12 and SaveStore.INVENTORY_VERSIONS == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12], "AC01 Save v11 (from v10; P05: v12 is current)")
+	_check(SaveStore.VERSION == 13 and SaveStore.INVENTORY_VERSIONS == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], "AC01 Save v11 (from v10; Stage 9 P01: v13 is current)")
 	_check(SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"] and SaveStore.V10_KEYS.size() == 10, "v11 = v10 + mercenaries only")
 	var data := _v11(MercenaryRoster.new())
 	_check(int(data["version"]) == 11 and data["mercenaries"].keys().size() == 3 and data["mercenaries"]["owned"] == [] and data["mercenaries"]["deployed"] == [] and int(data["mercenaries"]["next_serial"]) == 1, "An empty roster: {owned: [], deployed: [], next_serial: 1}")
@@ -115,8 +115,12 @@ func _verify_migration() -> void:
 	expected["allocation"] = {"hero": v10["allocation"]["hero"]}
 	expected["mercenaries"] = {"owned": [{"id": "merc_a", "type": "GUARDIAN", "level": 3, "exp": 0, "allocation": {"hp": 4, "str": 0, "agi": 0, "int": 0}}, {"id": "merc_b", "type": "MAGE", "level": 2, "exp": 0, "allocation": {"hp": 0, "str": 0, "agi": 0, "int": 3}}], "deployed": [], "next_serial": 1}
 	expected["pending_legacy_mercenaries"] = []
+	# Stage 9 P01 (v13): empty carrying for the Hero and both migrated ones.
+	expected["version"] = 13
+	var empty := {"equipped": {"weapon": null, "armor": null}, "carried_equipment": {}}
+	expected["carrying"] = {"hero": empty, "merc_a": {"equipped": {"weapon": null, "armor": null}, "carried_equipment": {}, "goods": {}}, "merc_b": {"equipped": {"weapon": null, "armor": null}, "carried_equipment": {}, "goods": {}}}
 	expected = _json(expected)
-	_check(JSON.stringify(rewritten, "", true) == JSON.stringify(expected, "", true), "AC04 v10 rewritten as v12: every other v10 section unchanged, merc_a / merc_b in the roster (P05)")
+	_check(JSON.stringify(rewritten, "", true) == JSON.stringify(expected, "", true), "AC04 v10 rewritten as v13: every other v10 section unchanged, merc_a / merc_b in the roster (P05), empty carrying (Stage 9 P01)")
 	_check(JSON.stringify(rewritten["mercenaries"]).count("merc_a") == 1 and JSON.stringify(rewritten["mercenaries"]).count("merc_b") == 1, "AC04 merc_a / merc_b are converted into the roster exactly once (P05 Q3)")
 	_sections_done.append("migration")
 
@@ -269,7 +273,7 @@ func _verify_invalid() -> void:
 	var extra := good.duplicate(true)
 	extra["version"] = 10
 	_check(SaveStore.validate(extra).is_empty(), "A v10 save carrying mercenaries is rejected (unknown key)")
-	_check(SaveStore.validate(_with(good, {"version": 13})).is_empty(), "An unknown future v13 is rejected (P05: v12 is current)")
+	_check(SaveStore.validate(_with(good, {"version": 14})).is_empty(), "An unknown future v14 is rejected (Stage 9 P01: v13 is current)")
 	# Edge values that stay valid.
 	var edges := {
 		"owned merc_5 under next_serial 6": _roster_data([_m("merc_5", "MAGE")], [], 6),
@@ -321,7 +325,7 @@ func _verify_game() -> void:
 	var before := roster.to_dict()
 	_check(main.save_world_position(), "The game saves")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 12 and (saved["mercenaries"]["owned"] as Array).size() == 4 and int(saved["mercenaries"]["next_serial"]) == 4, "Written as v12 with the roster (P05: merc_a, merc_b, merc_2, merc_3)")
+	_check(int(saved["version"]) == 13 and (saved["mercenaries"]["owned"] as Array).size() == 4 and int(saved["mercenaries"]["next_serial"]) == 4, "Written as v12 with the roster (P05: merc_a, merc_b, merc_2, merc_3)")
 	_check(saved["mercenaries"]["owned"][0]["level"] == 2.0 and saved["mercenaries"]["owned"][1]["allocation"]["int"] == 7.0 and saved["progression"].keys() == ["hero"], "The fixed mercs' data are written (P05: as roster instances)")
 	await _destroy(main)
 	main = await _new_main()
@@ -449,7 +453,7 @@ func _verify_stress() -> void:
 		var text := JSON.stringify(rewritten, "", true)
 		if round == 0:
 			expected = text
-		stable = stable and text == expected and int(rewritten["version"]) == 12 and _rewrite(_load(rewritten)).hash() == rewritten.hash()
+		stable = stable and text == expected and int(rewritten["version"]) == 13 and _rewrite(_load(rewritten)).hash() == rewritten.hash()
 	_check(stable, "100 repeated v10 -> v12 migrations give the same v12 save, which reloads unchanged")
 	_sections_done.append("stress")
 
@@ -462,6 +466,7 @@ func _verify_stress() -> void:
 func _v11(roster: MercenaryRoster, levels: Dictionary = {}, points: Dictionary = {}) -> Dictionary:
 	var data := _current(roster, int(levels.get("hero", 1)), points.get("hero", {}))
 	data.erase("pending_legacy_mercenaries")
+	data.erase("carrying")  # Stage 9 P01 (v13)
 	data["version"] = 11
 	var progression_data := {}
 	var allocation := {}

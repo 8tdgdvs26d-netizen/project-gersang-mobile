@@ -79,7 +79,7 @@ func _verify_layout() -> void:
 	for unrelated in ["trade_service", "warehouse_service", "market_state", "market_rules", "transport_service", "save_store", "city_hub", "player_location", "trade_cost_ledger"]:
 		var code := _code_only("res://scripts/%s.gd" % unrelated)
 		_check(not code.contains("WorldThreatZones") and not code.to_lower().contains("safe_buffer"), "No zone logic in %s" % unrelated)
-	_check(SaveStore.VERSION == 12, "No save schema change (P05: version 12)")
+	_check(SaveStore.VERSION == 13, "No save schema change (Stage 9 P01: version 13)")
 	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
 	_check(scene.count("[node name=\"PrototypeMonster\"") == 1 and scene.count("world_monster.tscn") == 1, "Still exactly one monster")
 	_sections_done.append("layout")
@@ -269,7 +269,7 @@ func _verify_save() -> void:
 		_check(main.save_world_position(), "Exact world position saves (%s)" % position)
 		var text := FileAccess.get_file_as_string(TEST_SAVE)
 		var lower := text.to_lower()
-		_check(int(JSON.parse_string(text)["version"]) == 12, "Save version 12 (P05) (C05)")
+		_check(int(JSON.parse_string(text)["version"]) == 13, "Save version 13 (Stage 9 P01) (C05)")
 		_check(not lower.contains("zone") and not lower.contains("safe") and not lower.contains("threat") and not lower.contains("monster"), "No zone, safety or monster data is saved")
 		await _destroy(main)
 		main = (load("res://scenes/main.tscn") as PackedScene).instantiate()

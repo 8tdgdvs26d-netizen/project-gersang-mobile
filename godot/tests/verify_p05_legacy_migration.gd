@@ -56,13 +56,13 @@ func _initialize() -> void:
 # --- Schema ---------------------------------------------------------------------------------------------
 
 func _verify_schema() -> void:
-	_check(SaveStore.VERSION == 12 and SaveStore.INVENTORY_VERSIONS == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12], "AC01 Save v12")
+	_check(SaveStore.VERSION == 13 and SaveStore.INVENTORY_VERSIONS == [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13], "AC01 Save v12 (Stage 9 P01: v13 is current)")
 	_check(SaveStore.V12_KEYS == SaveStore.V11_KEYS + ["pending_legacy_mercenaries"], "v12 = v11 + pending_legacy_mercenaries")
 	_check(ProgressionState.SLOTS == ["hero"] and ProgressionState.LEGACY_SLOTS == ["hero", "merc_a", "merc_b"], "Runtime progression: the Hero only; the three slots are legacy (read only)")
 	var roster := MercenaryRoster.build([Mercenary.create("merc_1", "MAGE", 3, 20, _pts(1, 0, 0, 2))], ["merc_1"])
 	roster.pend_legacy(Mercenary.create("merc_b", "MAGE", 2, 5, _pts(0, 0, 3, 0)))
 	var data := _v12(roster, [4, 30], _pts(2, 3, 1, 3))
-	_check(int(data["version"]) == 12 and data.keys().size() == 12, "Written as v12 with 12 sections")
+	_check(int(data["version"]) == 12 and data.keys().size() == 12, "A v12 save has 12 sections (Stage 9 P01: v13 adds carrying)")
 	_check(data["progression"] == _json({"hero": {"level": 4, "exp": 30}}) and _ints(data["allocation"]["hero"]) == _pts(2, 3, 1, 3) and data["allocation"].keys() == ["hero"], "AC02 progression / allocation: the Hero only")
 	_check(data["pending_legacy_mercenaries"] == _json([{"id": "merc_b", "type": "MAGE", "level": 2, "exp": 5, "allocation": _pts(0, 0, 3, 0)}]), "Pending: complete Mercenary data, nothing derived")
 	_check((data["mercenaries"] as Dictionary).keys().size() == 3, "The roster section unchanged (owned / deployed / next_serial)")
@@ -103,7 +103,7 @@ func _verify_versions() -> void:
 	_check(not v12.is_empty() and (v12["mercenaries"] as MercenaryRoster).get_owned_count() == 0 and v12["migration"] == {"owned": [], "pending": []}, "AC05 v12 loads as it is: no conversion")
 	# v13 / future, corrupt, invalid.
 	var future: Dictionary = saves[12].duplicate(true)
-	future["version"] = 13
+	future["version"] = 14  # Stage 9 P01: v13 is current
 	_check(SaveStore.validate(_json(future)).is_empty(), "AC06 v13 is refused")
 	_sections_done.append("versions")
 
@@ -193,7 +193,7 @@ func _verify_idempotence() -> void:
 		_check(_state(first) == _state(again), "AC13 v11 roster %d: the same fixed result every load" % size)
 		var v12 := _rewrite(first)
 		var reloaded := _load(v12)
-		_check(int(v12["version"]) == 12 and _state(reloaded) == _state(first) and reloaded["migration"] == {"owned": [], "pending": []}, "AC13 roster %d: v12 reload = the migrated state, nothing converted again" % size)
+		_check(int(v12["version"]) == 13 and _state(reloaded) == _state(first) and reloaded["migration"] == {"owned": [], "pending": []}, "AC13 roster %d: v12 reload = the migrated state, nothing converted again" % size)
 		var v12_again := _rewrite(reloaded)
 		_check(JSON.stringify(v12_again) == JSON.stringify(v12) and _state(_load(v12_again)) == _state(first), "AC13 roster %d: save / load / save is stable" % size)
 		var count: int = (reloaded["mercenaries"] as MercenaryRoster).get_owned_count() + (reloaded["mercenaries"] as MercenaryRoster).get_pending().size()
@@ -309,7 +309,7 @@ func _verify_game_notice_and_claim() -> void:
 	_check(not notice.is_showing(), "知道了 closes it")
 	var hub := main.get_node("CityHub") as CityHub
 	await _enter_city(main)
-	_check(int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 12, "The next normal save writes v12")
+	_check(int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 13, "The next normal save writes v12")
 	hub.show_facility(CityHub.FACILITY_MERCENARY)
 	hub.show_mercenary_view(CityHub.MERCENARY_VIEW_ROSTER)
 	await process_frame
@@ -429,7 +429,7 @@ func _verify_character_ui() -> void:
 func _verify_protection() -> void:
 	var valid := JSON.stringify(_v12(_recruited(2), [3, 0], _pts(0, 0, 0, 0)))
 	var future: Dictionary = JSON.parse_string(valid)
-	future["version"] = 13
+	future["version"] = 14  # Stage 9 P01: v13 is current
 	var invalid: Dictionary = JSON.parse_string(valid)
 	invalid["money"] = -5
 	var cases := {"corrupt": "{ not json", "invalid": JSON.stringify(invalid), "future": JSON.stringify(future)}
@@ -473,7 +473,7 @@ func _verify_protection() -> void:
 	# Missing save = a new game (not locked); a valid save never locks.
 	_clean()
 	main = await _new_main(TEST_SAVE)
-	_check(not main.save_locked and main.load_status["status"] == SaveStore.STATUS_MISSING and main._persist() and int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 12, "A missing save: a new game that saves v12")
+	_check(not main.save_locked and main.load_status["status"] == SaveStore.STATUS_MISSING and main._persist() and int(JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))["version"]) == 13, "A missing save: a new game that saves v12")
 	await _destroy(main)
 	main = await _new_main(TEST_SAVE)
 	_check(not main.save_locked and main.load_status["status"] == SaveStore.STATUS_LOADED and not FileAccess.file_exists(TEST_SAVE + ".unreadable-1"), "A valid save: loaded, no backup, not locked")
@@ -490,7 +490,9 @@ func _verify_scope() -> void:
 	_check(not panel_code.contains("merc_a") and not panel_code.contains("ORDER") and not panel_code.contains("shown_ids"), "AC38 The Character UI has no fixed / hidden legacy tabs")
 	for path in ["res://scripts/save_store.gd", "res://scripts/legacy_mercenary_migration.gd", "res://scripts/mercenary_roster.gd", "res://scripts/party_service.gd"]:
 		var code := _code_only(path).to_lower()
-		for word in ["backpack", "equipment", "transfer", "max_hp", "attack_damage"]:
+		# (Stage 9 P01 approved Save v13 equipment in save_store.gd: it still
+		# never saves a derived equipment bonus.)
+		for word in ["backpack", "equipment_bonus" if path.ends_with("save_store.gd") else "equipment", "transfer", "max_hp", "attack_damage"]:
 			_check(not code.contains(word), "%s has no %s" % [path.get_file(), word])
 	_check(MercenaryRoster.MAX_OWNED == 5 and MercenaryRoster.MAX_DEPLOYED == 3 and RecruitmentService.PRICE == 1000, "Limits and price unchanged")
 	_check(CharacterConfig.MERCENARY_PROFILE == {"GUARDIAN": "merc_a", "MAGE": "merc_b", "STRATEGIST": "merc_b"} and CombatConfig.SKILL_MP_COST == 25, "Combat values unchanged")
@@ -609,7 +611,11 @@ func _v12(roster: MercenaryRoster, hero: Array, points: Dictionary) -> Dictionar
 	inventory.add("test_good_03", 4)
 	var wallet := Wallet.new()
 	wallet.spend(wallet.get_balance() - 4321)
-	return _json(SaveStore.serialize(wallet, inventory, MarketState.create_default(), PlayerLocation.new(), null, null, null, ProgressionState.from_hero(hero[0], hero[1]), {"hero": stats}, roster))
+	# Stage 9 P01: the current save is v13; a v12 save is it without `carrying`.
+	var data: Dictionary = _json(SaveStore.serialize(wallet, inventory, MarketState.create_default(), PlayerLocation.new(), null, null, null, ProgressionState.from_hero(hero[0], hero[1]), {"hero": stats}, roster))
+	data.erase("carrying")
+	data["version"] = 12
+	return data
 
 
 ## Fixtures of every version {1..12} with the legacy three slots at

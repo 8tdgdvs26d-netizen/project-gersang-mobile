@@ -157,7 +157,7 @@ func _verify_save_v9() -> void:
 	stats.set_equipment_bonus("str", 5)
 	var inventory := CharacterInventory.new("player", stats)
 	var data := SaveStore.serialize(Wallet.new(), inventory, MarketState.create_default())
-	_check(SaveStore.VERSION == 12 and data["version"] == 12, "Save v12 (P05) (S05 adds only the allocation)")
+	_check(SaveStore.VERSION == 13 and data["version"] == 13, "Save v13 (Stage 9 P01) (S05 adds only the allocation)")
 	_check(data["character"]["stats"] == {"strength": 13}, "character.stats is exactly {strength: Base STR} (no allocation / equipment saved)")
 	_check(SaveStore.STATS_KEYS == ["strength"], "Saved stats keys unchanged")
 	var path := "user://s01_character_stats_save.json"
@@ -171,7 +171,9 @@ func _verify_save_v9() -> void:
 
 func _verify_static() -> void:
 	var save_code := FileAccess.get_file_as_string("res://scripts/save_store.gd")
-	for word in ["allocated", "equipment", "\"agi\"", "\"int\"", "merc_stats"]:
+	# (Stage 9 P01: Save v13 stores the equipped / carried items — never the
+	# derived equipment bonuses.)
+	for word in ["allocated", "equipment_bonus", "\"agi\"", "\"int\"", "merc_stats"]:
 		_check(not save_code.contains(word), "save_store.gd saves no %s" % word)
 	var stats_code := FileAccess.get_file_as_string("res://scripts/character_stats.gd") + FileAccess.get_file_as_string("res://scripts/character_config.gd")
 	# S03 brought Level growth into the stats model ("level" left this list).

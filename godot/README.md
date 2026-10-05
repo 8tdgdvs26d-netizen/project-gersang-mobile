@@ -47,7 +47,31 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 8 iPhone L3 Corrective (on top of P05). Save version stays 12 (unchanged schema).
+Stage 9 P01: Equipment Foundation + Character Carrying Foundation. Save version 13.
+Foundation only: no Equipment Shop, prices, equip UI or Character Panel presentation.
+
+- `EquipmentCatalog`: the approved Prototype test items (not final balance) — 測試武器一
+  (WEAPON, weight 3, STR +2), 測試武器二 (WEAPON, 2, INT +2), 測試防具一 (ARMOR, 4,
+  Physical Defense +2), 測試防具二 (ARMOR, 3, Magic Defense +2). Only WEAPON / ARMOR; armor
+  affects only the defenses; fixed data (no affix, rarity, durability, enhancement, set)
+- `CharacterStats`: the Equipment layer is filled from the equipped items
+  (`apply_equipment_bonuses`; Effective = Base + Growth + Allocation + Equipment unchanged) plus
+  a small derived-defense equipment layer (Physical / Magic Defense); never saved
+- `CharacterEquipment` (per stable character id): 0-1 Weapon, 0-1 Armor, carried equipment
+  (item id + quantity)
+- `CharacterCarrying`: the Hero (its backpack) and every owned Mercenary (its own
+  `CharacterInventory`, bound to its id, on its own stats). One Capacity (10 + Effective STR x 9)
+  per character covers goods + carried + equipped equipment. All-or-nothing add / remove /
+  equip (swap) / unequip / transfer; over capacity is legal (nothing deleted), it only refuses
+  new load. Implementation gap (not a rule): no flow gives a Mercenary goods yet, and a saved
+  Mercenary's goods must be empty (the cost ledger does not cover them yet)
+- dismissal refused while the Mercenary holds anything (`ERR_HAS_ITEMS`,
+  請先清空此傭兵攜帶的物品及裝備，再解僱)
+- Save v13 = v12 + `carrying` (exactly the Hero + every owned Mercenary; strict validation);
+  v1-v12 saves load with empty carrying, everything else kept
+- tests: `tests/verify_s9_p01_equipment.gd`; tests pinned to v12 moved to v13 (counts kept)
+
+Previous: Stage 8 iPhone L3 Corrective (on top of P05). Save version stays 12 (unchanged schema).
 
 - World Map: the 《萬行誌：白手》 / 開發原型：基本市場 / 走到 A 城或 B 城… text block that covered
   the player is removed (nothing else on the map changed)
