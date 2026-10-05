@@ -9,9 +9,10 @@ extends RefCounted
 ## to exactly one place, so nothing is settled twice:
 ##   "hero"                 -> ProgressionState (its Hero slot)
 ##   a roster Mercenary id  -> that Mercenary's own Level / EXP (add_exp)
-##   another ProgressionState slot (the C01-C08 fixture merc_a / merc_b)
-##                          -> ProgressionState, as before
 ##   anything else          -> counted in the division, awarded nowhere
+##                             (P05: ProgressionState holds only the Hero, so
+##                             the C01-C08 fixture's merc_a / merc_b ids are
+##                             settled only when the roster owns them)
 ## The roster is checked before the fixture slots, so a roster instance whose
 ## id happens to be merc_a / merc_b never feeds the legacy slot.
 ## Shares: {id: {"exp", "from_level", "level", "leveled"}}.

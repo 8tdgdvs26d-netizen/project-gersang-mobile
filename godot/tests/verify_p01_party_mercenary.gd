@@ -227,7 +227,7 @@ func _verify_stage7() -> void:
 	for amount in [0, 99, 100, 249, 250, 451, 5000, 200000]:
 		var mercenary := Mercenary.create("c", "GUARDIAN")
 		mercenary.add_exp(amount)
-		var state := ProgressionState.from_dict({"hero": {"level": 1, "exp": amount}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})
+		var state := ProgressionState.from_dict({"hero": {"level": 1, "exp": amount}})
 		_check(mercenary.get_level() == state.get_level("hero") and mercenary.get_exp() == state.get_exp("hero"), "EXP %d: same Level / EXP as ProgressionState (Lv%d)" % [amount, mercenary.get_level()])
 		var stats := CharacterStats.for_character("hero")
 		stats.apply_level(mercenary.get_level())
@@ -239,10 +239,12 @@ func _verify_stage7() -> void:
 	var guardian := Mercenary.create("g", "GUARDIAN", 3, 0, {"hp": 2, "str": 1, "agi": 0, "int": 0})
 	_check(merc_a.restore_allocation(guardian.get_allocation_points()) and merc_a.get_allocation_points() == guardian.get_allocation_points(), "An instance's points fit CharacterStats.restore_allocation")
 	# Stage 7 data untouched.
-	_check(ProgressionState.SLOTS == ["hero", "merc_a", "merc_b"] and CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"], "The Stage 7 fixed party is unchanged")
+	# Stage 8 P05: the fixed slots are legacy save slots only (the Hero keeps
+	# his); merc_a / merc_b stay the GUARDIAN / MAGE stat profiles.
+	_check(ProgressionState.LEGACY_SLOTS == ["hero", "merc_a", "merc_b"] and ProgressionState.SLOTS == ["hero"] and CharacterConfig.PROTOTYPE_CHARACTERS == ["hero", "merc_a", "merc_b"], "The Stage 7 fixed party is unchanged (P05: legacy slots read only)")
 	# P01.5 (Save v11) saves the roster: save_store.gd and main.gd now hold it
 	# (verify_p015_mercenary_save); everything else stays unwired.
-	_check(SaveStore.VERSION == 11 and SaveStore.V10_KEYS == ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation"] and SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"], "Save v10 sections unchanged; v11 adds only the roster (P01.5)")
+	_check(SaveStore.VERSION == 12 and SaveStore.V10_KEYS == ["version", "money", "character", "market", "location", "warehouses", "market_recovery", "cost_ledger", "progression", "allocation"] and SaveStore.V11_KEYS == SaveStore.V10_KEYS + ["mercenaries"] and SaveStore.V12_KEYS == SaveStore.V11_KEYS + ["pending_legacy_mercenaries"], "Save v10 sections unchanged; v11 adds only the roster (P01.5; P05 v12 only the pending list)")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/character_panel.gd", "res://scripts/progression_state.gd", "res://scripts/character_stats.gd"]:
 		var code := _code_only(path)
 		# Stage 8 P04 (approved) wired combat_battle / combat_view /
@@ -260,8 +262,11 @@ func _verify_stage7() -> void:
 		var code := _code_only(path)
 		for word in ["SaveStore", "FileAccess", "CombatBattle", "CombatUnit", "Node", "Control", "randi", "randf", "Time.", "price", "money", "Wallet"]:
 			_check(not code.contains(word), "%s has no %s (data only)" % [path.get_file(), word])
+		# Stage 8 P05 (approved): the roster names the two legacy stable ids in
+		# exactly one place, its LEGACY_TYPES table; nothing else names them.
+		var legacy_free := _without_line(code, "const LEGACY_TYPES := {\"merc_a\": \"GUARDIAN\", \"merc_b\": \"MAGE\"}")
 		for word in ["\"MERC_A\"", "\"merc_a\"", "\"merc_b\"", "ice", "skill"]:
-			_check(not code.to_lower().contains(word.to_lower()), "%s holds no %s" % [path.get_file(), word])
+			_check(not legacy_free.to_lower().contains(word.to_lower()), "%s holds no %s" % [path.get_file(), word])
 	_sections_done.append("stage7")
 
 
@@ -380,6 +385,15 @@ func _code_only(path: String) -> String:
 	for line in FileAccess.get_file_as_string(path).split("\n"):
 		if not line.strip_edges().begins_with("#"):
 			lines.append(line)
+	return "\n".join(lines)
+
+
+## `code` without the line that is exactly `line` (stripped).
+func _without_line(code: String, line: String) -> String:
+	var lines := []
+	for each in code.split("\n"):
+		if each.strip_edges() != line:
+			lines.append(each)
 	return "\n".join(lines)
 
 

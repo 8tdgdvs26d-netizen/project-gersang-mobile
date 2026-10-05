@@ -211,13 +211,26 @@ func _verify_invalid_saves() -> void:
 		_check(_read(TEST_SAVE) == case[0], "Invalid save (%s) must not be overwritten on load" % case[1])
 		await _destroy(main)
 
-	# The next successful trade replaces the invalid file with a valid save.
-	_write(TEST_SAVE, '{"money": 9200, "cargo": {"test_good_01": 3, "unknown": 1}}')
+	# Stage 8 P05 (approved Q6) supersedes "the next successful trade replaces
+	# the invalid file": an unreadable save is never overwritten — it is
+	# backed up byte for byte and saving is locked for the session.
+	_clean_backups()
+	var invalid := '{"money": 9200, "cargo": {"test_good_01": 3, "unknown": 1}}'
+	_write(TEST_SAVE, invalid)
 	var main := await _new_main(TEST_SAVE)
 	await _enter(main, "A")
 	_check(main.buy_in_current_city("test_good_01", 1)["success"], "Trading must work after an invalid save")
-	_check(_saved() == {"money": 9916, "cargo": {"test_good_01": 1}}, "A successful trade must write a fresh valid save over the invalid one")
+	_check(_read(TEST_SAVE) == invalid and main.save_locked and _read(TEST_SAVE + SaveStore.BACKUP_SUFFIX + "1") == invalid, "A successful trade must not write over the invalid save (P05: kept, backed up, saving locked)")
 	await _destroy(main)
+	_clean_backups()
+
+
+## Stage 8 P05: removes the unreadable-save backups the cases above made.
+func _clean_backups() -> void:
+	for n in range(1, 40):
+		var backup := TEST_SAVE + SaveStore.BACKUP_SUFFIX + str(n)
+		if FileAccess.file_exists(backup):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(backup))
 
 
 func _verify_write_failure() -> void:

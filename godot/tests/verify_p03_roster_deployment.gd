@@ -134,14 +134,14 @@ func _verify_game_roster() -> void:
 	_check(hub.get_mercenary_view() == CityHub.MERCENARY_VIEW_RECRUIT and hub.get_deployed_count_text() == "出戰傭兵：0 / 3", "The center opens on 招聘 with 出戰傭兵：0 / 3")
 	(hub.get_node("Center/Content/MercenaryPanel/MercenaryViews/RosterViewButton") as Button).pressed.emit()
 	await process_frame
-	_check(hub.get_mercenary_view() == CityHub.MERCENARY_VIEW_ROSTER and hub.get_roster_ids().is_empty() and (hub.get_node("Center/Content/MercenaryPanel/RosterBox/RosterEmptyLabel") as Label).visible, "我的傭兵 with 0 owned: 尚未持有傭兵")
+	_check(hub.get_mercenary_view() == CityHub.MERCENARY_VIEW_ROSTER and hub.get_roster_ids().is_empty() and (hub.get_node("Center/Content/MercenaryPanel/RosterScroll/RosterBox/RosterEmptyLabel") as Label).visible, "我的傭兵 with 0 owned: 尚未持有傭兵")
 	for type in ["MAGE", "MAGE", "GUARDIAN", "STRATEGIST", "MAGE"]:
 		main.recruit_mercenary(type)
 	main.mercenary_roster.get_mercenary("merc_2").add_exp(100 + 150 + 50)
 	main.mercenary_roster.get_mercenary("merc_2").allocate({"hp": 2, "int": 3})
 	main._refresh_hub_summary()
 	await process_frame
-	_check(hub.get_roster_ids() == ["merc_1", "merc_2", "merc_3", "merc_4", "merc_5"] and not (hub.get_node("Center/Content/MercenaryPanel/RosterBox/RosterEmptyLabel") as Label).visible, "AC01 All 5 owned shown, in order")
+	_check(hub.get_roster_ids() == ["merc_1", "merc_2", "merc_3", "merc_4", "merc_5"] and not (hub.get_node("Center/Content/MercenaryPanel/RosterScroll/RosterBox/RosterEmptyLabel") as Label).visible, "AC01 All 5 owned shown, in order")
 	var texts := hub.get_roster_row_texts("merc_2")
 	_check(texts["TitleLabel"] == "法師 #2　Lv.3　遠程法術型　【待命】", "AC02 Type, identity, Level, role, status (%s)" % texts["TitleLabel"])
 	_check(texts["HintLabel"] == "在後方以法術攻擊敵人" and texts["ProgressLabel"] == "經驗 50 / 200　未分配屬性點 1" and texts["AllocationLabel"] == "已分配：血量 2　力量 0　敏捷 0　智力 3", "AC03 Real data: ability line, EXP, unspent and allocated points (%s / %s)" % [texts["ProgressLabel"], texts["AllocationLabel"]])
@@ -236,12 +236,14 @@ func _verify_game_dismissal() -> void:
 	hub.get_dismiss_button("merc_2").pressed.emit()
 	await process_frame
 	_check(hub.is_dismiss_confirm_open() and hub.get_dismiss_confirm() == {"id": "merc_2", "title": "確定解僱守衛 #2？"} and (hub.get_node("DismissModal") as Control).mouse_filter == Control.MOUSE_FILTER_STOP, "AC15 解僱 opens the confirmation: 確定解僱守衛 #2？ (it takes every touch)")
-	_check((hub.get_node("DismissModal").find_child("NoteLabel", true, false) as Label).text == "解僱後無法復原，亦不會退還招聘費用。" and hub.get_dismiss_cancel_button().text == "取消" and hub.get_dismiss_confirm_button().text == "確定解僱", "The warning and 取消 / 確定解僱")
+	_check((hub.get_node("DismissModal").find_child("NoteLabel", true, false) as Label).text == "解僱後無法復原，亦不會退還招聘費用。" and hub.get_dismiss_cancel_button().text == "取消" and hub.get_dismiss_confirm_button().text == "確定解僱（5）", "The warning and 取消 / 確定解僱 (Stage 8 L3 corrective: a 5 s countdown first, 確定解僱（5）)")
 	hub.get_dismiss_cancel_button().pressed.emit()
 	_check(not hub.is_dismiss_confirm_open() and JSON.stringify(main.mercenary_roster.get_snapshot()) == before and main.wallet.get_balance() == money, "AC16 取消: nothing changes")
 	# Confirm (with repeated taps).
 	_delete(TEST_SAVE)
 	hub.get_dismiss_button("merc_2").pressed.emit()
+	# Stage 8 L3 corrective: the 5 s safety countdown runs out first.
+	hub.advance_dismiss_countdown(CityHub.DISMISS_COUNTDOWN_SECONDS)
 	var confirm := hub.get_dismiss_confirm_button()
 	confirm.pressed.emit()
 	confirm.pressed.emit()
@@ -254,6 +256,7 @@ func _verify_game_dismissal() -> void:
 	main.save_path = BAD_SAVE
 	before = JSON.stringify(main.mercenary_roster.get_snapshot())
 	hub.get_dismiss_button("merc_3").pressed.emit()
+	hub.advance_dismiss_countdown(CityHub.DISMISS_COUNTDOWN_SECONDS)
 	hub.get_dismiss_confirm_button().pressed.emit()
 	_check(hub.get_feedback_text() == "無法儲存，解僱已取消" and JSON.stringify(main.mercenary_roster.get_snapshot()) == before and main.mercenary_roster.get_mercenary("merc_3") != null and hub.get_roster_ids().has("merc_3") and main.wallet.get_balance() == money, "AC21 Save failure: 無法儲存，解僱已取消, merc_3 back, money unchanged")
 	main.save_path = TEST_SAVE
@@ -263,6 +266,7 @@ func _verify_game_dismissal() -> void:
 	hub.get_dismiss_button("merc_3").pressed.emit()
 	main.set_mercenary_deployed("merc_3", true)
 	_check(hub.is_dismiss_confirm_open(), "The confirmation is still open while merc_3 got deployed elsewhere")
+	hub.advance_dismiss_countdown(CityHub.DISMISS_COUNTDOWN_SECONDS)
 	hub.get_dismiss_confirm_button().pressed.emit()
 	_check(main.mercenary_roster.get_mercenary("merc_3") != null and hub.get_feedback_text() == "請先取消出戰，再解僱傭兵", "A stale confirmation is refused by the service (deployed now)")
 	main.set_mercenary_deployed("merc_3", false)
@@ -316,7 +320,7 @@ func _verify_layout() -> void:
 # --- Scope -----------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 11, "AC23 Save v11")
+	_check(SaveStore.VERSION == 12, "AC23 Save v11")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/character_config.gd", "res://scripts/save_store.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("deploy") and not code.contains("dismiss") and not code.contains("partyservice"), "AC24 %s knows nothing about deployment / dismissal" % path.get_file())

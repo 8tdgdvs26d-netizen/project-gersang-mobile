@@ -37,17 +37,20 @@ extends RefCounted
 ## VICTORY / DEFEAT are final: nothing moves, attacks or takes damage after.
 ##
 ## C06 Normal Skills (FIGHTING only, not while retreating): command_skill()
-## replaces the selected unit's move / target order with its Skill. Slow /
-## AoE approach the enemy until it is within the Skill range (no MP, no
-## cooldown yet), Guard targets the unit itself and begins its cast at once
-## (a unit in the middle of a step freezes there: it keeps its step progress
-## and its claimed destination and finishes the step after the cast).
-## Slow / AoE standing in range begin the cast: SKILL_MP_COST is paid and the target (AoE: its cell) is locked —
-## range is not checked again. For SKILL_CAST_MS the unit neither moves nor
+## replaces the selected unit's move / target order with its Skill.
+## Stage 8 iPhone L3 corrective (CombatConfig skill "target"): Guard targets
+## the unit itself and the Hero's Slow needs no target (every alive enemy);
+## both begin their cast at once (a unit in the middle of a step freezes
+## there: it keeps its step progress and its claimed destination and
+## finishes the step after the cast). The AoE and the Ice Wall are aimed at a
+## battlefield cell (command_skill_at(), locked when ordered) and approach it
+## until it is within the Skill range (no MP, no cooldown yet); standing in
+## range they begin the cast: SKILL_MP_COST is paid — range is not checked
+## again. For SKILL_CAST_MS the unit neither moves nor
 ## Basic Attacks and ordinary commands are refused; then the Skill resolves,
 ## the cooldown starts and the replaced order resumes (a dead target is not
 ## replaced). Before the cast a new move / target command cancels the Skill
-## for free, and the Skill target's death cancels it (no new target); a
+## for free (a ground Skill has no target to die); a
 ## retreat cancels pending and casting Skills (MP spent on a cast is not
 ## refunded, no cooldown).
 ##
@@ -137,6 +140,9 @@ var _tick_end_ms := 0
 var _aiming := false
 ## C06: the last AoE {"cells", "at_ms"} (presentation only).
 var _last_aoe := {}
+## Stage 8 Ice Walls standing now: {"cells", "until_ms", "caster"} (enemies
+## may not step onto their cells; pruned once expired).
+var _ice_walls: Array[Dictionary] = []
 ## C07: the Gesture's random target source (seed it to replay a pick).
 var gesture_rng := RandomNumberGenerator.new()
 ## C07: Combat Clock (ms of FIGHTING, also while the Gesture Window is open).
@@ -482,6 +488,30 @@ func get_last_aoe() -> Dictionary:
 	return _last_aoe
 
 
+## Stage 8: the Ice Walls standing now (copies: {"cells", "until_ms",
+## "caster"}).
+func get_ice_walls() -> Array[Dictionary]:
+	var walls: Array[Dictionary] = []
+	for wall in _ice_walls:
+		if int(wall["until_ms"]) > _elapsed_ms:
+			walls.append(wall.duplicate(true))
+	return walls
+
+
+## Stage 8: whether an Ice Wall standing now covers `cell`.
+func is_ice_wall_cell(cell: Vector2i) -> bool:
+	for wall in _ice_walls:
+		if int(wall["until_ms"]) > _elapsed_ms and (wall["cells"] as Array).has(cell):
+			return true
+	return false
+
+
+## Stage 8: how a Skill is aimed ("self", "all_enemies" or "ground"; "" for
+## no Skill).
+static func skill_target_type(skill: Dictionary) -> String:
+	return String(skill.get("target", ""))
+
+
 # --- Gesture (C07) -------------------------------------------------------------------------------
 
 ## Whether the Hero could open the Gesture Window now.
@@ -587,14 +617,28 @@ static func aoe_cells(center: Vector2i) -> Array[Vector2i]:
 	return cells
 
 
+## Stage 8 Ice Wall: ICE_WALL_COLUMNS columns from `center`'s column (moved
+## left at the grid's right edge) x every row — a vertical wall, not a cross.
+static func ice_wall_cells(center: Vector2i) -> Array[Vector2i]:
+	var first := clampi(center.x, 0, CombatConfig.COLUMNS - CombatConfig.ICE_WALL_COLUMNS)
+	var cells: Array[Vector2i] = []
+	for column in range(first, first + CombatConfig.ICE_WALL_COLUMNS):
+		for row in range(CombatConfig.ROWS):
+			cells.append(Vector2i(column, row))
+	return cells
+
+
 static func is_in_grid(cell: Vector2i) -> bool:
 	return cell.x >= 0 and cell.x < CombatConfig.COLUMNS and cell.y >= 0 and cell.y < CombatConfig.ROWS
 
 
 ## Whether `unit` may stand on / walk to `cell` now (the preparation area
-## limit applies to friendly units during PREPARATION).
+## limit applies to friendly units during PREPARATION). Stage 8: an enemy may
+## not step onto an Ice Wall cell (staying on its own cell is allowed).
 func is_cell_allowed(unit: CombatUnit, cell: Vector2i) -> bool:
 	if not is_in_grid(cell):
+		return false
+	if unit.team == CombatUnit.Team.ENEMY and cell != unit.cell and is_ice_wall_cell(cell):
 		return false
 	if _phase == Phase.PREPARATION and unit.team == CombatUnit.Team.FRIEND:
 		return cell.x >= CombatConfig.PREPARATION_FIRST_COLUMN and cell.x < CombatConfig.PREPARATION_FIRST_COLUMN + CombatConfig.PREPARATION_COLUMNS
@@ -751,16 +795,41 @@ func _ordinary_command_allowed(unit: CombatUnit) -> bool:
 
 
 ## C06: gives the selected unit its Skill (FIGHTING, not retreating, ready).
-## Slow / AoE need an alive enemy; Guard ignores `enemy` (self). The unit's
+## Guard (self) and the Hero's Slow (every enemy) ignore `enemy` and begin
+## their cast at once. Stage 8: a ground Skill (AoE / Ice Wall) given an
+## alive enemy is aimed at that enemy's cell (command_skill_at()). The unit's
 ## move / target order is set aside and resumes after the Skill.
 func command_skill(enemy: CombatUnit = null) -> bool:
 	_aiming = false
 	var unit := _selected
 	if get_skill_readiness(unit) != SkillReadiness.READY:
 		return false
-	var on_self: bool = unit.skill["range"] == 0
-	if not on_self and (enemy == null or not enemy.alive or enemy.team != CombatUnit.Team.ENEMY):
+	var target_type := skill_target_type(unit.skill)
+	if target_type == "ground":
+		if enemy == null or not enemy.alive or enemy.team != CombatUnit.Team.ENEMY:
+			return false
+		return command_skill_at(enemy.cell)
+	if target_type != "self" and target_type != "all_enemies":
 		return false
+	_order_skill(unit, unit if target_type == "self" else null, CombatUnit.NO_CELL)
+	# C06 fix: no approach needed, so the cast begins now (mid-step too).
+	_begin_cast(unit, _elapsed_ms)
+	return true
+
+
+## Stage 8: orders the selected unit's ground Skill (AoE / Ice Wall) on the
+## battlefield cell `cell` (any grid cell; no enemy needed). The cell is
+## locked now; the unit approaches until it is within the Skill range.
+func command_skill_at(cell: Vector2i) -> bool:
+	_aiming = false
+	var unit := _selected
+	if get_skill_readiness(unit) != SkillReadiness.READY or skill_target_type(unit.skill) != "ground" or not is_in_grid(cell):
+		return false
+	_order_skill(unit, null, cell)
+	return true
+
+
+func _order_skill(unit: CombatUnit, target: CombatUnit, cell: Vector2i) -> void:
 	if unit.skill_state == CombatUnit.SkillState.NONE:
 		unit.resume_target = unit.target
 		unit.resume_has_goal = unit.has_goal
@@ -768,20 +837,18 @@ func command_skill(enemy: CombatUnit = null) -> bool:
 	unit.target = null
 	unit.has_goal = false
 	unit.skill_state = CombatUnit.SkillState.PENDING
-	unit.skill_target = unit if on_self else enemy
-	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " ordered on ", unit.skill_target.id)
-	# C06 fix: Guard needs no approach, so its cast begins now (mid-step too).
-	if on_self:
-		_begin_cast(unit, _elapsed_ms)
-	return true
+	unit.skill_target = target
+	unit.skill_cell = cell
+	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " ordered on ", target.id if target != null else ("all enemies" if cell == CombatUnit.NO_CELL else str(cell)))
 
 
-## C06: the Skill button. Guard is ordered at once; Slow / AoE wait for the
-## next tap on an enemy (is_aiming()). Returns whether anything happened.
+## C06: the Skill button. Guard and the Hero's Slow are ordered at once;
+## Stage 8: a ground Skill waits for the next tap on a battlefield cell
+## (is_aiming()). Returns whether anything happened.
 func start_skill_aim() -> bool:
 	if get_skill_readiness(_selected) != SkillReadiness.READY:
 		return false
-	if _selected.skill["range"] == 0:
+	if skill_target_type(_selected.skill) != "ground":
 		return command_skill()
 	_aiming = true
 	return true
@@ -796,15 +863,17 @@ func is_aiming() -> bool:
 
 
 ## One tap on `cell`: a friendly unit there is selected, an enemy there is
-## targeted, any other cell is a move destination.
+## targeted, any other cell is a move destination (while aiming a ground
+## Skill: the Skill's location).
 func tap(cell: Vector2i) -> bool:
 	if _gesture_open:
 		return false
 	var unit := unit_at(cell)
-	# C06: while aiming, an enemy is the Skill target; any other tap cancels.
+	# Stage 8: while aiming, the tapped battlefield cell is the Skill's
+	# location (whatever stands there); a cell off the grid cancels.
 	if is_aiming():
 		_aiming = false
-		return unit != null and unit.team == CombatUnit.Team.ENEMY and command_skill(unit)
+		return command_skill_at(cell)
 	_aiming = false
 	if unit != null and unit.team == CombatUnit.Team.FRIEND:
 		return select_unit(unit)
@@ -854,6 +923,10 @@ func advance(ms: int) -> void:
 
 func _tick(ms: int) -> void:
 	_tick_end_ms = _elapsed_ms + ms
+	for index in range(_ice_walls.size() - 1, -1, -1):
+		if int(_ice_walls[index]["until_ms"]) <= _elapsed_ms:
+			print("Myrial: combat ice wall of ", _ice_walls[index]["caster"], " melted at ", _elapsed_ms, " ms")
+			_ice_walls.remove_at(index)
 	for unit in _friends + _enemies:
 		unit.slowed = unit.slow_until_ms > _elapsed_ms
 	for unit in _friends:
@@ -891,11 +964,21 @@ func _update_unit(unit: CombatUnit, ms: int) -> void:
 			_set_phase(Phase.RETREAT)
 			return
 		var destination := _destination(unit)
+		# Stage 8: an enemy cannot get past an Ice Wall: it heads for the free
+		# cell on its own side nearest to where it was going instead.
+		if unit.team == CombatUnit.Team.ENEMY and not _ice_walls.is_empty():
+			destination = _ice_wall_detour(unit, destination)
 		unit.claim = destination
 		if destination == unit.cell:
 			_act(unit)
 			return
-		unit.next_cell = unit.cell + Vector2i(signi(destination.x - unit.cell.x), signi(destination.y - unit.cell.y))
+		var step := unit.cell + Vector2i(signi(destination.x - unit.cell.x), signi(destination.y - unit.cell.y))
+		# Stage 8: the next step would enter an Ice Wall: hold here.
+		if not is_cell_allowed(unit, step):
+			unit.claim = unit.cell
+			_act(unit)
+			return
+		unit.next_cell = step
 		unit.step_progress_ms = 0
 		if budget <= 0:
 			return
@@ -905,12 +988,13 @@ func _update_unit(unit: CombatUnit, ms: int) -> void:
 func _destination(unit: CombatUnit) -> Vector2i:
 	if _retreating and unit.team == CombatUnit.Team.FRIEND:
 		return _retreat_cell(unit)
-	# C06: a pending Skill approaches its target until within the Skill range.
+	# C06: a pending Skill approaches its location until within the range.
 	if unit.skill_state == CombatUnit.SkillState.PENDING:
 		var reach: int = unit.skill["range"]
-		if CombatUnit.grid_distance(unit.cell, unit.skill_target.cell) <= reach and _is_free_for(unit, unit.cell):
+		var aim := _skill_aim_cell(unit)
+		if CombatUnit.grid_distance(unit.cell, aim) <= reach and _is_free_for(unit, unit.cell):
 			return unit.cell
-		return _best_free_cell(unit, unit.skill_target.cell, reach)
+		return _best_free_cell(unit, aim, reach)
 	var target := _target_of(unit)
 	if target != null:
 		if CombatUnit.grid_distance(unit.cell, target.cell) <= unit.attack_range and _is_free_for(unit, unit.cell):
@@ -958,32 +1042,45 @@ func _act(unit: CombatUnit) -> void:
 
 # --- Skills (C06) -----------------------------------------------------------------------------
 
-## In range: pays the MP, locks the target (AoE: its cell) and starts the
-## cast at `at_ms`. Not in range yet (no free cell closer): keeps waiting.
+## Where a pending Skill is aimed: its ground cell, else its target's cell
+## (Guard: the unit itself); the Hero's Slow needs no place (its own cell).
+func _skill_aim_cell(unit: CombatUnit) -> Vector2i:
+	if unit.skill_target != null:
+		return unit.skill_target.cell
+	if unit.skill_cell != CombatUnit.NO_CELL:
+		return unit.skill_cell
+	return unit.cell
+
+
+## In range: pays the MP, locks the location and starts the cast at `at_ms`.
+## Not in range yet (no free cell closer): keeps waiting.
 ## A casting unit does not move (_update_unit); one caught mid-step keeps its
 ## step progress and claim and finishes the step after the cast.
 func _begin_cast(unit: CombatUnit, at_ms: int) -> void:
-	if CombatUnit.grid_distance(unit.cell, unit.skill_target.cell) > unit.skill["range"] or unit.mp < CombatConfig.SKILL_MP_COST:
+	var aim := _skill_aim_cell(unit)
+	if CombatUnit.grid_distance(unit.cell, aim) > unit.skill["range"] or unit.mp < CombatConfig.SKILL_MP_COST:
 		return
 	unit.mp -= CombatConfig.SKILL_MP_COST
 	unit.skill_state = CombatUnit.SkillState.CASTING
-	unit.skill_cell = unit.skill_target.cell
+	unit.skill_cell = aim
 	unit.cast_end_ms = at_ms + CombatConfig.SKILL_CAST_MS
 	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " cast at ", at_ms, " ms")
 
 
-## The cast is over: the effect happens (a dead Slow target gets nothing; the
-## AoE hits its locked cells), the cooldown starts, the replaced order resumes.
+## The cast is over: the effect happens (the Slow on every alive enemy; the
+## AoE hits its locked cells; the Ice Wall rises on its locked cell), the
+## cooldown starts, the replaced order resumes.
 func _resolve_skill(unit: CombatUnit) -> void:
-	var target := unit.skill_target
 	var center := unit.skill_cell
 	unit.skill_ready_at_ms = _tick_end_ms + CombatConfig.SKILL_COOLDOWN_MS
 	print("Myrial: combat skill ", unit.skill["kind"], " of ", unit.id, " resolved at ", _tick_end_ms, " ms")
 	match unit.skill["kind"]:
 		"slow":
-			if target.alive:
-				target.slow_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
-				target.slowed = true
+			# Stage 8: no target — the same Slow on every alive enemy.
+			for enemy in _enemies:
+				if enemy.alive:
+					enemy.slow_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
+					enemy.slowed = true
 		"guard":
 			unit.guard_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
 		"aoe":
@@ -998,16 +1095,51 @@ func _resolve_skill(unit: CombatUnit) -> void:
 			for enemy in hits:
 				resolve_damage(unit, enemy, damage, DamageKind.MAGIC)
 		"ice_field":
-			# Stage 8 P04 冰場 (Prototype): the C06 Slow on every alive enemy
-			# on the locked AoE cells (refreshed, never stacked); no damage.
-			var cells := aoe_cells(center)
-			_last_aoe = {"cells": cells, "at_ms": _tick_end_ms, "damage": 0, "kind": "ice_field"}
-			for enemy in _enemies:
-				if enemy.alive and cells.has(enemy.cell):
-					enemy.slow_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
-					enemy.slowed = true
+			_raise_ice_wall(unit, center)
 	_end_skill(unit, true)
 	skill_resolved.emit(unit)
+
+
+## Stage 8: where an enemy goes when a standing Ice Wall lies between it and
+## `destination`: the free allowed cell nearest to `destination` on its own
+## side of that wall (one unit per cell, like any destination; its own cell
+## when nothing is free). Otherwise `destination` itself.
+func _ice_wall_detour(unit: CombatUnit, destination: Vector2i) -> Vector2i:
+	for wall in _ice_walls:
+		if int(wall["until_ms"]) <= _elapsed_ms:
+			continue
+		var cells: Array = wall["cells"]
+		var first: int = (cells[0] as Vector2i).x
+		var last: int = (cells[cells.size() - 1] as Vector2i).x
+		var found: Variant = destination
+		if unit.cell.x > last and destination.x <= last:
+			found = _best_free_cell_in(unit, destination, 0, last + 1, CombatConfig.COLUMNS - 1)
+		elif unit.cell.x < first and destination.x >= first:
+			found = _best_free_cell_in(unit, destination, 0, 0, first - 1)
+		if found == null:
+			return unit.cell
+		destination = found
+	return destination
+
+
+## Stage 8 冰牆 Ice Wall (Prototype): the wall's cells stand for
+## SKILL_EFFECT_MS; enemies already on them get the C06 Slow (refreshed,
+## never stacked); an enemy stepping onto one stops where it was. No damage.
+func _raise_ice_wall(unit: CombatUnit, center: Vector2i) -> void:
+	var cells := ice_wall_cells(center)
+	_ice_walls.append({"cells": cells, "until_ms": _tick_end_ms + CombatConfig.SKILL_EFFECT_MS, "caster": unit.id})
+	_last_aoe = {"cells": cells, "at_ms": _tick_end_ms, "damage": 0, "kind": "ice_field"}
+	for enemy in _enemies:
+		if not enemy.alive:
+			continue
+		if cells.has(enemy.cell):
+			enemy.slow_until_ms = _tick_end_ms + CombatConfig.SKILL_EFFECT_MS
+			enemy.slowed = true
+		if enemy.is_moving() and cells.has(enemy.next_cell):
+			enemy.next_cell = enemy.cell
+			enemy.step_progress_ms = 0
+			enemy.claim = enemy.cell
+	print("Myrial: combat ice wall of ", unit.id, " at columns ", cells[0].x, "-", cells[cells.size() - 1].x)
 
 
 ## Clears the unit's Skill; `resume` gives back the order the Skill replaced

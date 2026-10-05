@@ -83,7 +83,7 @@ func _verify_service() -> void:
 	_check(mages.get_owned_count() == 3 and mages.get_owned().all(func(m: Mercenary) -> bool: return m.get_type() == "MAGE") and ids == ["merc_1", "merc_2", "merc_3"], "AC08/AC09 Mage + Mage + Mage: three instances, ids %s" % str(ids))
 	# Up to 5.
 	_check(RecruitmentService.recruit(mage_wallet, mages, "GUARDIAN")["success"] and RecruitmentService.recruit(mage_wallet, mages, "MAGE")["success"] and mages.get_owned_count() == 5 and mage_wallet.get_balance() == 5000, "AC10 4 -> 5 owned")
-	_check(RecruitmentService.label(mages.get_mercenary("merc_2")) == "法師 #2" and RecruitmentService.label(Mercenary.create("merc_a", "GUARDIAN")) == "守衛 merc_a", "Labels: 法師 #2 (a legacy-style id is shown as is)")
+	_check(RecruitmentService.label(mages.get_mercenary("merc_2")) == "法師 #2" and RecruitmentService.label(Mercenary.create("merc_a", "GUARDIAN")) == "守衛（傳承）" and RecruitmentService.label(Mercenary.create("merc_x", "GUARDIAN")) == "守衛 merc_x", "Labels: 法師 #2 (P05: a legacy id 守衛（傳承）; any other id shown as is)")
 	_sections_done.append("service")
 
 
@@ -191,7 +191,7 @@ func _verify_game() -> void:
 	_check(main.wallet.get_balance() == 9000 and main.mercenary_roster.get_owned_count() == 1 and main.mercenary_roster.get_mercenary("merc_1").get_type() == "MAGE", "AC04/AC05 Recruit 法師: $9,000 left, merc_1 owned")
 	_check(hub.get_feedback_text() == "成功招聘法師" and hub.get_mercenary_count_text() == "持有傭兵：1 / 5" and hub.get_mercenary_owned_text() == "法師 #1" and hub.get_money_label_text() == "金錢：9000", "AC14/AC18/AC19 UI at once: 成功招聘法師, 1 / 5, 法師 #1, 金錢：9000")
 	var saved: Variant = _read(TEST_SAVE)
-	_check(saved != null and int(saved["version"]) == 11 and int(saved["money"]) == 9000 and (saved["mercenaries"]["owned"] as Array).size() == 1 and saved["mercenaries"]["owned"][0]["id"] == "merc_1" and int(saved["mercenaries"]["next_serial"]) == 2, "AC06 Saved at once: v11, $9,000, merc_1, next_serial 2")
+	_check(saved != null and int(saved["version"]) == 12 and int(saved["money"]) == 9000 and (saved["mercenaries"]["owned"] as Array).size() == 1 and saved["mercenaries"]["owned"][0]["id"] == "merc_1" and int(saved["mercenaries"]["next_serial"]) == 2, "AC06 Saved at once: v12, $9,000, merc_1, next_serial 2")
 	hub.get_recruit_button("MAGE").pressed.emit()
 	hub.get_recruit_button("GUARDIAN").pressed.emit()
 	_check(main.mercenary_roster.get_owned_count() == 3 and hub.get_mercenary_owned_text() == "法師 #1　法師 #2　守衛 #3" and hub.get_feedback_text() == "成功招聘守衛" and main.wallet.get_balance() == 7000, "AC08 Same type again: 法師 #1　法師 #2　守衛 #3, $7,000")
@@ -300,7 +300,7 @@ func _verify_layout() -> void:
 # --- Scope -----------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 11 and SaveStore.V11_KEYS.size() == 11, "AC21 Save v11 unchanged")
+	_check(SaveStore.VERSION == 12 and SaveStore.V11_KEYS.size() == 11 and SaveStore.V12_KEYS == SaveStore.V11_KEYS + ["pending_legacy_mercenaries"], "AC21 Save v11 unchanged (P05: v12 adds only the pending list)")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/character_config.gd", "res://scripts/character_stats.gd", "res://scripts/save_store.gd"]:
 		var code := _code_only(path).to_lower()
 		# Stage 8 P04 (approved): combat_battle names a deployed Mercenary with

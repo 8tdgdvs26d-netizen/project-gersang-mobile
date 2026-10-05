@@ -93,19 +93,29 @@ const SLOW_FACTOR := 2
 const GUARD_DIVISOR := 2
 ## AoE: the target cell and its four orthogonal neighbours, enemies only.
 const AOE_DAMAGE := 40
-## kind: "slow" (one enemy), "guard" (self), "aoe" (one enemy's cell + 4).
+## kind: "slow", "guard", "aoe" (the AoE cells), "ice_field" (the Ice Wall).
 ## range in cells (8-direction distance, like attack_range; 0 = self).
-const HERO_SKILL := {"kind": "slow", "range": 3}
-const MERC_A_SKILL := {"kind": "guard", "range": 0}
-const MERC_B_SKILL := {"kind": "aoe", "range": 5}
-## Stage 8 P04 冰場 (Strategist) — PROTOTYPE (approved P04 S1), not balance:
-## the C06 Slow applied to every alive enemy on the AoE cells (the target's
-## cell + its four orthogonal neighbours), no damage. It uses only existing
+## Stage 8 iPhone L3 corrective — target: how the Skill is aimed.
+##   "self"        Guard: the caster itself, cast at once.
+##   "all_enemies" Hero Slow: no target; cast at once, every alive enemy.
+##   "ground"      Mage AoE / Strategist Ice Wall: a battlefield cell; the
+##                 caster approaches until the cell is within range.
+## (Damage, MP, cast time, cooldown and effect time are unchanged.)
+const HERO_SKILL := {"kind": "slow", "range": 3, "target": "all_enemies"}
+const MERC_A_SKILL := {"kind": "guard", "range": 0, "target": "self"}
+const MERC_B_SKILL := {"kind": "aoe", "range": 5, "target": "ground"}
+## Stage 8 冰牆 Ice Wall (Strategist) — PROTOTYPE, not balance (the internal
+## kind id "ice_field" is kept from P04). Ground-targeted: from the chosen
+## cell's column, ICE_WALL_COLUMNS columns (shifted left at the grid's right
+## edge) x every row. For SKILL_EFFECT_MS no enemy may step onto a wall cell
+## (friends are not blocked); enemies already on a wall cell when it rises
+## get the C06 Slow (the existing freeze). No damage. It uses only existing
 ## C06 values: SKILL_MP_COST, SKILL_CAST_MS, SKILL_COOLDOWN_MS,
 ## SKILL_EFFECT_MS, SLOW_FACTOR and the AoE range 5.
-const STRATEGIST_SKILL := {"kind": "ice_field", "range": 5}
+const STRATEGIST_SKILL := {"kind": "ice_field", "range": 5, "target": "ground"}
+const ICE_WALL_COLUMNS := 2
 ## Stage 8 P04: each roster Mercenary type's Normal Skill (GUARDIAN = Merc
-## A's Guard, MAGE = Merc B's AoE, STRATEGIST = the Prototype 冰場).
+## A's Guard, MAGE = Merc B's AoE, STRATEGIST = the Prototype 冰牆).
 const MERCENARY_SKILLS := {"GUARDIAN": MERC_A_SKILL, "MAGE": MERC_B_SKILL, "STRATEGIST": STRATEGIST_SKILL}
 
 ## C07 Minimum Gesture Skill (Prototype values approved for C07, not final

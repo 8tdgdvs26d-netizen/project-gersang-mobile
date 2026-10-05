@@ -54,11 +54,13 @@ func _verify_static() -> void:
 	_check(CombatConfig.HERO == {"max_hp": 300, "attack_damage": 20, "attack_range": 1, "attack_interval_ms": 1000, "move_speed": 4.0}, "Hero stats unchanged")
 	_check(CombatConfig.PREPARATION_MS == 3000 and CombatConfig.PREPARATION_COLUMNS == 3 and CombatConfig.PREPARATION_FIRST_COLUMN == 1 and CombatConfig.ROWS == 5 and CombatConfig.COLUMNS == 61, "3 s preparation, 5 x 3 area (C05: columns 1-3), 5 x 61 grid (C05)")
 	_check(EncounterContext.PLANNED_COMBAT_ENEMIES == {1: 10, 2: 15, 3: 20}, "Encounter scaling unchanged")
-	_check(SaveStore.VERSION == 11 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 11, unchanged sections")
+	_check(SaveStore.VERSION == 12 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 12 (P05), unchanged sections")
 	var save_code := _code_only("res://scripts/save_store.gd").to_lower()
 	# P01.5 (Save v11) brought the Stage 8 Mercenary roster into the save; the
 	# fixed combat Mercenaries, the party and Combat stay unknown to it.
-	var roster_free := save_code.replace("mercenaryroster", "").replace("mercenaries", "")
+	# P05 (Save v12) adds the pending legacy list and the legacy migration
+	# (their names are roster names too).
+	var roster_free := save_code.replace("mercenaryroster", "").replace("legacymercenarymigration", "").replace("mercenaries", "")
 	_check(not roster_free.contains("merc") and not save_code.contains("party") and not save_code.contains("combat"), "The save knows nothing about Combat Mercenaries, party or Combat (only the P01.5 roster)")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/combat_view.gd", "res://scripts/battle_result.gd"]:
 		var code := _code_only(path).to_lower()
@@ -445,7 +447,7 @@ func _verify_in_game() -> void:
 	_check(battle.get_result().is_committed() and session.get_phase() == EncounterSession.Phase.NONE and main.get_combat() == null, "C02 lifecycle: DEFEAT committed, encounter ended, battle closed")
 	_check(group_3.global_position == HOMES[2] and not group_3.is_held() and session.get_protection_remaining_ms() == 5000, "C02 DEFEAT: group reset home, 5 s protection")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(saved != null and int(saved["version"]) == 11 and _only_progression_mentions_mercs(saved) and main.wallet.get_balance() == money, "Saved once: v11, no Mercenary battle data (C05: only their Level / EXP; S05: their allocation counts; P01.5 / P04: the roster's instances only), no money reward or penalty")
+	_check(saved != null and int(saved["version"]) == 12 and _only_progression_mentions_mercs(saved) and main.wallet.get_balance() == money, "Saved once: v11, no Mercenary battle data (C05: only their Level / EXP; S05: their allocation counts; P01.5 / P04: the roster's instances only), no money reward or penalty")
 	await _destroy(main)
 	# VICTORY with the Hero dead, through the C02 lifecycle.
 	main = await _new_main("")
@@ -486,7 +488,8 @@ func _only_progression_mentions_mercs(saved: Dictionary) -> bool:
 	var rest := saved.duplicate(true)
 	var progression: Variant = rest.get("progression")
 	rest.erase("progression")
-	if typeof(progression) != TYPE_DICTIONARY or progression.keys().size() != 3:
+	# P05 (Save v12): the Hero's only.
+	if typeof(progression) != TYPE_DICTIONARY or progression.keys() != ["hero"]:
 		return false
 	for slot in progression:
 		if progression[slot].keys().size() != 2 or not progression[slot].has_all(["level", "exp"]):
@@ -502,7 +505,10 @@ func _only_progression_mentions_mercs(saved: Dictionary) -> bool:
 	if typeof(owned) != TYPE_ARRAY or owned.size() != 2 or not owned.all(func(m: Variant) -> bool: return typeof(m) == TYPE_DICTIONARY and m.keys().size() == Mercenary.KEYS.size() and m.has_all(Mercenary.KEYS)):
 		return false
 	rest.erase("mercenaries")
-	if typeof(allocation) != TYPE_DICTIONARY or allocation.keys().size() != 3:
+	if rest.get("pending_legacy_mercenaries") != []:
+		return false
+	rest.erase("pending_legacy_mercenaries")
+	if typeof(allocation) != TYPE_DICTIONARY or allocation.keys() != ["hero"]:
 		return false
 	for slot in allocation:
 		if allocation[slot].keys().size() != 4 or not allocation[slot].has_all(["hp", "str", "agi", "int"]):

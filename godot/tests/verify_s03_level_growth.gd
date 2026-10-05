@@ -88,7 +88,7 @@ func _verify_growth() -> void:
 
 # 8-10: multi-Level, overflow, the cap.
 func _verify_multi_level_and_cap() -> void:
-	var progression := ProgressionState.new()
+	var progression := FixtureParty.new()
 	var shares := progression.apply(_result(100 + 150 + 200 + 120, ["hero"]))
 	_check(progression.get_level("hero") == 4 and progression.get_exp("hero") == 120, "8/9. 570 EXP at Lv1: Lv2, Lv3, Lv4 in turn, 120 carried")
 	_check(shares["hero"]["leveled"] and shares["hero"]["level"] == 4, "The share reports the final Level")
@@ -99,7 +99,7 @@ func _verify_multi_level_and_cap() -> void:
 	var total := 0
 	for level in range(1, 100):
 		total += ProgressionState.required_exp(level)
-	var capped := ProgressionState.new()
+	var capped := FixtureParty.new()
 	capped.apply(_result(total - 1, ["merc_b"]))
 	_check(capped.get_level("merc_b") == 99 and capped.get_exp("merc_b") == ProgressionState.required_exp(99) - 1, "One EXP short of Lv100: Lv99 with the rest kept")
 	capped.apply(_result(1 + 5000, ["merc_b"]))
@@ -115,7 +115,7 @@ func _verify_multi_level_and_cap() -> void:
 	top.apply_level(101)
 	top.apply_level(1000)
 	_check(top_growth == 99 * 15 and top_points == 99 * 3 and top.get_growth("hp") == top_growth and top.get_unspent_points() == top_points, "10. Nothing past Lv100: Growth 99 x, 297 points")
-	var huge := ProgressionState.new()
+	var huge := FixtureParty.new()
 	huge.apply(_result(ProgressionState.MAX_EXP, ["hero"]))
 	_check(huge.get_level("hero") == 100 and huge.get_exp("hero") == 0, "A huge award stops at Lv100 safely")
 	_sections_done.append("multi_level_cap")
@@ -159,10 +159,10 @@ func _verify_derived() -> void:
 
 # 14-16: the C05 EXP rules are unchanged.
 func _verify_exp_rules() -> void:
-	var progression := ProgressionState.new()
+	var progression := FixtureParty.new()
 	var shares := progression.apply(_result(100, ["hero", "merc_b"]))
 	_check(shares.size() == 2 and shares["hero"]["exp"] == 50 and progression.get_exp("merc_a") == 0, "14. Survivors share equally; the dead get 0")
-	var odd := ProgressionState.new()
+	var odd := FixtureParty.new()
 	odd.apply(_result(40, ["hero", "merc_a", "merc_b"]))
 	_check(SLOTS.all(func(s: String) -> bool: return odd.get_exp(s) == 13), "Remainder discarded (40 / 3 = 13 each)")
 	var retreat := BattleResult.create("e", BattleResult.Outcome.RETREAT, [] as Array[String])
@@ -183,16 +183,19 @@ func _verify_exp_rules() -> void:
 
 # 17-18: Save v9 and scope.
 func _verify_save_and_scope() -> void:
-	var progression := ProgressionState.from_dict({"hero": {"level": 4, "exp": 120}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 100, "exp": 0}})
-	_check(progression != null and progression.get_level("merc_b") == 100, "Saved Levels up to 100 load")
+	# Stage 8 P05: the saved progression is the Hero's only (v12); the three
+	# legacy slots are read (parse_legacy) for the migration.
+	var legacy_levels := ProgressionState.parse_legacy({"hero": {"level": 4, "exp": 120}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 100, "exp": 0}})
+	_check(legacy_levels.size() == 3 and legacy_levels["merc_b"] == [100, 0] and ProgressionState.from_dict({"hero": {"level": 100, "exp": 0}}).get_level("hero") == 100, "Saved Levels up to 100 load")
+	var progression := ProgressionState.from_dict({"hero": {"level": 4, "exp": 120}})
 	var data := SaveStore.serialize(Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression)
-	_check(SaveStore.VERSION == 11 and data["version"] == 11 and data["progression"] == {"hero": {"level": 4, "exp": 120}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 100, "exp": 0}}, "17. Save v9: progression still exactly {level, exp} per slot")
+	_check(SaveStore.VERSION == 12 and data["version"] == 12 and data["progression"] == {"hero": {"level": 4, "exp": 120}}, "17. Save v12: progression still exactly {level, exp} (the Hero's)")
 	_check(data["character"]["stats"] == {"strength": 10} and SaveStore.STATS_KEYS == ["strength"], "17. No Growth / Stat Points written")
 	# A C05 save banked EXP at the Lv2 ceiling: it loads, carried through the S03 curve.
-	var legacy := ProgressionState.from_dict({"hero": {"level": 2, "exp": 400}, "merc_a": {"level": 2, "exp": 149}, "merc_b": {"level": 1, "exp": 99}})
-	_check(legacy != null and legacy.get_level("hero") == 4 and legacy.get_exp("hero") == 50 and legacy.get_level("merc_a") == 2 and legacy.get_exp("merc_a") == 149, "A C05 Lv2 save with 400 banked EXP loads as Lv4 50 (nothing refused)")
-	_check(ProgressionState.from_dict({"hero": {"level": 100, "exp": 30}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}}).get_exp("hero") == 0, "EXP at Lv100 is not kept on load")
-	_check(ProgressionState.from_dict({"hero": {"level": 101, "exp": 0}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}}) == null, "Lv101 is refused")
+	var legacy := ProgressionState.parse_legacy({"hero": {"level": 2, "exp": 400}, "merc_a": {"level": 2, "exp": 149}, "merc_b": {"level": 1, "exp": 99}})
+	_check(legacy.size() == 3 and legacy["hero"] == [4, 50] and legacy["merc_a"] == [2, 149], "A C05 Lv2 save with 400 banked EXP loads as Lv4 50 (nothing refused)")
+	_check(ProgressionState.parse_legacy({"hero": {"level": 100, "exp": 30}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}})["hero"] == [100, 0] and ProgressionState.from_dict({"hero": {"level": 100, "exp": 30}}).get_exp("hero") == 0, "EXP at Lv100 is not kept on load")
+	_check(ProgressionState.parse_legacy({"hero": {"level": 101, "exp": 0}, "merc_a": {"level": 1, "exp": 0}, "merc_b": {"level": 1, "exp": 0}}).is_empty() and ProgressionState.from_dict({"hero": {"level": 101, "exp": 0}}) == null, "Lv101 is refused")
 	# Scope: nothing spends points, no allocation UI, no new saved keys.
 	var ui_code := FileAccess.get_file_as_string("res://scripts/combat_view.gd") + FileAccess.get_file_as_string("res://scripts/city_hub.gd")
 	var game_code := ui_code + FileAccess.get_file_as_string("res://scripts/main.gd") + FileAccess.get_file_as_string("res://scripts/combat_battle.gd")
@@ -225,9 +228,9 @@ func _verify_in_game() -> void:
 	var stats: CharacterStats = main.character_stats
 	_check(main.progression.get_level("hero") == 2 and stats.get_growth("str") == 1 and stats.get_unspent_points() == 3 and stats.get_max_hp() == 320, "Settlement: Hero Lv2, Growth applied, 3 points, Max HP 320")
 	_check(hero.hp == 100, "11. The settled battle's Hero stays at 100 HP (no refill)")
-	_check(main.inventory.get_max_capacity() == 10 + 11 * 9 and main.merc_stats["merc_a"].get_unspent_points() == 0 and main.mercenary_roster.get_owned().all(func(m: Mercenary) -> bool: return m.get_level() == 1 and m.get_exp() == 0), "Hero backpack Capacity 109; the dead Mercs gained nothing")
+	_check(main.inventory.get_max_capacity() == 10 + 11 * 9 and not "merc_stats" in main and main.mercenary_roster.get_owned().all(func(m: Mercenary) -> bool: return m.get_level() == 1 and m.get_exp() == 0), "Hero backpack Capacity 109; the dead Mercs gained nothing")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 11 and int(saved["progression"]["hero"]["level"]) == 2 and (saved["character"]["stats"] as Dictionary).keys() == ["strength"], "Saved v9: Level 2, stats still only strength")
+	_check(int(saved["version"]) == 12 and int(saved["progression"]["hero"]["level"]) == 2 and (saved["character"]["stats"] as Dictionary).keys() == ["strength"], "Saved v9: Level 2, stats still only strength")
 	await _destroy(main)
 	main = await _new_main()
 	var reloaded: CharacterStats = main.character_stats
@@ -296,3 +299,35 @@ func _check(condition: bool, message: String) -> void:
 	if not condition:
 		_failures += 1
 		push_error("FAILED: " + message)
+
+
+## Stage 8 P05: the C05 fixture party settled the way the game settles it now
+## (PartyProgression): the Hero's ProgressionState slot + roster instances
+## merc_a (GUARDIAN) / merc_b (MAGE). get_exp / get_level read either.
+class FixtureParty:
+	var progression := ProgressionState.new()
+	var roster := MercenaryRoster.build([Mercenary.create("merc_a", "GUARDIAN"), Mercenary.create("merc_b", "MAGE")])
+
+	static func with_levels(levels: Dictionary) -> FixtureParty:
+		var party := FixtureParty.new()
+		party.progression = ProgressionState.from_hero(levels["hero"][0], levels["hero"][1])
+		party.roster = MercenaryRoster.build([Mercenary.create("merc_a", "GUARDIAN", levels["merc_a"][0], levels["merc_a"][1]), Mercenary.create("merc_b", "MAGE", levels["merc_b"][0], levels["merc_b"][1])])
+		return party
+
+	func apply(result: BattleResult) -> Dictionary:
+		return _strip(PartyProgression.apply(result, progression, roster))
+
+	func preview(result: BattleResult) -> Dictionary:
+		return _strip(PartyProgression.preview(result, progression, roster))
+
+	func get_exp(slot: String) -> int:
+		return progression.get_exp(slot) if slot == "hero" else roster.get_mercenary(slot).get_exp()
+
+	func get_level(slot: String) -> int:
+		return progression.get_level(slot) if slot == "hero" else roster.get_mercenary(slot).get_level()
+
+	## The C05 share shape {slot: {exp, level, leveled}}.
+	func _strip(shares: Dictionary) -> Dictionary:
+		for id in shares:
+			shares[id].erase("from_level")
+		return shares

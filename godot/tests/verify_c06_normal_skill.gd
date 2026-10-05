@@ -3,9 +3,13 @@ extends SceneTree
 ## Combat C06: Normal Skill. Every friendly unit has one Normal Skill and 100
 ## MP (full every battle, no regeneration). A Skill costs 25 MP when its cast
 ## begins, casts 1 s (no movement, no Basic Attack, ordinary commands refused,
-## target locked) and starts an 8 s cooldown when it resolves. Slow / AoE
-## approach an enemy until it is within the Skill range; Guard is on self.
-## Hero: Slow (3 cells, 5 s: step time and new Basic Attack intervals x2).
+## location locked) and starts an 8 s cooldown when it resolves.
+## Stage 8 iPhone L3 corrective (approved behaviour change): Guard is on self;
+## the Hero's Slow needs no target and lands on every alive enemy (cast at
+## once); the AoE is aimed at a battlefield cell and approaches it until it
+## is within the Skill range.
+## Hero: Slow (every alive enemy, 5 s: step time and new Basic Attack
+## intervals x2).
 ## Merc A: Guard (self, 5 s: incoming damage floor(x 0.5)). Merc B: AoE (5
 ## cells, 40 damage to enemies on the target cell + its 4 orthogonal
 ## neighbours, locked when the cast begins). Effects refresh, never stack.
@@ -46,7 +50,7 @@ func _initialize() -> void:
 func _verify_static() -> void:
 	_check(CombatConfig.MAX_MP == 100 and CombatConfig.SKILL_MP_COST == 25 and CombatConfig.SKILL_CAST_MS == 1000 and CombatConfig.SKILL_COOLDOWN_MS == 8000 and CombatConfig.SKILL_EFFECT_MS == 5000, "MP 100, cost 25, cast 1 s, cooldown 8 s, effects 5 s")
 	_check(CombatConfig.SLOW_FACTOR == 2 and CombatConfig.GUARD_DIVISOR == 2 and CombatConfig.AOE_DAMAGE == 40, "Slow x2, Guard floor(x 0.5), AoE 40")
-	_check(CombatConfig.HERO_SKILL == {"kind": "slow", "range": 3} and CombatConfig.MERC_A_SKILL == {"kind": "guard", "range": 0} and CombatConfig.MERC_B_SKILL == {"kind": "aoe", "range": 5}, "Hero Slow (3), Merc A Guard (self), Merc B AoE (5)")
+	_check(CombatConfig.HERO_SKILL == {"kind": "slow", "range": 3, "target": "all_enemies"} and CombatConfig.MERC_A_SKILL == {"kind": "guard", "range": 0, "target": "self"} and CombatConfig.MERC_B_SKILL == {"kind": "aoe", "range": 5, "target": "ground"}, "Hero Slow (every enemy), Merc A Guard (self), Merc B AoE (ground, 5)")
 	_check(CombatConfig.HERO["attack_range"] == 1 and CombatConfig.MERC_B["attack_range"] == 3 and CombatConfig.ENEMY["move_speed"] == 2.0 and CombatConfig.ENEMY["attack_interval_ms"] == 1500, "Basic stats unchanged")
 	var battle := CombatBattle.create(10)
 	var friends := battle.get_friends()
@@ -55,7 +59,7 @@ func _verify_static() -> void:
 	_check(battle.get_enemies().all(func(u: CombatUnit) -> bool: return u.skill.is_empty() and u.mp == 0 and battle.get_skill_readiness(u) == CombatBattle.SkillReadiness.UNAVAILABLE), "Enemies have no Skill and no MP")
 	var again := CombatBattle.create(10)
 	_check(again.get_friends()[1].mp == 100, "MP never carries over: a new battle starts full")
-	_check(SaveStore.VERSION == 11 and SaveStore.V9_KEYS.size() == 9, "Save v11 (S05 adds only the allocation; nothing from this WP)")
+	_check(SaveStore.VERSION == 12 and SaveStore.V9_KEYS.size() == 9, "Save v12 (P05) (S05 adds only the allocation; nothing from this WP)")
 	for path in ["res://scripts/save_store.gd", "res://scripts/progression_state.gd", "res://scripts/main.gd", "res://scripts/battle_result.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("skill") and not code.contains("guard_") and not code.contains("slow"), "%s knows nothing about Skills" % path.get_file())
@@ -215,24 +219,28 @@ func _verify_slow() -> void:
 	_place(hero, Vector2i(10, 2))
 	_place(target, Vector2i(13, 2))
 	battle.select_unit(hero)
-	_check(battle.command_skill(target), "Slow ordered on an enemy 3 cells away")
-	battle.advance(10)
-	_check(hero.skill_state == CombatUnit.SkillState.CASTING and hero.cell == Vector2i(10, 2) and hero.skill_target == target and hero.mp == 175, "3 cells = in range: cast at once, no approach")
-	# The target leaves the range during the cast: the Slow still lands.
+	_check(battle.command_skill(), "Slow ordered (no target needed)")
+	_check(hero.skill_state == CombatUnit.SkillState.CASTING and hero.cell == Vector2i(10, 2) and hero.skill_target == null and hero.mp == 175 and hero.cast_end_ms == battle.get_elapsed_ms() + 1000, "No target: cast at once, no approach")
+	# Enemies far away when it lands are slowed all the same.
 	_place(target, Vector2i(30, 0))
+	_place(other, Vector2i(50, 4))
 	battle.advance(999)
 	# An attack interval already running when the Slow lands is not stretched.
 	target.attack_cooldown_ms = 700
 	battle.advance(1)
 	var resolved_at := battle.get_elapsed_ms()
-	_check(hero.skill_state == CombatUnit.SkillState.NONE and battle.get_slow_remaining(target) == 5000 and battle.get_slow_remaining(other) == 0, "Locked target out of range: Slow 5 s anyway, only on it")
-	_check(target.step_ms() == 1000 and other.step_ms() == 500, "Step time x2 (500 -> 1000 ms)")
+	_check(hero.skill_state == CombatUnit.SkillState.NONE and battle.get_slow_remaining(target) == 5000 and battle.get_slow_remaining(other) == 5000, "Every alive enemy slowed 5 s, wherever it stands")
+	_check(target.step_ms() == 1000 and other.step_ms() == 1000, "Step time x2 (500 -> 1000 ms)")
 	battle.advance(100)
 	_check(target.attack_cooldown_ms == 599, "Slow landing on a running interval: unchanged (700 -> 599, %d)" % target.attack_cooldown_ms)
 	_place(target, Vector2i(40, 0))
 	_place(other, Vector2i(40, 4))
+	# An unslowed enemy in a battle without the Slow, for comparison.
+	var control := _fight(10, 1)
+	_place(control.get_enemies()[0], Vector2i(40, 4))
+	control.advance(2000)
 	battle.advance(2000)
-	_check(target.cell.x == 38 and other.cell.x == 36, "2 s: slowed enemy 2 cells, normal enemy 4 cells (%d / %d)" % [target.cell.x, other.cell.x])
+	_check(target.cell.x == 38 and other.cell.x == 38 and control.get_enemies()[0].cell.x == 36, "2 s: slowed enemies 2 cells, an unslowed enemy 4 cells (%d / %d / %d)" % [target.cell.x, other.cell.x, control.get_enemies()[0].cell.x])
 	# Basic Attack interval: one already running is unchanged, a new one is x2.
 	# (The other enemy leaves so nobody else claims the cell next to the Hero.)
 	battle.resolve_damage(hero, other, 1000)
@@ -262,16 +270,15 @@ func _verify_slow() -> void:
 	_place(hero, Vector2i(10, 2))
 	battle.advance(10)
 	_check(target.attack_cooldown_ms == 1500, "After the Slow: a new interval is 1500 again (%d)" % target.attack_cooldown_ms)
-	# Range: 4 cells is out of range -> approach first.
-	var far := _fight(10, 1)
+	# No range limit: every enemy 40+ cells away is slowed, no approach.
+	var far := _fight(10, 3)
 	var far_hero := far.get_hero()
-	var far_target := far.get_enemies()[0]
 	_place(far_hero, Vector2i(10, 2))
-	_place(far_target, Vector2i(14, 2))
 	far.select_unit(far_hero)
-	far.command_skill(far_target)
-	far.advance(10)
-	_check(far_hero.skill_state == CombatUnit.SkillState.PENDING and far_hero.mp == 200 and far_hero.is_moving(), "4 cells = out of range: approaches first, no MP")
+	far.command_skill(far.get_enemies()[0])
+	_check(far_hero.skill_state == CombatUnit.SkillState.CASTING and far_hero.mp == 175 and not far_hero.is_moving() and far_hero.skill_target == null, "Enemies far out: cast at once, no approach (an enemy given is ignored)")
+	far.advance(1010)
+	_check(far.get_enemies().slice(0, 3).all(func(e: CombatUnit) -> bool: return far.get_slow_remaining(e) > 4900) and far.get_enemies().slice(3).all(func(e: CombatUnit) -> bool: return far.get_slow_remaining(e) == 0), "Every alive enemy slowed; the dead get nothing")
 	_sections_done.append("slow")
 
 
@@ -285,12 +292,14 @@ func _verify_approach() -> void:
 	var aoe_target := battle.get_enemies()[1]
 	battle.select_unit(mage)
 	battle.command_skill(aoe_target)
+	var locked := aoe_target.cell
 	battle.select_unit(hero)
 	battle.command_skill(slow_target)
 	var start_x := mage.cell.x
 	var paid_early := false
 	var cooled_early := false
 	var cast_distance := {}
+	var hero_cast_end := hero.cast_end_ms
 	for step in range(3000):
 		battle.advance(10)
 		for unit: CombatUnit in [hero, mage]:
@@ -298,74 +307,76 @@ func _verify_approach() -> void:
 				paid_early = paid_early or unit.mp != unit.max_mp
 				cooled_early = cooled_early or battle.get_skill_cooldown_remaining(unit) > 0
 			elif unit.skill_state == CombatUnit.SkillState.CASTING and not cast_distance.has(unit.id):
-				cast_distance[unit.id] = [CombatUnit.grid_distance(unit.cell, unit.skill_target.cell), unit.mp, battle.get_skill_cooldown_remaining(unit), unit.is_moving()]
+				cast_distance[unit.id] = [CombatUnit.grid_distance(unit.cell, unit.skill_cell), unit.mp, battle.get_skill_cooldown_remaining(unit), unit.is_moving(), unit.skill_cell]
 		if cast_distance.size() == 2:
 			break
 	_check(not paid_early and not cooled_early, "Approaching: no MP paid, no cooldown")
 	_check(cast_distance.has("merc_b") and cast_distance["merc_b"][0] <= 5 and cast_distance["merc_b"][0] > 1 and cast_distance["merc_b"][1] == 75 and cast_distance["merc_b"][2] == 0 and not cast_distance["merc_b"][3], "Mage cast once within 5 cells, standing, MP paid, no cooldown yet (%s)" % str(cast_distance.get("merc_b")))
-	_check(cast_distance.has("hero") and cast_distance["hero"][0] <= 3 and cast_distance["hero"][1] == 175 and not cast_distance["hero"][3], "Hero cast once within 3 cells, standing, MP paid (%s)" % str(cast_distance.get("hero")))
+	_check(cast_distance.has("merc_b") and cast_distance["merc_b"][4] == locked, "Mage cast on the location ordered, not where the enemy went (%s)" % str(cast_distance.get("merc_b")))
+	_check(cast_distance.has("hero") and cast_distance["hero"][0] == 0 and cast_distance["hero"][1] == 175, "Hero Slow cast where the Hero stood, no approach, MP paid (%s)" % str(cast_distance.get("hero")))
 	_check(mage.cell.x > start_x + 10, "The Mage walked toward its target (%d -> %d)" % [start_x, mage.cell.x])
 	battle.advance(1000)
-	_check(battle.get_skill_cooldown_remaining(mage) > 7000 and battle.get_skill_cooldown_remaining(hero) > 7000, "Resolved: cooldowns started")
+	_check(battle.get_skill_cooldown_remaining(mage) > 7000 and hero.skill_ready_at_ms == hero_cast_end + 8000, "Resolved: cooldowns started (the Hero's when its Slow resolved)")
 	_sections_done.append("approach")
 
 
 # --- Target death ------------------------------------------------------------------------------
 
 func _verify_target_death() -> void:
-	# Before the cast: cancelled for free, the earlier order resumes, no new target.
+	# Stage 8: a ground Skill has no target. An enemy dying on the chosen cell
+	# before the cast cancels nothing: the Mage still goes there and casts.
 	var battle := _fight(10, 3)
-	var hero := battle.get_hero()
+	var mage := battle.get_friends()[2]
 	var warrior := battle.get_friends()[1]
-	var skill_target := battle.get_enemies()[0]
+	var on_cell := battle.get_enemies()[0]
 	var attack_target := battle.get_enemies()[1]
-	battle.select_unit(hero)
+	battle.select_unit(mage)
 	battle.command_target(attack_target)
-	battle.command_skill(skill_target)
+	battle.command_skill(on_cell)
+	var spot := mage.skill_cell
 	battle.advance(100)
-	_check(hero.skill_state == CombatUnit.SkillState.PENDING and hero.target == null, "Pending Slow (far target)")
-	battle.resolve_damage(warrior, skill_target, 1000)
-	_check(hero.skill_state == CombatUnit.SkillState.NONE and hero.mp == 200 and battle.get_skill_cooldown_remaining(hero) == 0 and battle.get_skill_readiness(hero) == CombatBattle.SkillReadiness.READY, "Target died before the cast: cancelled, no MP, no cooldown")
-	_check(hero.target == attack_target and hero.skill_target == null, "The earlier target order resumes")
-	# The skill target was also the attack target: nothing to resume, no retarget.
-	var second := battle.get_enemies()[2]
-	battle.command_target(second)
-	battle.command_skill(second)
-	battle.resolve_damage(warrior, second, 1000)
-	battle.advance(500)
-	_check(hero.skill_state == CombatUnit.SkillState.NONE and hero.target == null and hero.skill_target == null and hero.mp == 200, "No automatic new target")
-	# After the cast began: still resolves, MP spent, cooldown starts, no Slow on the dead.
+	_check(mage.skill_state == CombatUnit.SkillState.PENDING and mage.target == null and mage.skill_target == null and spot == on_cell.cell, "Pending AoE on the enemy's cell (no target kept)")
+	battle.resolve_damage(warrior, on_cell, 1000)
+	_check(mage.skill_state == CombatUnit.SkillState.PENDING and mage.skill_cell == spot and mage.mp == 100 and battle.get_skill_cooldown_remaining(mage) == 0, "The enemy on the cell died: still pending on the same cell, nothing paid")
+	for step in range(3000):
+		battle.advance(10)
+		if mage.skill_state != CombatUnit.SkillState.PENDING:
+			break
+	_check(mage.skill_state == CombatUnit.SkillState.CASTING and CombatUnit.grid_distance(mage.cell, spot) <= 5 and mage.mp == 75, "The Mage reached the range and cast on the cell")
+	battle.advance(1000)
+	_check(mage.skill_state == CombatUnit.SkillState.NONE and battle.get_last_aoe()["cells"] == CombatBattle.aoe_cells(spot) and mage.target == attack_target, "Resolved on the cell; the earlier target order resumes")
+	# The Hero's Slow: an enemy dying during the cast gets nothing, the rest do.
 	var after := _fight(10, 3)
 	var after_hero := after.get_hero()
 	var dying := after.get_enemies()[0]
-	_place(after_hero, Vector2i(10, 2))
-	_place(dying, Vector2i(12, 2))
 	after.select_unit(after_hero)
-	after.command_skill(dying)
+	after.command_skill()
 	after.advance(10)
 	after.resolve_damage(after.get_friends()[1], dying, 1000)
-	_check(after_hero.skill_state == CombatUnit.SkillState.CASTING and after_hero.mp == 175, "Target died during the cast: still casting")
+	_check(after_hero.skill_state == CombatUnit.SkillState.CASTING and after_hero.mp == 175, "An enemy died during the cast: still casting")
 	after.advance(1000)
 	_check(after_hero.skill_state == CombatUnit.SkillState.NONE and after_hero.mp == 175 and after.get_skill_cooldown_remaining(after_hero) == 8000, "Resolved: MP spent, cooldown started")
-	_check(after.get_slow_remaining(dying) == 0 and after.get_enemies().all(func(e: CombatUnit) -> bool: return after.get_slow_remaining(e) == 0) and after_hero.target == null, "The dead target gets no Slow, nobody else does, no new target")
+	_check(after.get_slow_remaining(dying) == 0 and after.get_enemies().slice(1, 3).all(func(e: CombatUnit) -> bool: return after.get_slow_remaining(e) > 0) and after_hero.target == null, "The dead enemy gets no Slow, the living do, no new target")
 	_sections_done.append("target_death")
 
 
 # --- Command priority & resume -----------------------------------------------------------------
 
 func _verify_priority() -> void:
+	# (Stage 8: only ground Skills wait, so the Mage's AoE is the pending one.)
 	var battle := _fight(10, 3)
-	var hero := battle.get_hero()
+	var mage := battle.get_friends()[2]
 	var near := battle.get_enemies()[0]
 	var far := battle.get_enemies()[1]
-	battle.select_unit(hero)
+	_place(far, Vector2i(50, 0))
+	battle.select_unit(mage)
 	battle.command_target(far)
-	_check(battle.command_skill(near) and hero.target == null and not hero.has_goal and hero.skill_state == CombatUnit.SkillState.PENDING, "Skill command replaces the target order at once")
-	_check(battle.command_target(far) and hero.skill_state == CombatUnit.SkillState.NONE and hero.target == far and hero.mp == 200 and battle.get_skill_cooldown_remaining(hero) == 0, "Pending + new Target: Skill cancelled for free")
+	_check(battle.command_skill(near) and mage.target == null and not mage.has_goal and mage.skill_state == CombatUnit.SkillState.PENDING, "Skill command replaces the target order at once")
+	_check(battle.command_target(far) and mage.skill_state == CombatUnit.SkillState.NONE and mage.target == far and mage.mp == 100 and battle.get_skill_cooldown_remaining(mage) == 0, "Pending + new Target: Skill cancelled for free")
 	battle.command_skill(near)
-	_check(battle.command_move(Vector2i(5, 2)) and hero.skill_state == CombatUnit.SkillState.NONE and hero.has_goal and hero.goal == Vector2i(5, 2) and hero.mp == 200, "Pending + new Move: Skill cancelled for free")
+	_check(battle.command_move(Vector2i(5, 2)) and mage.skill_state == CombatUnit.SkillState.NONE and mage.has_goal and mage.goal == Vector2i(5, 2) and mage.mp == 100, "Pending + new Move: Skill cancelled for free")
 	battle.command_skill(near)
-	_check(battle.command_skill(far) and hero.skill_target == far and hero.skill_state == CombatUnit.SkillState.PENDING, "A new Skill command retargets the pending Skill")
+	_check(battle.command_skill(far) and mage.skill_cell == Vector2i(50, 0) and mage.skill_state == CombatUnit.SkillState.PENDING, "A new Skill command re-aims the pending Skill")
 	# Casting blocks Basic Attacks; afterwards the earlier target resumes.
 	var fight := _fight(10, 3)
 	var fight_hero := fight.get_hero()
@@ -383,7 +394,8 @@ func _verify_priority() -> void:
 	fight.command_skill(slowed)
 	fight.advance(10)
 	_check(fight_hero.skill_state == CombatUnit.SkillState.CASTING, "Casting next to an enemy, attack ready")
-	fight.advance(990)
+	# (Stage 8: the Slow's cast begins at the command, so it ends 1000 ms on.)
+	fight.advance(980)
 	_check(_hits.filter(func(h: Array) -> bool: return h[0] == fight_hero).is_empty() and fight_hero.cell == Vector2i(10, 2), "No Basic Attack and no movement during the cast")
 	fight.advance(10)
 	_check(fight_hero.skill_state == CombatUnit.SkillState.NONE and fight_hero.target == adjacent, "Resolved: the earlier target resumes")
@@ -407,15 +419,15 @@ func _verify_priority() -> void:
 func _verify_retreat() -> void:
 	# Before the cast: cancelled for free.
 	var battle := _fight(10, 3)
-	var hero := battle.get_hero()
-	battle.select_unit(hero)
+	var pending := battle.get_friends()[2]
+	battle.select_unit(pending)
 	battle.command_skill(battle.get_enemies()[0])
 	battle.advance(100)
-	_check(hero.skill_state == CombatUnit.SkillState.PENDING, "Pending Slow")
+	_check(pending.skill_state == CombatUnit.SkillState.PENDING, "Pending AoE")
 	battle.start_retreat()
-	_check(hero.skill_state == CombatUnit.SkillState.NONE and hero.mp == 200 and battle.get_skill_cooldown_remaining(hero) == 0 and hero.skill_target == null, "Retreat before the cast: cancelled, no MP, no cooldown")
+	_check(pending.skill_state == CombatUnit.SkillState.NONE and pending.mp == 100 and battle.get_skill_cooldown_remaining(pending) == 0 and pending.skill_target == null and pending.skill_cell == CombatUnit.NO_CELL, "Retreat before the cast: cancelled, no MP, no cooldown")
 	battle.cancel_retreat()
-	_check(battle.get_skill_readiness(hero) == CombatBattle.SkillReadiness.READY, "Retreat cancelled: ready")
+	_check(battle.get_skill_readiness(pending) == CombatBattle.SkillReadiness.READY, "Retreat cancelled: ready")
 	battle.start_retreat()
 	battle.advance(3000)
 	_check(battle.get_phase() == CombatBattle.Phase.RETREAT, "Nobody stuck: the party escapes")
@@ -441,7 +453,7 @@ func _verify_retreat() -> void:
 	_check([warrior, casting_hero, mage].all(func(u: CombatUnit) -> bool: return u.skill_state == CombatUnit.SkillState.NONE and u.mp == u.max_mp - 25 and casting.get_skill_cooldown_remaining(u) == 0), "Cancelled: MP not refunded, no cooldown")
 	casting.cancel_retreat()
 	casting.advance(600)
-	_check(casting.get_guard_remaining(warrior) == 0 and casting.get_slow_remaining(slow_target) == 0 and aoe_target.hp == aoe_hp and casting.get_last_aoe().is_empty(), "No Guard, no Slow, no AoE after the cancelled casts")
+	_check(casting.get_guard_remaining(warrior) == 0 and casting.get_enemies().all(func(e: CombatUnit) -> bool: return casting.get_slow_remaining(e) == 0) and aoe_target.hp == aoe_hp and casting.get_last_aoe().is_empty(), "No Guard, no Slow, no AoE after the cancelled casts")
 	_check([warrior, casting_hero, mage].all(func(u: CombatUnit) -> bool: return casting.get_skill_readiness(u) == CombatBattle.SkillReadiness.READY), "Usable again at once (no cooldown)")
 	_sections_done.append("retreat")
 
@@ -550,8 +562,8 @@ func _verify_settlement() -> void:
 	_check(mage.skill_state == CombatUnit.SkillState.NONE and mage.mp == 75, "The Skill finished cleanly")
 	battle.advance(5000)
 	_check(battle.get_result() == result and result.exp_pool == 100, "Nothing changes after the result")
-	var progression := ProgressionState.new()
-	var shares := progression.preview(result)
+	# Stage 8 P05: the fixture's merc_a / merc_b settle as roster instances.
+	var shares := PartyProgression.preview(result, ProgressionState.new(), MercenaryRoster.build([Mercenary.create("merc_a", "GUARDIAN"), Mercenary.create("merc_b", "MAGE")]))
 	_check(shares.size() == 3 and shares["merc_b"]["exp"] == 33, "C05 shares: 100 / 3 = 33 each")
 	_sections_done.append("settlement")
 
@@ -672,17 +684,28 @@ func _verify_in_game() -> void:
 	view.press_skill_entry(entry)
 	await process_frame
 	entry = _skill_entry(view, hero, "slow")
-	_check(battle.is_aiming() and entry["state"] == "選擇目標" and hint.visible and hint.text == "點敵人施放技能　點其他地方取消", "Skill pressed: aiming (%s / %s)" % [entry["text"], hint.text])
-	texts.append_array([entry["text"], hint.text])
-	_check(view.tap_at(view.cell_center(Vector2(5, 0))) == false and not battle.is_aiming() and not hero.has_goal and hero.skill_state == CombatUnit.SkillState.NONE, "Tap elsewhere: aim cancelled, no move")
-	await process_frame
-	_check(not hint.visible, "The targeting prompt disappears when targeting ends")
-	view.press_skill_entry(_skill_entry(view, hero, "slow"))
-	var enemy := battle.get_enemies()[0]
-	_check(view.tap_at(view.cell_center(Vector2(enemy.cell))) and hero.skill_state == CombatUnit.SkillState.PENDING and hero.skill_target == enemy, "Tap an enemy: Slow ordered on it")
+	# Stage 8: the Hero's Slow needs no target: pressed, it casts at once.
+	_check(not battle.is_aiming() and hero.skill_state == CombatUnit.SkillState.CASTING and hero.skill_target == null and hero.mp == 175 and not hint.visible, "Skill pressed: Slow cast at once, no aiming (%s)" % entry["text"])
 	await process_frame
 	entry = _skill_entry(view, hero, "slow")
-	_check(entry["state"] == "接近目標" and view.get_info_text(hero).contains("魔力 200 / 200"), "Approaching shown (%s)" % entry["text"])
+	_check(entry["state"] == "施法中…" and view.get_info_text(hero).contains("魔力 175 / 200"), "Hero casting shown (%s)" % entry["text"])
+	texts.append(entry["text"])
+	# The Mage's AoE is aimed at a battlefield location.
+	var mage := battle.get_friends()[2]
+	_check(view.tap_at(view.cell_center(Vector2(mage.cell))) and battle.get_selected() == mage, "Tap the Mage: selected")
+	view.press_skill_entry(_skill_entry(view, mage, "aoe"))
+	await process_frame
+	entry = _skill_entry(view, mage, "aoe")
+	_check(battle.is_aiming() and entry["state"] == "選擇位置" and hint.visible and hint.text == "點戰場位置施放技能　再按技能取消", "Mage Skill pressed: aiming a location (%s / %s)" % [entry["text"], hint.text])
+	texts.append_array([entry["text"], hint.text])
+	view.press_skill_entry(entry)
+	await process_frame
+	_check(not battle.is_aiming() and not mage.has_goal and mage.skill_state == CombatUnit.SkillState.NONE and not hint.visible, "Skill pressed again: aim cancelled, no move; the prompt disappears")
+	view.press_skill_entry(_skill_entry(view, mage, "aoe"))
+	_check(view.tap_at(view.cell_center(Vector2(8, 0))) and mage.skill_state == CombatUnit.SkillState.PENDING and mage.skill_target == null and mage.skill_cell == Vector2i(8, 0), "Tap an empty cell: AoE ordered on that location")
+	await process_frame
+	entry = _skill_entry(view, mage, "aoe")
+	_check(entry["state"] == "接近位置" and view.get_info_text(mage).contains("魔力 100 / 100"), "Approaching shown (%s)" % entry["text"])
 	texts.append(entry["text"])
 	_check(view.tap_at(view.cell_center(Vector2(warrior.cell))) and battle.get_selected() == warrior, "Tap Merc A: selected")
 	await process_frame

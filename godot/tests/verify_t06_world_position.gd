@@ -41,7 +41,7 @@ func _initialize() -> void:
 # --- Static ------------------------------------------------------------------------------------
 
 func _verify_static() -> void:
-	_check(SaveStore.VERSION == 11 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 8: same sections, the location gains the world position (C05 made the current version 9)")
+	_check(SaveStore.VERSION == 12 and SaveStore.V8_KEYS == SaveStore.V7_KEYS, "Save version 8: same sections, the location gains the world position (C05 made the current version 9)")
 	_check(PlayerLocation.KEYS.has("world_position") and not PlayerLocation.LEGACY_KEYS.has("world_position"), "Current and legacy location shapes")
 	_check(PlayerLocation.PLAYABLE_MIN == MIN and PlayerLocation.PLAYABLE_MAX == MAX, "Playable rect = the player's movement clamp (%s - %s)" % [PlayerLocation.PLAYABLE_MIN, PlayerLocation.PLAYABLE_MAX])
 	_check(PlayerLocation.PLAYABLE_MIN == WorldBoundary.BOUNDS.position + Player.BOUNDARY_MIN_OFFSET and PlayerLocation.PLAYABLE_MAX == WorldBoundary.BOUNDS.end - Player.BOUNDARY_MAX_OFFSET, "Bounds come from the same constants the player uses")
@@ -142,7 +142,7 @@ func _verify_save_and_migration() -> void:
 	location.set_world_position(ODD)
 	_check(SaveStore.save(TEST_SAVE, Wallet.new(), CharacterInventory.new(), MarketState.create_default(), location), "v8 save writes")
 	var raw := _read_json()
-	_check(int(raw["version"]) == 11 and raw["location"]["world_position"] == {"x": float(ODD.x), "y": float(ODD.y)}, "The exact position is saved (%s)" % str(raw["location"]))
+	_check(int(raw["version"]) == 12 and raw["location"]["world_position"] == {"x": float(ODD.x), "y": float(ODD.y)}, "The exact position is saved (%s)" % str(raw["location"]))
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["location"].get_world_position() == ODD, "Reload restores the exact position")
 	for corner in [MIN, MAX, Vector2(MIN.x, MAX.y), Vector2(MAX.x, MIN.y), Vector2(0.5, 0.5) + MIN]:

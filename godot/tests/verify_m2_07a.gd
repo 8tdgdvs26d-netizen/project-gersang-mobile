@@ -75,13 +75,17 @@ func _verify_script_literals() -> void:
 
 func _verify_world_text() -> void:
 	var main := await _new_main()
-	var title := main.get_node("Interface/Content/Status/Title") as Label
-	var subtitle := main.get_node("Interface/Content/Status/Subtitle") as Label
-	var scope := main.get_node("Interface/Content/Status/Scope") as Label
+	# Stage 8 iPhone L3 corrective (AC01, Charlie-approved): the title /
+	# subtitle / hint block sat over the player in the world and is removed;
+	# no other World Map UI changes.
 	var button := main.get_node("EnterControls/EnterCityButton") as Button
-	_check(title.text == "《萬行誌：白手》", "World title must be the formal game name 《萬行誌：白手》 (%s)" % title.text)
-	_check(subtitle.text == "開發原型：基本市場", "World subtitle must be Chinese (%s)" % subtitle.text)
-	_check(scope.text == "走到 A 城或 B 城，按 E 或點「進入城市」", "World hint must be Chinese (%s)" % scope.text)
+	_check(not main.has_node("Interface/Content/Status/Title"), "AC01 The world title block over the player is removed")
+	_check(not main.has_node("Interface/Content/Status/Subtitle"), "AC01 The world subtitle (開發原型：基本市場) is removed")
+	_check(not main.has_node("Interface/Content/Status/Scope") and not main.has_node("Interface/Content/Status"), "AC01 The world hint (走到 A 城或 B 城…) is removed")
+	# (The scene scan no longer meets these three texts; each is pinned gone.)
+	var scene := FileAccess.get_file_as_string("res://scenes/main.tscn")
+	for removed in ["《萬行誌：白手》", "開發原型：基本市場", "走到 A 城或 B 城，按 E 或點「進入城市」"]:
+		_check(not scene.contains(removed), "AC01 main.tscn no longer shows %s in the world" % removed)
 	_check(button.text == "進入城市", "Touch Enter City button must read 進入城市 (%s)" % button.text)
 	for city in ["A", "B"]:
 		var marker := _marker(main, city)
