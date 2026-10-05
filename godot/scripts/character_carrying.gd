@@ -138,6 +138,12 @@ func has_any_items(id: Variant) -> bool:
 
 # --- Operations (all-or-nothing) -------------------------------------------
 
+## Stage 9 P02: whether add_equipment() would accept these now (the same
+## checks, nothing changes) — the Equipment Shop asks before taking money.
+func can_add_equipment(id: Variant, item_id: Variant, quantity: Variant) -> bool:
+	return _can_take(id, item_id, quantity)
+
+
 ## Adds `quantity` x `item_id` to the character's carried equipment. Refused
 ## for an unknown character / item, a quantity that is not a whole number
 ## 1..MAX_QUANTITY (in all), an over-capacity character or a load beyond its

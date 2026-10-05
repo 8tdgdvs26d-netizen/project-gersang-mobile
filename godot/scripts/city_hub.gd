@@ -26,15 +26,40 @@ signal deployment_requested(mercenary_id: String, deployed: bool)
 signal dismiss_requested(mercenary_id: String)
 ## Stage 8 P05: 領取 pressed on a pending legacy Mercenary.
 signal claim_requested(mercenary_id: String)
+## Stage 9 P02: buy one `item_id` for the character `character_id` (stable id).
+signal equipment_buy_requested(character_id: String, item_id: String)
 
 const FACILITY_MARKET := "market"
 const FACILITY_TRANSPORT := "transport"
 const FACILITY_WAREHOUSE := "warehouse"
 const FACILITY_MERCENARY := "mercenary"
-const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE, FACILITY_MERCENARY]
+## Stage 9 P02: 裝備商店 (the fifth tab wraps onto a second tab row).
+const FACILITY_EQUIPMENT := "equipment"
+const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE, FACILITY_MERCENARY, FACILITY_EQUIPMENT]
 ## Stage 8 P02: Mercenary Center (傭兵中心) texts. Types, names, role lines
 ## and the price come from RecruitmentService.
 const MERCENARY_NOTE := "開發原型：每名傭兵 $1,000；同一類型可重複招聘"
+## Stage 9 P02: 裝備商店 texts (EquipmentCatalog gives names, slots, weights
+## and bonuses; EquipmentShopService the prices).
+const EQUIPMENT_NOTE := "開發原型：每次購買 1 件，放入所選角色的背包（不會自動裝備）"
+const EQUIPMENT_SLOT_TEXT := {"WEAPON": "武器", "ARMOR": "防具"}
+const EQUIPMENT_BONUS_TEXT := {"hp": "血量", "mp": "魔力", "str": "力量", "agi": "敏捷", "int": "智力", "physical_defense": "物理防禦", "magic_defense": "魔法防禦"}
+const EQUIPMENT_DETAIL_TEXT := "重量 %d　價格 $%s"
+const EQUIPMENT_BUY_TEXT := "購買"
+const EQUIPMENT_RECIPIENT_TEXT := "收件角色：%s"
+const EQUIPMENT_RECIPIENT_LOAD_TEXT := "背包容量：%d / %d"
+const EQUIPMENT_PREVIOUS_TEXT := "上一位"
+const EQUIPMENT_NEXT_TEXT := "下一位"
+const EQUIPMENT_SUCCESS_TEXT := "已購買%s，放入%s的背包"
+const EQUIPMENT_FAILURE_MESSAGES := {
+	"ERR_INSUFFICIENT_FUNDS": "金錢不足",
+	"ERR_INSUFFICIENT_CAPACITY": "%s的背包容量不足",
+	"ERR_UNKNOWN_CHARACTER": "找不到此角色",
+	"ERR_UNKNOWN_EQUIPMENT": "裝備無效",
+	"ERR_SAVE_FAILED": "無法儲存，購買已取消",
+	"ERR_NOT_IN_CITY": "需要在城市內購買",
+}
+const EQUIPMENT_GENERIC_FAILURE := "購買失敗"
 const MERCENARY_COUNT_TEXT := "持有傭兵：%d / %d"
 const MERCENARY_NONE_TEXT := "尚未持有傭兵"
 const MERCENARY_PRICE_TEXT := "招聘費用：$%s"
@@ -99,7 +124,9 @@ const CLAIM_SUCCESS_TEXT := "已領取%s"
 const CLAIM_SAVE_FAILED_TEXT := "無法儲存，領取已取消"
 ## Stage 8 P05: the roster list scrolls past this height (five rows fit
 ## without scrolling; the pending rows may push it past).
-const ROSTER_SCROLL_MAX_HEIGHT := 748.0
+## Stage 9 P02: 672 (was 748) — the facility tabs take a second row (76 px)
+## for 裝備商店; the list scrolls a little sooner.
+const ROSTER_SCROLL_MAX_HEIGHT := 672.0
 const PARTY_GENERIC_FAILURE := "操作失敗"
 const WAREHOUSE_NOTE := "開發原型：每次存入或取出 1 件；倉庫只存物品"
 const WAREHOUSE_LOCAL_STATUS := "%s 城倉庫・本地倉庫（每次存入或取出 1 件）"
@@ -200,6 +227,14 @@ var _roster_empty_label: Label
 var _dismiss_modal: Control
 var _dismiss_title: Label
 var _dismiss_id := ""
+## Stage 9 P02: item id -> 裝備商店 row; the recipients ({id, name, load,
+## capacity}, Hero first, then owned Mercenaries) and the chosen one's
+## stable id.
+var _equipment_rows := {}
+var _equipment_recipients: Array = []
+var _equipment_recipient_id := Mercenary.HERO_ID
+var _equipment_recipient_label: Label
+var _equipment_load_label: Label
 ## Seconds the open confirmation has waited (UI time, restarts on every
 ## open); 確定解僱 is enabled once it reaches DISMISS_COUNTDOWN_SECONDS.
 var _dismiss_waited := 0.0
@@ -211,12 +246,14 @@ var _dismiss_waited := 0.0
 @onready var _feedback_label := $Center/Content/FeedbackLabel as Label
 @onready var _market_rows := $Center/Content/MarketRows as VBoxContainer
 @onready var _title_label := $Center/Content/TitleLabel as Label
-@onready var _facility_tabs := $Center/Content/FacilityTabs as HBoxContainer
+@onready var _facility_tabs := $Center/Content/FacilityTabs as HFlowContainer
 @onready var _market_tab := $Center/Content/FacilityTabs/MarketTabButton as Button
 @onready var _transport_tab := $Center/Content/FacilityTabs/TransportTabButton as Button
 @onready var _warehouse_tab := $Center/Content/FacilityTabs/WarehouseTabButton as Button
 @onready var _mercenary_tab := $Center/Content/FacilityTabs/MercenaryTabButton as Button
 @onready var _mercenary_panel := $Center/Content/MercenaryPanel as VBoxContainer
+@onready var _equipment_tab := $Center/Content/FacilityTabs/EquipmentTabButton as Button
+@onready var _equipment_panel := $Center/Content/EquipmentPanel as VBoxContainer
 @onready var _warehouse_summary_label := $Center/Content/WarehouseSummaryLabel as Label
 @onready var _warehouse_status_label := $Center/Content/WarehouseStatusLabel as Label
 @onready var _warehouse_city_tabs := $Center/Content/WarehouseCityTabs as HBoxContainer
@@ -235,8 +272,10 @@ func _ready() -> void:
 	_transport_tab.pressed.connect(show_facility.bind(FACILITY_TRANSPORT))
 	_warehouse_tab.pressed.connect(show_facility.bind(FACILITY_WAREHOUSE))
 	_mercenary_tab.pressed.connect(show_facility.bind(FACILITY_MERCENARY))
+	_equipment_tab.pressed.connect(show_facility.bind(FACILITY_EQUIPMENT))
 	_build_market_rows()
 	_build_mercenary_panel()
+	_build_equipment_panel()
 	_build_warehouse_rows()
 	_build_warehouse_city_tabs()
 
@@ -735,6 +774,148 @@ func _build_market_rows() -> void:
 
 ## Stage 8 P02: the Mercenary Center: held count, owned list, one row per
 ## recruitable type (name and role, a short hint, the price, 招聘).
+# --- Stage 9 P02: 裝備商店 -----------------------------------------------------
+
+func _build_equipment_panel() -> void:
+	var picker := HBoxContainer.new()
+	picker.name = "RecipientPicker"
+	picker.alignment = BoxContainer.ALIGNMENT_CENTER
+	picker.add_theme_constant_override("separation", 12)
+	var previous := _make_button("PreviousRecipientButton", EQUIPMENT_PREVIOUS_TEXT, select_equipment_recipient_step.bind(-1))
+	var next := _make_button("NextRecipientButton", EQUIPMENT_NEXT_TEXT, select_equipment_recipient_step.bind(1))
+	var names := VBoxContainer.new()
+	names.name = "Recipient"
+	names.custom_minimum_size = Vector2(360, 0)
+	names.add_theme_constant_override("separation", 0)
+	_equipment_recipient_label = _make_label("RecipientLabel", "", NAME_FONT_SIZE + 2)
+	_equipment_recipient_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_equipment_load_label = _make_label("RecipientLoadLabel", "", DETAIL_FONT_SIZE)
+	_equipment_load_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	names.add_child(_equipment_recipient_label)
+	names.add_child(_equipment_load_label)
+	for button in [previous, next]:
+		(button as Button).custom_minimum_size = Vector2(130, 88)
+	picker.add_child(previous)
+	picker.add_child(names)
+	picker.add_child(next)
+	_equipment_panel.add_child(picker)
+	for item_id in EquipmentShopService.get_item_ids():
+		var item := EquipmentCatalog.get_item(item_id)
+		var row := HBoxContainer.new()
+		row.name = "Equipment_" + item_id
+		row.add_theme_constant_override("separation", 16)
+		var info := VBoxContainer.new()
+		info.name = "Info"
+		info.custom_minimum_size = Vector2(RECRUIT_INFO_WIDTH, 0)
+		info.add_theme_constant_override("separation", 0)
+		info.add_child(_make_label("NameLabel", "%s　%s" % [item["display_name"], EQUIPMENT_SLOT_TEXT.get(item["slot"], "")], NAME_FONT_SIZE + 2))
+		info.add_child(_make_label("BonusLabel", equipment_bonus_text(item_id), DETAIL_FONT_SIZE))
+		info.add_child(_make_label("DetailLabel", EQUIPMENT_DETAIL_TEXT % [int(item["capacity_cost"]), _thousands(EquipmentShopService.get_price(item_id))], DETAIL_FONT_SIZE))
+		row.add_child(info)
+		var button := _make_button("BuyEquipmentButton", EQUIPMENT_BUY_TEXT, _on_equipment_buy_pressed.bind(item_id))
+		button.custom_minimum_size = RECRUIT_BUTTON_SIZE
+		row.add_child(button)
+		_equipment_panel.add_child(row)
+		_equipment_rows[item_id] = row
+	_update_equipment_recipient()
+
+
+## "力量 +2" style text of an item's fixed bonuses (EquipmentCatalog).
+static func equipment_bonus_text(item_id: String) -> String:
+	var parts := []
+	var bonuses := EquipmentCatalog.get_bonuses(item_id)
+	for stat in bonuses:
+		parts.append("%s +%d" % [EQUIPMENT_BONUS_TEXT.get(stat, stat), int(bonuses[stat])])
+	return "　".join(parts)
+
+
+## The receiving characters ({id, name, load, capacity}: the Hero, then the
+## owned Mercenaries). The chosen one stays chosen by its stable id; when it
+## is gone the Hero is chosen.
+func show_equipment_shop(recipients: Array) -> void:
+	_equipment_recipients = recipients.duplicate(true)
+	if _recipient_index(_equipment_recipient_id) < 0:
+		_equipment_recipient_id = _equipment_recipients[0]["id"] if not _equipment_recipients.is_empty() else ""
+	_update_equipment_recipient()
+
+
+## Chooses the recipient by stable id (false when it is not offered).
+func select_equipment_recipient(character_id: String) -> bool:
+	if _recipient_index(character_id) < 0:
+		return false
+	_equipment_recipient_id = character_id
+	_update_equipment_recipient()
+	return true
+
+
+## 上一位 / 下一位: the previous / next recipient (wrapping).
+func select_equipment_recipient_step(step: int) -> void:
+	if _equipment_recipients.is_empty():
+		return
+	var index := maxi(_recipient_index(_equipment_recipient_id), 0)
+	index = posmod(index + step, _equipment_recipients.size())
+	_equipment_recipient_id = _equipment_recipients[index]["id"]
+	_feedback_label.text = ""
+	_update_equipment_recipient()
+
+
+func get_equipment_recipient_id() -> String:
+	return _equipment_recipient_id
+
+
+func get_equipment_recipient_texts() -> Dictionary:
+	return {"name": _equipment_recipient_label.text, "load": _equipment_load_label.text}
+
+
+func get_equipment_buy_button(item_id: String) -> Button:
+	return _equipment_rows[item_id].find_child("BuyEquipmentButton", true, false) as Button if _equipment_rows.has(item_id) else null
+
+
+## A shop row's name / bonus / detail texts ({} for an item not on sale).
+func get_equipment_row_texts(item_id: String) -> Dictionary:
+	if not _equipment_rows.has(item_id):
+		return {}
+	var row: Node = _equipment_rows[item_id]
+	return {
+		"name": (row.find_child("NameLabel", true, false) as Label).text,
+		"bonus": (row.find_child("BonusLabel", true, false) as Label).text,
+		"detail": (row.find_child("DetailLabel", true, false) as Label).text,
+	}
+
+
+## The purchase result (EquipmentShopService.buy or main's refusal).
+func show_equipment_feedback(result: Dictionary, item_name: String, recipient_name: String) -> void:
+	if result.get("success", false):
+		_feedback_label.text = EQUIPMENT_SUCCESS_TEXT % [item_name, recipient_name]
+		return
+	var message: String = EQUIPMENT_FAILURE_MESSAGES.get(result.get("reason", ""), EQUIPMENT_GENERIC_FAILURE)
+	_feedback_label.text = message % recipient_name if message.contains("%s") else message
+
+
+func _recipient_index(character_id: String) -> int:
+	for index in range(_equipment_recipients.size()):
+		if _equipment_recipients[index]["id"] == character_id:
+			return index
+	return -1
+
+
+func _update_equipment_recipient() -> void:
+	var index := _recipient_index(_equipment_recipient_id)
+	if index < 0:
+		_equipment_recipient_label.text = EQUIPMENT_RECIPIENT_TEXT % ""
+		_equipment_load_label.text = ""
+		return
+	var recipient: Dictionary = _equipment_recipients[index]
+	_equipment_recipient_label.text = EQUIPMENT_RECIPIENT_TEXT % recipient["name"]
+	_equipment_load_label.text = EQUIPMENT_RECIPIENT_LOAD_TEXT % [int(recipient["load"]), int(recipient["capacity"])]
+
+
+func _on_equipment_buy_pressed(item_id: String) -> void:
+	if _equipment_recipient_id == "":
+		return
+	equipment_buy_requested.emit(_equipment_recipient_id, item_id)
+
+
 func _build_mercenary_panel() -> void:
 	_mercenary_count_label = _make_label("MercenaryCountLabel", "", NAME_FONT_SIZE + 2)
 	_mercenary_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1136,12 +1317,13 @@ func _apply_view(facility: String) -> void:
 	var transport := in_city and facility == FACILITY_TRANSPORT
 	var warehouse := in_city and facility == FACILITY_WAREHOUSE
 	var mercenary := in_city and facility == FACILITY_MERCENARY
-	var market := in_city and not transport and not warehouse and not mercenary
+	var equipment := in_city and facility == FACILITY_EQUIPMENT
+	var market := in_city and not transport and not warehouse and not mercenary and not equipment
 	# The warehouse view trades the title, money and note lines for its own
 	# status line and city selector so the portrait layout keeps its height.
 	# The market view drops the prototype title for its T05 expected-result
 	# lines (prototype UI adjustment).
-	_title_label.visible = in_city and not warehouse and not market and not mercenary
+	_title_label.visible = in_city and not warehouse and not market and not mercenary and not equipment
 	_money_label.visible = not warehouse
 	_facility_tabs.visible = in_city
 	_note_label.visible = in_city and not warehouse
@@ -1153,14 +1335,17 @@ func _apply_view(facility: String) -> void:
 	_warehouse_rows_box.visible = warehouse
 	_warehouse_summary_label.visible = warehouse
 	# The warehouse view shows carrying capacity in its own summary line.
-	_cargo_label.visible = not warehouse and not mercenary
+	_cargo_label.visible = not warehouse and not mercenary and not equipment
 	_mercenary_panel.visible = mercenary
+	# Stage 9 P02: the shop shows the chosen character's own capacity.
+	_equipment_panel.visible = equipment
 	_travel_panel.visible = _traveling
-	_note_label.text = TRANSPORT_NOTE if transport else (WAREHOUSE_NOTE if warehouse else (MERCENARY_NOTE if mercenary else MARKET_NOTE))
+	_note_label.text = TRANSPORT_NOTE if transport else (WAREHOUSE_NOTE if warehouse else (MERCENARY_NOTE if mercenary else (EQUIPMENT_NOTE if equipment else MARKET_NOTE)))
 	_market_tab.disabled = market
 	_transport_tab.disabled = transport
 	_warehouse_tab.disabled = warehouse
 	_mercenary_tab.disabled = mercenary
+	_equipment_tab.disabled = equipment
 
 
 static func _seconds(ms: int) -> int:
