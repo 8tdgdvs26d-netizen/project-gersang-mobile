@@ -35,39 +35,36 @@ theme_override_font_sizes/font_size = 26
 text = "城市（原型）"
 horizontal_alignment = 1
 
-[node name="FacilityTabs" type="HFlowContainer" parent="Center/Content"]
-custom_minimum_size = Vector2(660, 0)
+[node name="FacilityTabs" type="HBoxContainer" parent="Center/Content"]
 size_flags_horizontal = 4
-theme_override_constants/h_separation = 12
-theme_override_constants/v_separation = 12
-alignment = 1
+theme_override_constants/separation = 8
 
 [node name="MarketTabButton" type="Button" parent="Center/Content/FacilityTabs"]
-custom_minimum_size = Vector2(156, 64)
+custom_minimum_size = Vector2(128, 64)
 focus_mode = 0
 theme_override_font_sizes/font_size = 24
 text = "市場"
 
 [node name="TransportTabButton" type="Button" parent="Center/Content/FacilityTabs"]
-custom_minimum_size = Vector2(156, 64)
+custom_minimum_size = Vector2(128, 64)
 focus_mode = 0
 theme_override_font_sizes/font_size = 24
 text = "交通"
 
 [node name="WarehouseTabButton" type="Button" parent="Center/Content/FacilityTabs"]
-custom_minimum_size = Vector2(156, 64)
+custom_minimum_size = Vector2(128, 64)
 focus_mode = 0
 theme_override_font_sizes/font_size = 24
 text = "倉庫"
 
 [node name="MercenaryTabButton" type="Button" parent="Center/Content/FacilityTabs"]
-custom_minimum_size = Vector2(156, 64)
+custom_minimum_size = Vector2(128, 64)
 focus_mode = 0
 theme_override_font_sizes/font_size = 24
 text = "傭兵中心"
 
 [node name="EquipmentTabButton" type="Button" parent="Center/Content/FacilityTabs"]
-custom_minimum_size = Vector2(156, 64)
+custom_minimum_size = Vector2(128, 64)
 focus_mode = 0
 theme_override_font_sizes/font_size = 24
 text = "裝備商店"

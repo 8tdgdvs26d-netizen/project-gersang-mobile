@@ -47,7 +47,23 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 9 P01: Equipment Foundation + Character Carrying Foundation. Save version 13.
+Stage 9 P02: Equipment Shop (裝備商店). Save version stays 13 (unchanged schema).
+
+- City Hub fifth facility 裝備商店 (same tab architecture). The five tabs share one row:
+  128 x 64 each, 8 px apart (approved controlled update of the Stage 8 150 px tab rule; no
+  second row, no other facility layout changed; Leave / Enter City safety unchanged)
+- buy only: the four P01 items at Prototype test prices (not final balance) — 測試武器一 /
+  二 $300, 測試防具一 / 二 $250; name, slot, weight and bonus come from `EquipmentCatalog`
+- the receiving character (上一位 / 下一位, its own backpack capacity shown) is the Hero or an
+  owned Mercenary by stable id (never pending / dismissed); one item per purchase into its
+  carried equipment (never equipped)
+- `EquipmentShopService.buy`: one transaction — all checks first (item, character, money,
+  capacity / over capacity), then pay, add, save; any failure after paying restores money and
+  every character exactly (無法儲存，購買已取消)
+- not here: selling, equip / unequip flow, equipment UI, stock, city / dynamic prices, combat
+- tests: `tests/verify_s9_p02_equipment_shop.gd`
+
+Previous: Stage 9 P01: Equipment Foundation + Character Carrying Foundation. Save version 13.
 Foundation only: no Equipment Shop, prices, equip UI or Character Panel presentation.
 
 - `EquipmentCatalog`: the approved Prototype test items (not final balance) — 測試武器一

@@ -33,7 +33,8 @@ const FACILITY_MARKET := "market"
 const FACILITY_TRANSPORT := "transport"
 const FACILITY_WAREHOUSE := "warehouse"
 const FACILITY_MERCENARY := "mercenary"
-## Stage 9 P02: 裝備商店 (the fifth tab wraps onto a second tab row).
+## Stage 9 P02: 裝備商店. The five facility tabs share one row: 128 x 64 each,
+## 8 px apart (approved: Stage 8 P02's 150 px tabs cannot fit five in 720).
 const FACILITY_EQUIPMENT := "equipment"
 const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE, FACILITY_MERCENARY, FACILITY_EQUIPMENT]
 ## Stage 8 P02: Mercenary Center (傭兵中心) texts. Types, names, role lines
@@ -124,9 +125,7 @@ const CLAIM_SUCCESS_TEXT := "已領取%s"
 const CLAIM_SAVE_FAILED_TEXT := "無法儲存，領取已取消"
 ## Stage 8 P05: the roster list scrolls past this height (five rows fit
 ## without scrolling; the pending rows may push it past).
-## Stage 9 P02: 672 (was 748) — the facility tabs take a second row (76 px)
-## for 裝備商店; the list scrolls a little sooner.
-const ROSTER_SCROLL_MAX_HEIGHT := 672.0
+const ROSTER_SCROLL_MAX_HEIGHT := 748.0
 const PARTY_GENERIC_FAILURE := "操作失敗"
 const WAREHOUSE_NOTE := "開發原型：每次存入或取出 1 件；倉庫只存物品"
 const WAREHOUSE_LOCAL_STATUS := "%s 城倉庫・本地倉庫（每次存入或取出 1 件）"
@@ -246,7 +245,7 @@ var _dismiss_waited := 0.0
 @onready var _feedback_label := $Center/Content/FeedbackLabel as Label
 @onready var _market_rows := $Center/Content/MarketRows as VBoxContainer
 @onready var _title_label := $Center/Content/TitleLabel as Label
-@onready var _facility_tabs := $Center/Content/FacilityTabs as HFlowContainer
+@onready var _facility_tabs := $Center/Content/FacilityTabs as HBoxContainer
 @onready var _market_tab := $Center/Content/FacilityTabs/MarketTabButton as Button
 @onready var _transport_tab := $Center/Content/FacilityTabs/TransportTabButton as Button
 @onready var _warehouse_tab := $Center/Content/FacilityTabs/WarehouseTabButton as Button
