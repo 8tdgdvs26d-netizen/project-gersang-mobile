@@ -47,7 +47,19 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 9 P03: Equip / Unequip + Character Equipment UI. Save version stays 13 (unchanged schema).
+Stage 9 P04: Equipment Stats -> Combat Integration. Save version stays 13 (unchanged schema).
+
+- one chain into battle: EquipmentCatalog -> CharacterCarrying -> CharacterStats ->
+  get_combat_profile() -> CombatUnit -> the existing damage / Skill paths (no formula in Combat)
+- fixed gap: deployed Mercenaries were rebuilt with `CharacterStats.for_mercenary` (no
+  equipment); `CombatBattle.create_party / from_party` now take `mercenary_stats` (stable id ->
+  authoritative stats) and main passes `CharacterCarrying.get_stats` for every deployed
+  Mercenary. The Hero already fought with its live character_stats (equipment included)
+- each battle copies the profiles once at creation; equipment cannot change during a battle (P03)
+- tests: `tests/verify_s9_p04_equipment_combat.gd` (real Basic Attacks, Gesture, Mage AoE,
+  incoming physical / magic hits, same-type Mercenaries, equip / unequip / save -> battle)
+
+Previous: Stage 9 P03: Equip / Unequip + Character Equipment UI. Save version stays 13 (unchanged schema).
 
 - the Character UI (角色) gets two views: 屬性 (the Stage 7 stats / allocation, unchanged) and
   裝備; the bottom bar holds the view switch, 確認分配 / 裝備 and 關閉

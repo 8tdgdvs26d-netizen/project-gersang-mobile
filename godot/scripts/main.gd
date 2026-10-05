@@ -569,6 +569,16 @@ func get_equipment_recipients() -> Array:
 	return recipients
 
 
+## Stage 9 P04: deployed Mercenary id -> its authoritative CharacterStats
+## (CharacterCarrying.get_stats: Base + Growth + Allocation + Equipment),
+## the stats its battle unit is built from.
+func get_deployed_combat_stats() -> Dictionary:
+	var stats := {}
+	for mercenary in mercenary_roster.get_deployed():
+		stats[mercenary.get_id()] = carrying.get_stats(mercenary.get_id())
+	return stats
+
+
 ## Stage 9 P03: the Character UI's equipment state of `character_id` (the
 ## Hero or an owned Mercenary by stable id; {} otherwise).
 func get_character_equipment(character_id: Variant) -> Dictionary:
@@ -910,7 +920,10 @@ func confirm_character_allocation(character_id: String, pending: Dictionary) -> 
 ## it (player locked, groups held, nothing new can trigger) under the battle.
 func _start_combat() -> void:
 	# Stage 8 P04: the Hero + the 0-3 deployed roster Mercenaries.
-	var battle := CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed())
+	# Stage 9 P04: each deployed Mercenary fights with its authoritative
+	# stats by stable id (CharacterCarrying: Level, allocation and its own
+	# equipment); the Hero's character_stats already carry its equipment.
+	var battle := CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed(), get_deployed_combat_stats())
 	if battle == null or _combat_view.is_open():
 		return
 	_combat_view.progression = progression
