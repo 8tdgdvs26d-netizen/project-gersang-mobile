@@ -60,8 +60,9 @@ Stage 8 iPhone L3 Corrective (on top of P05). Save version stays 12 (unchanged s
   resolve there
 - 軍師 冰牆 (Prototype, replaces the P04 冰場 cross): 2 columns x all 5 rows from the chosen
   cell's column (shifted left at the right edge), standing SKILL_EFFECT_MS (5 s). Enemies cannot
-  step onto it (they queue on their side, one per cell); enemies already on it get the existing
-  Slow; friends pass; no damage, no terrain / element / pathfinding system
+  step onto it (they queue on their side, one per cell); enemies already on it are Frozen
+  for 5 s (Stage 8 Final Corrective: no movement, no step progress, no Basic Attack, attack
+  cooldown paused; the Hero's 緩速 stays the Slow); friends pass; no damage, no terrain / element / pathfinding system
 - 解僱 confirmation: 確定解僱（5）…（1） disabled, then 確定解僱; 取消 always works; every open
   restarts at 5; a deployed Mercenary is still refused first; dismissal stays permanent, no refund
 - tests: `tests/verify_s8_l3_corrective.gd`; C06 / C07 / C08 / P03 / P04 / M2-07A updated to the

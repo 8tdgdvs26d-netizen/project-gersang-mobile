@@ -10,8 +10,9 @@ extends SceneTree
 ##                roles, labels, cells, skills, HP / MP); invalid lists refused
 ##   independence two 守衛: own selection, Skill, HP / MP, orders
 ##   ice field    (Stage 8 iPhone L3 corrective: now the 冰牆 Ice Wall, 2
-##                columns x 5 rows from the chosen cell) slows every alive
-##                enemy on its 10 cells, no damage, MP / cooldown as C06,
+##                columns x 5 rows from the chosen cell) freezes every alive
+##                enemy on its 10 cells (Stage 8 Final Corrective: Frozen, not
+##                slowed), no damage, MP / cooldown as C06,
 ##                refresh not stack (blocking: verify_s8_l3_corrective)
 ##   settlement   PartyProgression: all survivors divide, the Hero's share to
 ##                its slot, each Mercenary's to its own Level / EXP; DEFEAT /
@@ -188,12 +189,12 @@ func _verify_ice_field() -> void:
 	_check(resolved.size() == 1 and battle.get_skill_readiness(strategist) == CombatBattle.SkillReadiness.COOLDOWN and battle.get_skill_cooldown_remaining(strategist) > CombatConfig.SKILL_COOLDOWN_MS - 100, "Resolved once, C06 cooldown")
 	for index in range(spots.size()):
 		var inside := index < 5
-		_check(battle.get_slow_remaining(enemies[index]) > 0 == inside, "AC08 Enemy at %s %s" % [str(spots[index]), "slowed" if inside else "not slowed"])
-	_check(battle.get_slow_remaining(enemies[0]) <= CombatConfig.SKILL_EFFECT_MS and battle.get_slow_remaining(enemies[0]) > CombatConfig.SKILL_EFFECT_MS - 100, "5 s Slow")
+		_check(battle.get_frozen_remaining(enemies[index]) > 0 == inside, "AC08 Enemy at %s %s" % [str(spots[index]), "frozen" if inside else "not frozen"])
+	_check(battle.get_frozen_remaining(enemies[0]) <= CombatConfig.SKILL_EFFECT_MS and battle.get_frozen_remaining(enemies[0]) > CombatConfig.SKILL_EFFECT_MS - 100, "5 s Frozen")
 	_check(enemies.all(func(e: CombatUnit) -> bool: return e.hp == hp_before[enemies.find(e)]), "AC08 冰牆 deals no damage")
 	var aoe := battle.get_last_aoe()
 	_check(aoe["kind"] == "ice_field" and aoe["damage"] == 0 and aoe["cells"] == CombatBattle.ice_wall_cells(Vector2i(5, 1)) and (aoe["cells"] as Array).size() == 10, "The 10 wall cells are marked as 冰牆")
-	_check(enemies[0].step_ms() == roundi(1000.0 / enemies[0].move_speed) * CombatConfig.SLOW_FACTOR, "Slowed steps take x2 (C06 Slow)")
+	_check(battle.get_slow_remaining(enemies[0]) == 0 and enemies[0].step_ms() == roundi(1000.0 / enemies[0].move_speed), "Stage 8 Final Corrective: Frozen is not the C06 Slow (no Slow, step time unchanged)")
 	_check(strategist.mp == strategist.max_mp - CombatConfig.SKILL_MP_COST, "MP 25 for the cast")
 	# Refresh, never stack: a second 軍師 re-applies 冰場 while the Slow runs.
 	var pair := CombatBattle.create_party(10, null, [Mercenary.create("merc_1", "STRATEGIST"), Mercenary.create("merc_2", "STRATEGIST")])
@@ -208,14 +209,14 @@ func _verify_ice_field() -> void:
 	pair.command_skill(target)
 	pair.advance(50)
 	pair.advance(CombatConfig.SKILL_CAST_MS)
-	_check(pair.get_slow_remaining(target) > CombatConfig.SKILL_EFFECT_MS - 100, "First 冰牆: 5 s")
+	_check(pair.get_frozen_remaining(target) > CombatConfig.SKILL_EFFECT_MS - 100, "First 冰牆: 5 s Frozen")
 	pair.advance(3000)
-	var left := pair.get_slow_remaining(target)
+	var left := pair.get_frozen_remaining(target)
 	pair.select_unit(second)
 	_check(pair.command_skill(target), "Second 軍師 casts on the slowed enemy")
 	pair.advance(50)
 	pair.advance(CombatConfig.SKILL_CAST_MS)
-	_check(left > 0 and left < CombatConfig.SKILL_EFFECT_MS - 2000 and pair.get_slow_remaining(target) <= CombatConfig.SKILL_EFFECT_MS and pair.get_slow_remaining(target) > CombatConfig.SKILL_EFFECT_MS - 100, "AC08 Re-applied: refreshed to 5 s, not stacked (%d -> %d)" % [left, pair.get_slow_remaining(target)])
+	_check(left > 0 and left < CombatConfig.SKILL_EFFECT_MS - 2000 and pair.get_frozen_remaining(target) <= CombatConfig.SKILL_EFFECT_MS and pair.get_frozen_remaining(target) > CombatConfig.SKILL_EFFECT_MS - 100, "AC08 Re-applied: Frozen refreshed to 5 s, not stacked (%d -> %d)" % [left, pair.get_frozen_remaining(target)])
 	_check(first.mp == first.max_mp - CombatConfig.SKILL_MP_COST and second.mp == second.max_mp - CombatConfig.SKILL_MP_COST, "Each 軍師 paid its own MP")
 	_sections_done.append("ice_field")
 
