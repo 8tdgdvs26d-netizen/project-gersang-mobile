@@ -175,6 +175,13 @@ func _verify_after_result(outcome: BattleResult.Outcome) -> void:
 	await _frames(2)
 	var session := _session(main)
 	_check(session.is_protection_active() and session.get_phase() == EncounterSession.Phase.NONE and main.get_combat() == null, "%s committed: recovery protection running" % label)
+	# Stage 10 P03 (approved): a DEFEAT returns the party to the nearest
+	# Hospital city; the player walks back out (protection still running)
+	# and the same recheck applies in the world.
+	if outcome == BattleResult.Outcome.DEFEAT:
+		_check(main.is_in_city() and main.current_city_id == "A", "DEFEAT: returned to Hospital city A")
+		main.leave_city()
+		await _frames(2)
 	var g0 := _group(main, 0)
 	_stand_still(g0)
 	await _overlap_during_protection(main, g0, G0_HOME, label)

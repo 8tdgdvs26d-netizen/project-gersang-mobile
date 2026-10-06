@@ -47,7 +47,23 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 10 P02: Hospital UI + player recovery flow (stacked on P00 -> P01). Save stays v14.
+Stage 10 P03: Defeat -> nearest Hospital city safe return (stacked on P00 -> P01 -> P02). Save
+stays v14.
+
+- `WorldLayout.nearest_hospital_city(position)`: straight-line distance from the defeat's world
+  position (`EncounterContext.player_world_position`, kept at the commit) to `CITY_ANCHORS` (the
+  one coordinate source; `CityMarker` reads it); only `HOSPITAL_CITY_IDS` (A / B — a nearer C / D
+  never); exact tie -> the earlier id in that list (A); "" for no Hospital city / no position
+- `commit_battle_result`: on a DEFEAT only (VICTORY / RETREAT unchanged), after the existing
+  steps (groups reset home, encounter ended, condition written, battle closed) the party enters
+  that city (`PlayerLocation.enter_city`, no walking), the City Hub opens on 醫院 with
+  戰敗，已返回最近的醫院城市：X 城, and the one save writes IN_CITY. Free; nothing healed or revived;
+  no penalty. If no Hospital city could be entered the player stays in the world as before
+- tests: `tests/verify_s10_p03_defeat_return.gd` (FULL lifecycle stress, seed via
+  `-- --seed=<n>`); C02 / C05 / P00 / protection-recheck DEFEAT expectations moved to the
+  approved return
+
+Previous: Stage 10 P02: Hospital UI + player recovery flow (stacked on P00 -> P01). Save stays v14.
 
 - Prototype rule (approved): City A and City B have a Hospital (`WorldLayout.HOSPITAL_CITY_IDS`,
   `city_has_hospital`); reserved C / D have none. No facility system

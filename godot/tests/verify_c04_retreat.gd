@@ -630,12 +630,16 @@ func _settle() -> void:
 
 
 ## Stage 10 P02 (approved): the Hospital lives in main.gd now (the 醫院 view's
-## entry points); the battle result itself still never routes to it.
+## entry points). Stage 10 P03 (approved): the battle result routes there on
+## a DEFEAT only — that one guarded line is taken out; VICTORY / RETREAT (the
+## rest of the commit) still never do.
 func _commit_body() -> String:
 	var code := _code_only("res://scripts/main.gd").to_lower()
 	var start := code.find("func commit_battle_result")
 	var end := code.find("\nfunc ", start + 1)
-	return code.substr(start, end - start) if start >= 0 else ""
+	var body := code.substr(start, end - start) if start >= 0 else ""
+	var guarded := "\tif result.outcome == battleresult.outcome.defeat:\n\t\t_last_defeat_return_city = _return_to_hospital_city(origin)\n"
+	return body.replace(guarded, "") if body.count(guarded) == 1 else body
 
 
 func _code_only(path: String) -> String:

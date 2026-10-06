@@ -398,7 +398,9 @@ func _verify_hero_death() -> void:
 	await process_frame
 	(main.get_node("CombatView").get_node("ExitButton") as Button).pressed.emit()
 	await _settle()
-	_check(main.get_combat() == null and _condition_state(main) == before and main.location.is_in_world(), "It commits cleanly; nothing revived; back in the world (no penalty)")
+	# Stage 10 P03 (approved): a DEFEAT returns the party to the nearest
+	# Hospital city (A here), free and without healing.
+	_check(main.get_combat() == null and _condition_state(main) == before and main.is_in_city() and main.current_city_id == "A", "It commits cleanly; nothing revived; returned to Hospital city A (no penalty)")
 	await _destroy(main)
 	_clean()
 	_sections_done.append("hero_death")

@@ -212,16 +212,20 @@ func _verify_defeat() -> void:
 	var reset := true
 	for index in [0, 2]:
 		var monster := groups[index] as WorldMonster
-		reset = reset and is_instance_valid(monster) and main.has_node(NODES[index]) and not monster.is_held() and monster.global_position == HOMES[index] and monster.get_state() == WorldMonster.State.IDLE and monster.is_threat_active()
+		# Stage 10 P03 (approved): the DEFEAT now returns the party into a
+		# Hospital city, where (as on any city entry) no group is a threat.
+		reset = reset and is_instance_valid(monster) and main.has_node(NODES[index]) and not monster.is_held() and monster.global_position == HOMES[index] and monster.get_state() == WorldMonster.State.IDLE and not monster.is_threat_active()
 	_check(reset and _removed.is_empty(), "Participants 1 and 3 reset home, IDLE; nothing removed")
-	_check((groups[1] as WorldMonster).global_position == group_2_position and not (groups[1] as WorldMonster).is_held() and main._world_monsters.size() == 3, "Group 2 untouched; three groups in the world")
+	_check((groups[1] as WorldMonster).global_position == HOMES[1] and not (groups[1] as WorldMonster).is_held() and main._world_monsters.size() == 3, "Group 2 not removed (home, as on any city entry); three groups in the world")
 	_check(session.get_phase() == EncounterSession.Phase.NONE and not handoff.has_pending_encounter() and main.get_combat() == null and not view.visible, "Encounter ended, battle closed")
-	_check(not player.movement_locked and player.global_position == spot and main.location.is_in_world() and not main.is_in_city(), "Player free at the encounter position, in WORLD (no city, no hospital)")
-	_check(_joystick(main).is_processing_input(), "World joystick input back")
+	# Stage 10 P03 (approved): no longer left at the encounter position — safe
+	# in the nearest Hospital city (A), the world inactive.
+	_check(main.is_in_city() and main.current_city_id == "A" and not player.is_physics_processing() and main.get_last_defeat_return_city() == "A", "Player returned to the nearest Hospital city A (Stage 10 P03), not left in the world")
+	_check(not _joystick(main).is_processing_input(), "No world joystick input while in the city")
 	_check(session.is_protection_active() and session.get_protection_remaining_ms() == 5000, "5 s recovery protection")
 	_check(main.wallet.get_balance() == money and main.character_stats.get_strength() == CharacterStats.PROTOTYPE_DEFAULT_STRENGTH, "No money or stat penalty")
 	var saved: Variant = _read(TEST_SAVE)
-	_check(saved != null and int(saved["version"]) == 14 and Vector2(saved["location"]["world_position"]["x"], saved["location"]["world_position"]["y"]) == spot, "Saved once: v9, the encounter position")
+	_check(saved != null and int(saved["version"]) == 14 and saved["location"]["mode"] == "IN_CITY" and saved["location"]["city_id"] == "A", "Saved once: inside City A (Stage 10 P03)")
 	_delete(TEST_SAVE)
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(not main.commit_battle_result(result) and _commits.size() == 1 and not FileAccess.file_exists(TEST_SAVE), "A repeated DEFEAT commit changes nothing")
@@ -236,7 +240,12 @@ func _verify_defeat() -> void:
 	while session.get_phase() == EncounterSession.Phase.NONE and frames < 600:
 		await physics_frame
 		frames += 1
-	_check(not session.is_protection_active() and session.get_phase() == EncounterSession.Phase.JOINING and session.get_context().monster_id == IDS[0] and session.get_context().encounter_id == "encounter_2", "After protection the reset group 1 catches the player again (normal rules)")
+	# Stage 10 P03: still in the city — nothing caught the player; leaving
+	# puts the player at A's return point with the groups active again.
+	var still_safe: bool = session.get_phase() == EncounterSession.Phase.NONE and main.is_in_city()
+	main.leave_city()
+	await physics_frame
+	_check(still_safe and main.location.is_in_world() and player.global_position == WorldLayout.CITY_RETURN_POINTS["A"] and (groups[0] as WorldMonster).is_threat_active(), "No encounter in the city; leaving it the groups are threats again (normal rules)")
 	await _destroy(main)
 	_sections_done.append("defeat")
 
@@ -374,12 +383,16 @@ func _settle() -> void:
 
 
 ## Stage 10 P02 (approved): the Hospital lives in main.gd now (the 醫院 view's
-## entry points); the battle result itself still never routes to it.
+## entry points). Stage 10 P03 (approved): the battle result routes there on
+## a DEFEAT only — that one guarded line is taken out; VICTORY / RETREAT (the
+## rest of the commit) still never do.
 func _commit_body() -> String:
 	var code := _code_only("res://scripts/main.gd").to_lower()
 	var start := code.find("func commit_battle_result")
 	var end := code.find("\nfunc ", start + 1)
-	return code.substr(start, end - start) if start >= 0 else ""
+	var body := code.substr(start, end - start) if start >= 0 else ""
+	var guarded := "\tif result.outcome == battleresult.outcome.defeat:\n\t\t_last_defeat_return_city = _return_to_hospital_city(origin)\n"
+	return body.replace(guarded, "") if body.count(guarded) == 1 else body
 
 
 func _code_only(path: String) -> String:

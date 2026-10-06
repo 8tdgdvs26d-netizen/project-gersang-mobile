@@ -105,3 +105,24 @@ const PROTOTYPE_GROUPS := [
 ## Stage 10 P02: whether `city_id` has a Hospital (HOSPITAL_CITY_IDS).
 static func city_has_hospital(city_id: Variant) -> bool:
 	return typeof(city_id) == TYPE_STRING and HOSPITAL_CITY_IDS.has(city_id)
+
+
+## Stage 10 P03 (approved): the Hospital city nearest to `position` (world
+## coordinates) by straight-line distance to its CITY_ANCHORS point — no
+## roads, travel cost or history. Only HOSPITAL_CITY_IDS take part (a nearer
+## city without a Hospital never does); on an exact tie the earlier city in
+## HOSPITAL_CITY_IDS wins (deterministic). "" when no Hospital city exists or
+## the position is not a finite Vector2 (the caller keeps its safe default).
+static func nearest_hospital_city(position: Variant) -> String:
+	if typeof(position) != TYPE_VECTOR2 or not (position as Vector2).is_finite():
+		return ""
+	var best := ""
+	var best_distance := INF
+	for city_id in HOSPITAL_CITY_IDS:
+		if not CITY_ANCHORS.has(city_id) or not ACTIVE_CITY_IDS.has(city_id):
+			continue
+		var distance := (position as Vector2).distance_squared_to(CITY_ANCHORS[city_id])
+		if distance < best_distance:
+			best = city_id
+			best_distance = distance
+	return best
