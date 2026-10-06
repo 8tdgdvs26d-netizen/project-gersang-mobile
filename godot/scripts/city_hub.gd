@@ -77,6 +77,8 @@ const HOSPITAL_FAILURE_MESSAGES := {
 	"ERR_NO_HOSPITAL": "此城市沒有醫院",
 }
 const HOSPITAL_GENERIC_FAILURE := "治療失敗"
+## Stage 10 P03: why the player is suddenly in a city after a DEFEAT.
+const DEFEAT_RETURN_TEXT := "戰敗，已返回最近的醫院城市：%s 城"
 ## The Hero's stable id (the hub never reads the roster model).
 const HOSPITAL_HERO_ID := "hero"
 const HOSPITAL_ROW_BUTTON_SIZE := Vector2(160, 88)
@@ -1025,6 +1027,11 @@ func _on_equipment_buy_pressed(item_id: String) -> void:
 
 
 # --- Stage 10 P02: 醫院 ----------------------------------------------------------
+
+## Stage 10 P03: the safe-return line (main.gd chose the city).
+func show_defeat_return(returned_city_id: String) -> void:
+	_feedback_label.text = DEFEAT_RETURN_TEXT % returned_city_id
+
 
 ## Whether the open city has a Hospital (WorldLayout.HOSPITAL_CITY_IDS).
 func has_hospital() -> bool:

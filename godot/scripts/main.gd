@@ -119,6 +119,8 @@ var _character_panel: CharacterPanel
 ## off to keep observing the bare LOCKED phase. Always true in the game.
 var combat_enabled := true
 var _last_award := {}
+## Stage 10 P03: see get_last_defeat_return_city().
+var _last_defeat_return_city := ""
 ## Stage 7 corrective: groups removed by a VICTORY come back GROUP_RESPAWN_MS
 ## after the commit (runtime only, never saved).
 const WORLD_MONSTER_SCENE := preload("res://scenes/world_monster.tscn")
@@ -1107,6 +1109,9 @@ func commit_battle_result(result: BattleResult) -> bool:
 		return false
 	if not result.claim_commit():
 		return false
+	# Stage 10 P03: where the defeated encounter caught the player (kept
+	# before the encounter ends; the battle grid has no world position).
+	var origin := context.player_world_position
 	_encounter_session.start_recovery_protection()
 	_encounter_handoff.resolve_encounter(result.encounter_id, result.is_victory())
 	_encounter_session.end_resolved_encounter(result.encounter_id)
@@ -1121,7 +1126,12 @@ func commit_battle_result(result: BattleResult) -> bool:
 	_last_award = PartyProgression.apply(result, progression, mercenary_roster)
 	_apply_level_growth()
 	_close_combat()
-	var saved := save_world_position()
+	# Stage 10 P03 (approved): a DEFEAT returns the party to the nearest
+	# Hospital city (free, no healing); VICTORY / RETREAT keep their flow.
+	_last_defeat_return_city = ""
+	if result.outcome == BattleResult.Outcome.DEFEAT:
+		_last_defeat_return_city = _return_to_hospital_city(origin)
+	var saved := _persist() if _last_defeat_return_city != "" else save_world_position()
 	print("Myrial: battle result ", BattleResult.Outcome.keys()[result.outcome], " of ", result.encounter_id, " committed (saved: ", saved, ")")
 	battle_result_committed.emit(result, saved)
 	return true
@@ -1143,6 +1153,30 @@ func record_battle_condition(battle: CombatBattle) -> bool:
 			condition.restore_snapshot(before)
 			return false
 	return true
+
+
+## Stage 10 P03: the safe return after a DEFEAT — straight into the Hospital
+## city nearest to `origin` (WorldLayout.nearest_hospital_city), on its 醫院
+## view with the reason shown. Costs nothing and changes no condition (the
+## Hospital does the recovery). Returns the city id, or "" when no Hospital
+## city could be entered (the player then stays where the encounter left
+## them, as before P03).
+func _return_to_hospital_city(origin: Vector2) -> String:
+	var city_id := WorldLayout.nearest_hospital_city(origin)
+	if city_id == "" or not location.enter_city(city_id):
+		push_warning("Myrial: no Hospital city to return to after the defeat at %s" % str(origin))
+		return ""
+	_show_city(city_id)
+	_city_hub.show_facility(CityHub.FACILITY_HOSPITAL)
+	_city_hub.show_defeat_return(city_id)
+	print("Myrial: defeat at ", origin, " -> returned to Hospital city ", city_id)
+	return city_id
+
+
+## Stage 10 P03: the Hospital city the last committed DEFEAT returned the
+## party to ("" for any other result).
+func get_last_defeat_return_city() -> String:
+	return _last_defeat_return_city
 
 
 ## C02: a group removed by a VICTORY leaves the world list, so no world
