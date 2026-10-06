@@ -108,7 +108,7 @@ func _verify_unchanged_rules() -> void:
 	_check(not stats.confirm_allocation({"mp": 1}), "MP still not allocatable")
 	stats.apply_level(6)
 	_check(stats.get_unspent_points() == 12 and stats.get_allocation_points() == {"hp": 2, "str": 0, "agi": 0, "int": 1}, "A later Level adds points; the spent ones stay")
-	_check(SaveStore.VERSION == 13, "Save version 13 (Stage 9 P01)")
+	_check(SaveStore.VERSION == 14, "Save version 13 (Stage 9 P01)")
 	var code := FileAccess.get_file_as_string("res://scripts/character_stats.gd").to_lower()
 	_check(not code.contains("reset"), "No Stat Reset")
 	_sections_done.append("rules")

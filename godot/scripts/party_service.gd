@@ -26,11 +26,15 @@ const ERR_ROSTER_FULL := "ERR_ROSTER_FULL"
 ## Stage 9 P01: the Mercenary still holds goods or equipment (carried or
 ## equipped): nothing may be deleted, moved away or lost by a dismissal.
 const ERR_HAS_ITEMS := "ERR_HAS_ITEMS"
+## Stage 10 P00 (approved): a dead Mercenary cannot be deployed (it stays
+## owned with everything it has; only a future recovery revives it).
+const ERR_DEAD := "ERR_DEAD"
 
 
 ## Deploys (`deployed` true) or undeploys the owned `id`; saved at once.
-## {success, reason, mercenary_id}.
-static func set_deployed(roster: MercenaryRoster, id: Variant, deployed: bool, persist: Callable = Callable()) -> Dictionary:
+## {success, reason, mercenary_id}. Stage 10 P00: `condition`, when given,
+## refuses deploying a dead Mercenary (undeploying one is always allowed).
+static func set_deployed(roster: MercenaryRoster, id: Variant, deployed: bool, persist: Callable = Callable(), condition: CharacterCondition = null) -> Dictionary:
 	if roster == null:
 		return _result(false, ERR_INVALID_STATE, id)
 	if roster.get_mercenary(id) == null:
@@ -39,6 +43,8 @@ static func set_deployed(roster: MercenaryRoster, id: Variant, deployed: bool, p
 	if deployed:
 		if ids.has(id):
 			return _result(false, ERR_ALREADY_DEPLOYED, id)
+		if condition != null and condition.is_dead(id):
+			return _result(false, ERR_DEAD, id)
 		if ids.size() >= MercenaryRoster.MAX_DEPLOYED:
 			return _result(false, ERR_DEPLOY_FULL, id)
 		ids.append(id)

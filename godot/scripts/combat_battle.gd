@@ -199,12 +199,22 @@ static func create(enemy_count: int, party: PartyFixture = PartyFixture.PROTOTYP
 ## (Base + Growth + Allocation + its own Equipment, by stable id); an id not
 ## given falls back to CharacterStats.for_mercenary (no equipment: test
 ## fixtures). The battle copies each profile once, at creation.
-static func create_party(enemy_count: int, hero_stats: CharacterStats, mercenaries: Array, mercenary_stats: Dictionary = {}) -> CombatBattle:
+## Stage 10 P00 (approved): `conditions` (character id -> {"hp", "mp",
+## "dead"}, the persistent CharacterCondition) gives each character's
+## current HP / MP — the unit starts there, not full (an id not given starts
+## full: test fixtures). A dead Mercenary does not take part (no unit; the
+## living ones keep the deployment order). A dead Hero is in the battle as a
+## dead unit (no revival here); with no living friendly unit the battle is
+## a DEFEAT at once (C03: every friendly unit is dead).
+static func create_party(enemy_count: int, hero_stats: CharacterStats, mercenaries: Array, mercenary_stats: Dictionary = {}, conditions: Dictionary = {}) -> CombatBattle:
 	if mercenaries.size() > CombatConfig.PARTY_START_CELLS.size():
 		return null
 	var battle := CombatBattle.new()
-	battle._friends.append(_friend("hero", CombatUnit.Role.HERO, CombatConfig.HERO_START_CELL, CombatConfig.HERO_SKILL, {"hero": hero_stats} if hero_stats != null else {}))
+	var hero := _friend("hero", CombatUnit.Role.HERO, CombatConfig.HERO_START_CELL, CombatConfig.HERO_SKILL, {"hero": hero_stats} if hero_stats != null else {})
+	_apply_condition(hero, conditions.get("hero"))
+	battle._friends.append(hero)
 	var ids := {}
+	var cell_index := 0
 	for index in range(mercenaries.size()):
 		if not mercenaries[index] is Mercenary:
 			return null
@@ -217,13 +227,49 @@ static func create_party(enemy_count: int, hero_stats: CharacterStats, mercenari
 		if stats == null or ids.has(mercenary.get_id()) or not CombatConfig.MERCENARY_SKILLS.has(mercenary.get_type()):
 			return null
 		ids[mercenary.get_id()] = true
-		var unit := CombatUnit.create(mercenary.get_id(), CombatUnit.Team.FRIEND, stats.get_combat_profile(), CombatConfig.PARTY_START_CELLS[index])
+		var state: Variant = conditions.get(mercenary.get_id())
+		if typeof(state) == TYPE_DICTIONARY and bool(state.get("dead", false)):
+			continue
+		var unit := CombatUnit.create(mercenary.get_id(), CombatUnit.Team.FRIEND, stats.get_combat_profile(), CombatConfig.PARTY_START_CELLS[cell_index])
+		cell_index += 1
 		unit.role = CombatUnit.ROLE_BY_TYPE[mercenary.get_type()]
 		unit.label = RecruitmentService.label(mercenary)
 		_give_skill(unit, CombatConfig.MERCENARY_SKILLS[mercenary.get_type()], stats.get_max_mp())
+		_apply_condition(unit, state)
 		battle._friends.append(unit)
 	battle._populate(enemy_count)
+	battle._start_without_living_friends()
 	return battle
+
+
+## Stage 10 P00: a friendly unit starts from its persistent condition
+## ({"hp", "mp", "dead"}; null: full): HP / MP at most its Max; dead -> a
+## dead unit (HP 0, never selected).
+static func _apply_condition(unit: CombatUnit, state: Variant) -> void:
+	if typeof(state) != TYPE_DICTIONARY:
+		return
+	unit.mp = clampi(int(state.get("mp", unit.max_mp)), 0, unit.max_mp)
+	if bool(state.get("dead", false)) or int(state.get("hp", unit.max_hp)) <= 0:
+		unit.hp = 0
+		unit.alive = false
+		unit.claim = CombatUnit.NO_CELL
+		return
+	unit.hp = clampi(int(state.get("hp", unit.max_hp)), 1, unit.max_hp)
+
+
+## Stage 10 P00: the starting selection is the first living friendly unit;
+## none alive -> DEFEAT at once (nothing can act; C03 Full Party Wipe).
+func _start_without_living_friends() -> void:
+	var living := _friends.filter(func(unit: CombatUnit) -> bool: return unit.alive)
+	if living.size() == _friends.size():
+		return
+	if living.is_empty():
+		_selected = null
+		_selection = []
+		_set_phase(Phase.DEFEAT)
+		return
+	_selected = living[0]
+	_selection = [living[0]]
 
 
 ## The enemies, the starting selection (the Hero) and the HP totals.
@@ -250,9 +296,10 @@ static func _friend(id: String, role: CombatUnit.Role, cell: Vector2i, skill: Di
 	return unit
 
 
-## C06: a friendly unit's Normal Skill and full MP (every battle starts full;
-## nothing carries over). C07: the Hero's pool is HERO_MAX_MP. S01: Max MP is
-## the character's Effective MP.
+## C06: a friendly unit's Normal Skill and full MP. C07: the Hero's pool is
+## HERO_MAX_MP. S01: Max MP is the character's Effective MP. Stage 10 P00:
+## the game's party then starts from its persistent condition
+## (_apply_condition); fixtures start full.
 static func _give_skill(unit: CombatUnit, skill: Dictionary, max_mp: int = CombatConfig.MAX_MP) -> void:
 	unit.skill = skill
 	unit.max_mp = max_mp
@@ -274,14 +321,18 @@ static func from_encounter(context: EncounterContext, party_stats: Dictionary = 
 ## Stage 8 P04: the game's battle for a LOCKED encounter (as from_encounter)
 ## with the Hero + the deployed roster Mercenaries (create_party). Null when
 ## the context or the party is invalid.
-static func from_party(context: EncounterContext, hero_stats: CharacterStats, mercenaries: Array, mercenary_stats: Dictionary = {}) -> CombatBattle:
+static func from_party(context: EncounterContext, hero_stats: CharacterStats, mercenaries: Array, mercenary_stats: Dictionary = {}, conditions: Dictionary = {}) -> CombatBattle:
 	if context == null or context.get_planned_combat_enemy_count() <= 0:
 		return null
-	var battle := create_party(context.get_planned_combat_enemy_count(), hero_stats, mercenaries, mercenary_stats)
+	var battle := create_party(context.get_planned_combat_enemy_count(), hero_stats, mercenaries, mercenary_stats, conditions)
 	if battle == null:
 		return null
 	battle.encounter_id = context.encounter_id
 	battle.group_monster_ids = context.group_monster_ids.duplicate()
+	# Stage 10 P00: a battle already lost at creation (no living friendly
+	# unit) carries this encounter in its result.
+	if battle.is_over():
+		battle._make_result(battle._phase)
 	return battle
 
 
@@ -1326,6 +1377,18 @@ func _kill(unit: CombatUnit) -> void:
 	_set_phase(Phase.DEFEAT)
 
 
+## The battle's single result for a final `phase`.
+func _make_result(phase: Phase) -> void:
+	var outcome := {Phase.VICTORY: BattleResult.Outcome.VICTORY, Phase.DEFEAT: BattleResult.Outcome.DEFEAT, Phase.RETREAT: BattleResult.Outcome.RETREAT}[phase] as BattleResult.Outcome
+	_result = BattleResult.create(encounter_id, outcome, group_monster_ids)
+	# C05: the reward facts at settlement — the EXP pool and the friendly
+	# units alive at this moment (where they stand does not matter).
+	_result.exp_pool = _exp_pool
+	for friend in _friends:
+		if friend.alive:
+			_result.survivor_ids.append(friend.id)
+
+
 func _set_phase(phase: Phase) -> void:
 	if phase == _phase:
 		return
@@ -1337,13 +1400,6 @@ func _set_phase(phase: Phase) -> void:
 	if is_over():
 		_aiming = false
 		_gesture_open = false
-		var outcome := {Phase.VICTORY: BattleResult.Outcome.VICTORY, Phase.DEFEAT: BattleResult.Outcome.DEFEAT, Phase.RETREAT: BattleResult.Outcome.RETREAT}[phase] as BattleResult.Outcome
-		_result = BattleResult.create(encounter_id, outcome, group_monster_ids)
-		# C05: the reward facts at settlement — the EXP pool and the friendly
-		# units alive at this moment (where they stand does not matter).
-		_result.exp_pool = _exp_pool
-		for friend in _friends:
-			if friend.alive:
-				_result.survivor_ids.append(friend.id)
+		_make_result(phase)
 	print("Myrial: combat phase ", Phase.keys()[phase], " at ", _elapsed_ms, " ms")
 	phase_changed.emit(phase)

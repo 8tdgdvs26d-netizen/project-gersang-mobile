@@ -286,7 +286,7 @@ func _verify_game() -> void:
 	_check(main.carrying.get_equipment("hero").get_carried() == {W1: 1} and main.carrying.get_equipment("hero").get_equipped_items() == {} and main.character_stats.get_equipment_bonuses() == {}, "AC10 Hero bought 測試武器一: carried, not equipped, no bonus")
 	# AC17: the file holds it; a restart keeps money and ownership.
 	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(raw["version"]) == 13 and int(raw["money"]) == main.wallet.get_balance() and int(raw["carrying"]["merc_2"]["carried_equipment"][A1]) == 1 and int(raw["carrying"]["hero"]["carried_equipment"][W1]) == 1, "AC17 / AC22 Saved at once (v13, money, both items)")
+	_check(int(raw["version"]) == 14 and int(raw["money"]) == main.wallet.get_balance() and int(raw["carrying"]["merc_2"]["carried_equipment"][A1]) == 1 and int(raw["carrying"]["hero"]["carried_equipment"][W1]) == 1, "AC17 / AC22 Saved at once (v13, money, both items)")
 	var after_money: int = main.wallet.get_balance()
 	await _destroy(main)
 	main = await _new_main(TEST_SAVE)
@@ -327,7 +327,7 @@ func _verify_game() -> void:
 # --- Scope ------------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 13 and SaveStore.V13_KEYS.size() == 13, "AC22 Save schema still v13 (no new section)")
+	_check(SaveStore.VERSION == 14 and SaveStore.V14_KEYS == SaveStore.V13_KEYS + ["condition"], "AC22 Save schema still v13 (no new section)")
 	var code := _code_only("res://scripts/equipment_shop_service.gd").to_lower()
 	for word in ["sell", "buyback", "resale", "stock", "equip(", "unequip", "transfer", "warehouse", "combat", "ledger", "random"]:
 		_check(not code.contains(word), "The shop has no %s" % word)

@@ -324,7 +324,7 @@ func _verify_game() -> void:
 	panel.select_item(W1)
 	_check(panel.equip_selected() and main.character_stats.get_effective("str") == 12, "Hero equips the bought 測試武器一")
 	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(raw["version"]) == 13 and raw["carrying"]["merc_2"]["equipped"]["armor"] == A2 and raw["carrying"]["hero"]["equipped"]["weapon"] == W1 and (raw["carrying"]["hero"]["carried_equipment"] as Dictionary).is_empty(), "AC19 Saved at once (v13): equipped slots, carried emptied")
+	_check(int(raw["version"]) == 14 and raw["carrying"]["merc_2"]["equipped"]["armor"] == A2 and raw["carrying"]["hero"]["equipped"]["weapon"] == W1 and (raw["carrying"]["hero"]["carried_equipment"] as Dictionary).is_empty(), "AC19 Saved at once (v13): equipped slots, carried emptied")
 	var state := _main_state(main)
 	panel.close()
 	await _destroy(main)
@@ -370,7 +370,7 @@ func _verify_game() -> void:
 
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 13 and SaveStore.V13_KEYS.size() == 13, "Save schema still v13")
+	_check(SaveStore.VERSION == 14 and SaveStore.V14_KEYS == SaveStore.V13_KEYS + ["condition"], "Save schema still v13")
 	var service := _code_only("res://scripts/equipment_service.gd").to_lower()
 	for word in ["sell", "transfer", "price", "wallet", "warehouse", "combat", "helmet"]:
 		_check(not service.contains(word), "EquipmentService has no %s" % word)

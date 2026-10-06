@@ -50,7 +50,7 @@ func _verify_static() -> void:
 	# Stage 8 P05: the three fixed slots became the Hero's slot + the roster
 	# (merc_a / merc_b are legacy save slots only; FixtureParty below).
 	_check(ProgressionState.LEGACY_SLOTS == SLOTS and ProgressionState.SLOTS == ["hero"] and ProgressionState.START_LEVEL == 1 and ProgressionState.MAX_LEVEL == 100 and ProgressionState.required_exp(1) == 100 and ProgressionState.required_exp(2) == 150, "Three fixed slots, Lv1 -> Lv2 at 100 (S03 curve, Lv100 cap)")
-	_check(SaveStore.VERSION == 13 and SaveStore.V9_KEYS == SaveStore.V8_KEYS + ["progression"], "Save v9 = v8 + progression")
+	_check(SaveStore.VERSION == 14 and SaveStore.V9_KEYS == SaveStore.V8_KEYS + ["progression"], "Save v9 = v8 + progression")
 	_check(CombatConfig.HERO["max_hp"] == 300 and CombatConfig.HERO["attack_damage"] == 20 and CombatConfig.ENEMY["move_speed"] == 2.0 and CombatConfig.MERC_B["attack_range"] == 3, "Combat stats unchanged")
 	var progression_code := _code_only("res://scripts/progression_state.gd").to_lower()
 	for word in ["hp", "attack", "damage", "speed", "range", "strength", "capacity", "skill", "loot", "money", "wallet", "item", "rand", "talent", "point"]:
@@ -255,7 +255,7 @@ func _verify_persistence() -> void:
 	var progression := ProgressionState.from_dict({"hero": {"level": 2, "exp": 30}})
 	_check(SaveStore.save(TEST_SAVE, Wallet.new(), CharacterInventory.new(), MarketState.create_default(), PlayerLocation.new(), null, null, null, progression), "v9 save writes")
 	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(raw["version"]) == 13 and raw.keys().size() == 13 and raw["progression"] == {"hero": {"level": 2.0, "exp": 30.0}} or raw["progression"] == {"hero": {"level": 2, "exp": 30}}, "v13 (Stage 9 P01) progression holds exactly the Hero's {level, exp}")
+	_check(int(raw["version"]) == 14 and raw.keys().size() == 14 and raw["progression"] == {"hero": {"level": 2.0, "exp": 30.0}} or raw["progression"] == {"hero": {"level": 2, "exp": 30}}, "v13 (Stage 9 P01) progression holds exactly the Hero's {level, exp}")
 	var loaded := SaveStore.load_session(TEST_SAVE)
 	_check(not loaded.is_empty() and loaded["progression"].to_dict() == progression.to_dict(), "Level / EXP survive save -> load")
 	# A v8 save (no progression) loads with the defaults; the file is untouched.
@@ -265,6 +265,7 @@ func _verify_persistence() -> void:
 	v8.erase("mercenaries")  # P01.5: nor the v11 roster
 	v8.erase("pending_legacy_mercenaries")  # P05: nor the v12 pending list
 	v8.erase("carrying")  # Stage 9 P01: nor the v13 carrying
+	v8.erase("condition")  # Stage 10 P00 (v14)
 	v8["version"] = 8
 	_write_json(v8)
 	var text := FileAccess.get_file_as_string(TEST_SAVE)
@@ -329,7 +330,7 @@ func _verify_in_game() -> void:
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(main.progression.get_exp("hero") == 50 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 50 and main.mercenary_roster.get_mercenary("merc_1").get_exp() == 0 and main.get_last_award().size() == 2 and main.progression.get_level("merc_a") == 0 and main.progression.get_level("merc_b") == 0, "Committed: Hero 50, Merc B (法師 #2) 50, Merc A (守衛 #1) 0; no legacy slots (P05)")
 	var saved: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(saved["version"]) == 13 and int(saved["progression"]["hero"]["exp"]) == 50 and saved["progression"].keys() == ["hero"] and int(saved["mercenaries"]["owned"][1]["exp"]) == 50 and int(saved["mercenaries"]["owned"][0]["exp"]) == 0, "Saved once with the commit: v9 progression (P04: and the roster's EXP)")
+	_check(int(saved["version"]) == 14 and int(saved["progression"]["hero"]["exp"]) == 50 and saved["progression"].keys() == ["hero"] and int(saved["mercenaries"]["owned"][1]["exp"]) == 50 and int(saved["mercenaries"]["owned"][0]["exp"]) == 0, "Saved once with the commit: v9 progression (P04: and the roster's EXP)")
 	(view.get_node("ExitButton") as Button).pressed.emit()
 	_check(main.progression.get_exp("hero") == 50, "A repeated commit adds nothing")
 	# Battle 2 (relaunched, the group was defeated this session): the Hero
@@ -339,6 +340,7 @@ func _verify_in_game() -> void:
 	_check(main.progression.get_exp("hero") == 50 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 50, "Relaunch restores the first award")
 	view = main.get_node("CombatView") as CombatView
 	reward = view.get_node("RewardLabel") as Label
+	_restore_party(main)
 	battle = await _locked_battle(main)
 	f = battle.get_friends()
 	battle.resolve_damage(battle.get_enemies()[0], f[1], 1000)
@@ -357,6 +359,7 @@ func _verify_in_game() -> void:
 	view = main.get_node("CombatView") as CombatView
 	reward = view.get_node("RewardLabel") as Label
 	# DEFEAT after kills: nothing awarded, said so.
+	_restore_party(main)
 	battle = await _locked_battle(main)
 	for index in range(3):
 		battle.resolve_damage(battle.get_friends()[0], battle.get_enemies()[index], 1000)
@@ -371,6 +374,7 @@ func _verify_in_game() -> void:
 	main = await _new_main(TEST_SAVE)
 	view = main.get_node("CombatView") as CombatView
 	reward = view.get_node("RewardLabel") as Label
+	_restore_party(main)
 	battle = await _locked_battle(main)
 	for index in range(4):
 		battle.resolve_damage(battle.get_friends()[0], battle.get_enemies()[index], 1000)
@@ -384,6 +388,15 @@ func _verify_in_game() -> void:
 	_check(main.progression.get_exp("hero") == 63 and main.mercenary_roster.get_mercenary("merc_1").get_exp() == 13 and main.mercenary_roster.get_mercenary("merc_2").get_exp() == 63 and not FileAccess.file_exists(BAD_SAVE), "Save failed after the commit: the EXP stays applied (no rollback)")
 	await _destroy(main)
 	_sections_done.append("in_game")
+
+
+## Stage 10 P00: no recovery exists yet and deaths / injuries now persist
+## (approved); this C05 scenario needs the whole party in every battle, so
+## the test restores every character to its full maxima first (standing in
+## for the future Hospital). Not a game path.
+func _restore_party(main: Node) -> void:
+	for id in main.condition.get_character_ids():
+		main.condition.set_condition(id, CharacterCondition.MAX_VALUE, CharacterCondition.MAX_VALUE)
 
 
 ## The C05 claimed-cell search returns exactly what the C03 per-cell

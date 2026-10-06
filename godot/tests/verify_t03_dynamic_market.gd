@@ -422,7 +422,7 @@ func _verify_save_reload() -> void:
 	var snapshot: Dictionary = main.market.get_snapshot()
 	var saved := FileAccess.get_file_as_string(TEST_SAVE)
 	_check(not saved.contains("dynamic") and not saved.contains("buy_price") and not saved.contains("buyback"), "The save stores stock, not derived prices")
-	_check(SaveStore.VERSION == 13, "T03 made no save schema change; version 6 is T04's market recovery anchor, 7 T05's cost ledger, 8 T06's exact world position, 9 C05's progression")
+	_check(SaveStore.VERSION == 14, "T03 made no save schema change; version 6 is T04's market recovery anchor, 7 T05's cost ledger, 8 T06's exact world position, 9 C05's progression")
 	await _destroy(main)
 	main = await _new_main(TEST_SAVE)
 	_check(main.market.get_snapshot() == snapshot, "Reload restores every stock exactly")

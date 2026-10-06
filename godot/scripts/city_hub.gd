@@ -109,6 +109,8 @@ const PARTY_FAILURE_MESSAGES := {
 	"ERR_DEPLOYED": DEPLOYED_DISMISS_TEXT,
 	# Stage 9 P01: a Mercenary holding goods or equipment cannot be dismissed.
 	"ERR_HAS_ITEMS": "請先清空此傭兵攜帶的物品及裝備，再解僱",
+	# Stage 10 P00: a dead Mercenary cannot be deployed.
+	"ERR_DEAD": "此傭兵已陣亡，無法出戰",
 	"ERR_UNKNOWN_MERCENARY": "找不到此傭兵",
 	"ERR_ALREADY_DEPLOYED": "此傭兵已在出戰名單",
 	"ERR_NOT_DEPLOYED": "此傭兵未在出戰名單",

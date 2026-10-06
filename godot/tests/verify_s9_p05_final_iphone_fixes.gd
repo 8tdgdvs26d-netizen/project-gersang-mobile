@@ -175,7 +175,7 @@ func _verify_transfer() -> void:
 	_check(r["success"] and seen.size() == 1 and seen[0]["carrying"]["merc_2"]["carried_equipment"] == {A2: 1.0} and (seen[0]["carrying"]["hero"]["carried_equipment"] as Dictionary).is_empty(), "AC13 Saved once, with the new owner")
 	var loaded := _load(seen[0])
 	_check(not loaded.is_empty() and (loaded["carrying"] as CharacterCarrying).get_equipment("merc_2").get_carried() == {A2: 1} and (loaded["carrying"] as CharacterCarrying).get_equipment("hero").is_empty() and (loaded["carrying"] as CharacterCarrying).get_equipment("merc_1").is_empty(), "AC14 Reloaded: merc_2 owns it, nobody else")
-	_check(int(seen[0]["version"]) == 13, "AC39 Saved as v13")
+	_check(int(seen[0]["version"]) == 14, "AC39 Saved as v13")
 	_sections_done.append("transfer")
 
 
@@ -215,7 +215,7 @@ func _verify_panel() -> void:
 	_check(main.carrying.get_equipment("hero").is_empty() and main.carrying.get_equipment("merc_2").get_carried() == {W1: 1} and main.carrying.get_equipment("merc_1").get_carried() == {A1: 1}, "AC01 / AC04 Only 守衛 #2 received it (not 守衛 #1)")
 	_check(panel.get_equipment_lines()["rows"] == [] and panel.get_selected_item() == "", "The UI refreshed at once (the Hero carries nothing)")
 	var raw: Variant = JSON.parse_string(FileAccess.get_file_as_string(TEST_SAVE))
-	_check(int(raw["version"]) == 13 and raw["carrying"]["merc_2"]["carried_equipment"] == {W1: 1.0} and (raw["carrying"]["hero"]["carried_equipment"] as Dictionary).is_empty(), "AC13 Saved at once (v13)")
+	_check(int(raw["version"]) == 14 and raw["carrying"]["merc_2"]["carried_equipment"] == {W1: 1.0} and (raw["carrying"]["hero"]["carried_equipment"] as Dictionary).is_empty(), "AC13 Saved at once (v13)")
 	# AC03 merc_1 -> merc_2 and AC02 merc_2 -> Hero through the UI.
 	panel.select_character("merc_1")
 	panel.select_item(A1)
@@ -468,7 +468,7 @@ func _verify_dismissal() -> void:
 # --- Scope ------------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 13 and SaveStore.V13_KEYS.size() == 13, "AC39 Save v13, no new section, no migration")
+	_check(SaveStore.VERSION == 14 and SaveStore.V14_KEYS == SaveStore.V13_KEYS + ["condition"], "AC39 Save v13, no new section, no migration")
 	var service := _code_only("res://scripts/equipment_transfer_service.gd").to_lower()
 	for word in ["get_inventory", "goods", "cargo", "warehouse", "wallet", "price", "sell", "equip(", "_set_equipped"]:
 		_check(not service.contains(word), "EquipmentTransferService touches no %s (equipment only, never equips)" % word)

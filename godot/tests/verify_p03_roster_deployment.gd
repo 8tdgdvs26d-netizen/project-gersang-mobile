@@ -320,7 +320,7 @@ func _verify_layout() -> void:
 # --- Scope -----------------------------------------------------------------------------------------------
 
 func _verify_scope() -> void:
-	_check(SaveStore.VERSION == 13, "AC23 Save v11")
+	_check(SaveStore.VERSION == 14, "AC23 Save v11")
 	for path in ["res://scripts/combat_battle.gd", "res://scripts/combat_view.gd", "res://scripts/combat_unit.gd", "res://scripts/combat_config.gd", "res://scripts/character_config.gd", "res://scripts/save_store.gd"]:
 		var code := _code_only(path).to_lower()
 		_check(not code.contains("deploy") and not code.contains("dismiss") and not code.contains("partyservice"), "AC24 %s knows nothing about deployment / dismissal" % path.get_file())
@@ -330,8 +330,9 @@ func _verify_scope() -> void:
 	# Stage 8 P04 (approved): combat starts from the Hero + the deployed roster
 	# (read only: it never deploys / dismisses).
 	# Stage 9 P04 (approved): plus each deployed Mercenary's authoritative
-	# stats (CharacterCarrying, by stable id).
-	_check(start > 0 and start_body.contains("CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed(), get_deployed_combat_stats())") and not start_body.contains("set_deployed") and not start_body.contains("dismiss") and not start_body.contains("PartyService"), "AC24 Combat starts from the Hero + the roster deployment (P04), read only")
+	# stats (CharacterCarrying, by stable id). Stage 10 P00 (approved): plus
+	# every character's persistent condition.
+	_check(start > 0 and start_body.contains("CombatBattle.from_party(_encounter_session.get_context(), character_stats, mercenary_roster.get_deployed(), get_deployed_combat_stats(), get_combat_conditions())") and not start_body.contains("set_deployed") and not start_body.contains("dismiss") and not start_body.contains("PartyService"), "AC24 Combat starts from the Hero + the roster deployment (P04), read only")
 	var party_start := main_code.find("func get_party_stats()")
 	_check(party_start > 0 and not main_code.substr(party_start, main_code.find("\nfunc ", party_start + 1) - party_start).contains("mercenary_roster"), "get_party_stats() is still the fixed Hero / merc_a / merc_b")
 	var party := _code_only("res://scripts/party_service.gd")
