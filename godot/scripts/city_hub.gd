@@ -28,15 +28,61 @@ signal dismiss_requested(mercenary_id: String)
 signal claim_requested(mercenary_id: String)
 ## Stage 9 P02: buy one `item_id` for the character `character_id` (stable id).
 signal equipment_buy_requested(character_id: String, item_id: String)
+## Stage 10 P02: 醫院 — the Hero's free treatment, and the chosen Mercenaries'
+## paid recovery (stable ids).
+signal hospital_hero_requested
+signal hospital_recover_requested(mercenary_ids: Array)
 
 const FACILITY_MARKET := "market"
 const FACILITY_TRANSPORT := "transport"
 const FACILITY_WAREHOUSE := "warehouse"
 const FACILITY_MERCENARY := "mercenary"
-## Stage 9 P02: 裝備商店. The five facility tabs share one row: 128 x 64 each,
-## 8 px apart (approved: Stage 8 P02's 150 px tabs cannot fit five in 720).
+## Stage 9 P02: 裝備商店. Stage 10 P02 (approved option A): the six facility
+## tabs share one row: 112 x 64 each, 8 px apart, font 24, labels never cut
+## (six 128 px tabs cannot fit in 720).
 const FACILITY_EQUIPMENT := "equipment"
-const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE, FACILITY_MERCENARY, FACILITY_EQUIPMENT]
+## Stage 10 P02: 醫院, only in a city with a Hospital
+## (WorldLayout.city_has_hospital).
+const FACILITY_HOSPITAL := "hospital"
+const FACILITIES := [FACILITY_MARKET, FACILITY_TRANSPORT, FACILITY_WAREHOUSE, FACILITY_MERCENARY, FACILITY_EQUIPMENT, FACILITY_HOSPITAL]
+## Stage 10 P02: 醫院 texts (RecoveryService decides who needs recovery and
+## the prices; the hub only shows them and passes stable ids back).
+const HOSPITAL_NOTE := "開發原型：主角治療免費；每名傭兵治療 $%s（不論傷勢）"
+const HOSPITAL_HERO_BUTTON_TEXT := "免費治療"
+const HOSPITAL_SELECT_TEXT := "選擇"
+const HOSPITAL_SELECTED_TEXT := "已選擇"
+const HOSPITAL_CONFIRM_TEXT := "確認治療"
+const HOSPITAL_HP_MP_TEXT := "血量 %d / %d　魔力 %d / %d"
+const HOSPITAL_DEAD_TEXT := "【陣亡】需要復活"
+const HOSPITAL_HURT_TEXT := "【受傷】需要治療"
+const HOSPITAL_HEALTHY_TEXT := "【狀態良好】無需治療"
+const HOSPITAL_FREE_TEXT := "治療費用：免費"
+const HOSPITAL_PRICE_TEXT := "治療費用：$%s"
+const HOSPITAL_NO_PRICE_TEXT := "治療費用：不需要"
+const HOSPITAL_NO_MERCENARY_TEXT := "尚未持有傭兵"
+const HOSPITAL_SUMMARY_TEXT := "已選傭兵 %d 名　合計 $%s　持有金錢 $%s"
+const HOSPITAL_SHORT_TEXT := "持有金錢不足，請減少選擇的傭兵"
+const HOSPITAL_HERO_SUCCESS_TEXT := "主角已完全康復"
+const HOSPITAL_SUCCESS_TEXT := "已治療 %d 名傭兵，費用 $%s"
+const HOSPITAL_FAILURE_MESSAGES := {
+	"ERR_INSUFFICIENT_FUNDS": HOSPITAL_SHORT_TEXT,
+	"ERR_NOTHING_TO_RECOVER": "沒有需要治療的角色",
+	"ERR_NOT_NEEDED": "選擇已更新，請重新選擇",
+	"ERR_UNKNOWN_MERCENARY": "選擇已更新，請重新選擇",
+	"ERR_DUPLICATE": "選擇已更新，請重新選擇",
+	"ERR_HERO_SELECTED": "選擇已更新，請重新選擇",
+	"ERR_INVALID_REQUEST": "選擇已更新，請重新選擇",
+	"ERR_SAVE_FAILED": "無法儲存，治療已取消",
+	"ERR_IN_COMBAT": "戰鬥中無法治療",
+	"ERR_NO_HOSPITAL": "此城市沒有醫院",
+}
+const HOSPITAL_GENERIC_FAILURE := "治療失敗"
+## The Hero's stable id (the hub never reads the roster model).
+const HOSPITAL_HERO_ID := "hero"
+const HOSPITAL_ROW_BUTTON_SIZE := Vector2(160, 88)
+const HOSPITAL_INFO_WIDTH := 440.0
+## The Mercenary list scrolls past this height (five rows fit on 720 x 1280).
+const HOSPITAL_SCROLL_MAX_HEIGHT := 560.0
 ## Stage 8 P02: Mercenary Center (傭兵中心) texts. Types, names, role lines
 ## and the price come from RecruitmentService.
 const MERCENARY_NOTE := "開發原型：每名傭兵 $1,000；同一類型可重複招聘"
@@ -246,6 +292,19 @@ var _equipment_recipients: Array = []
 var _equipment_recipient_id := EQUIPMENT_DEFAULT_RECIPIENT
 var _equipment_recipient_label: Label
 var _equipment_load_label: Label
+## Stage 10 P02: 醫院 — the last status (RecoveryService.get_status), the
+## Mercenary rows by stable id and the chosen stable ids (only ids that need
+## recovery; rebuilt from every status, never guessed).
+var _hospital_status := {}
+var _hospital_rows := {}
+var _hospital_selected: Array = []
+var _hospital_hero_row: Control
+var _hospital_scroll: ScrollContainer
+var _hospital_box: VBoxContainer
+var _hospital_empty_label: Label
+var _hospital_summary_label: Label
+var _hospital_short_label: Label
+var _hospital_confirm_button: Button
 ## Seconds the open confirmation has waited (UI time, restarts on every
 ## open); 確定解僱 is enabled once it reaches DISMISS_COUNTDOWN_SECONDS.
 var _dismiss_waited := 0.0
@@ -265,6 +324,8 @@ var _dismiss_waited := 0.0
 @onready var _mercenary_panel := $Center/Content/MercenaryPanel as VBoxContainer
 @onready var _equipment_tab := $Center/Content/FacilityTabs/EquipmentTabButton as Button
 @onready var _equipment_panel := $Center/Content/EquipmentPanel as VBoxContainer
+@onready var _hospital_tab := $Center/Content/FacilityTabs/HospitalTabButton as Button
+@onready var _hospital_panel := $Center/Content/HospitalPanel as VBoxContainer
 @onready var _warehouse_summary_label := $Center/Content/WarehouseSummaryLabel as Label
 @onready var _warehouse_status_label := $Center/Content/WarehouseStatusLabel as Label
 @onready var _warehouse_city_tabs := $Center/Content/WarehouseCityTabs as HBoxContainer
@@ -284,9 +345,11 @@ func _ready() -> void:
 	_warehouse_tab.pressed.connect(show_facility.bind(FACILITY_WAREHOUSE))
 	_mercenary_tab.pressed.connect(show_facility.bind(FACILITY_MERCENARY))
 	_equipment_tab.pressed.connect(show_facility.bind(FACILITY_EQUIPMENT))
+	_hospital_tab.pressed.connect(show_facility.bind(FACILITY_HOSPITAL))
 	_build_market_rows()
 	_build_mercenary_panel()
 	_build_equipment_panel()
+	_build_hospital_panel()
 	_build_warehouse_rows()
 	_build_warehouse_city_tabs()
 
@@ -300,6 +363,7 @@ func open(opened_city_id: String) -> void:
 	_feedback_label.text = ""
 	_travel_destination_label.text = ""
 	_travel_remaining_label.text = ""
+	_hospital_selected.clear()
 	_apply_view(FACILITY_MARKET)
 	visible = true
 
@@ -329,11 +393,17 @@ func show_travel_remaining(remaining_ms: int) -> void:
 func show_facility(facility: String) -> void:
 	if _traveling or not facility in FACILITIES:
 		return
+	# Stage 10 P02: 醫院 only where the city has one.
+	if facility == FACILITY_HOSPITAL and not has_hospital():
+		return
 	_feedback_label.text = ""
 	close_dismiss_confirm()
 	close_dismiss_blocked()
 	if facility == FACILITY_MERCENARY and _facility != FACILITY_MERCENARY:
 		show_mercenary_view(MERCENARY_VIEW_RECRUIT)
+	if facility == FACILITY_HOSPITAL and _facility != FACILITY_HOSPITAL:
+		_hospital_selected.clear()
+		_refresh_hospital()
 	_apply_view(facility)
 	facility_changed.emit(facility)
 
@@ -711,6 +781,7 @@ func show_trade_feedback(action: String, good_id: String, quantity: int, result:
 func close() -> void:
 	close_dismiss_confirm()
 	close_dismiss_blocked()
+	_hospital_selected.clear()
 	city_id = ""
 	_traveling = false
 	_travel_destination_label.text = ""
@@ -951,6 +1022,251 @@ func _on_equipment_buy_pressed(item_id: String) -> void:
 	if _equipment_recipient_id == "":
 		return
 	equipment_buy_requested.emit(_equipment_recipient_id, item_id)
+
+
+# --- Stage 10 P02: 醫院 ----------------------------------------------------------
+
+## Whether the open city has a Hospital (WorldLayout.HOSPITAL_CITY_IDS).
+func has_hospital() -> bool:
+	return not _traveling and WorldLayout.city_has_hospital(city_id)
+
+
+func _build_hospital_panel() -> void:
+	_hospital_hero_row = _make_hospital_row("HeroRow", HOSPITAL_HERO_BUTTON_TEXT, _on_hospital_hero_pressed)
+	_hospital_panel.add_child(_hospital_hero_row)
+	_hospital_scroll = ScrollContainer.new()
+	_hospital_scroll.name = "HospitalScroll"
+	_hospital_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_hospital_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_hospital_panel.add_child(_hospital_scroll)
+	_hospital_box = VBoxContainer.new()
+	_hospital_box.name = "MercenaryRows"
+	_hospital_box.add_theme_constant_override("separation", 10)
+	_hospital_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hospital_scroll.add_child(_hospital_box)
+	_hospital_empty_label = _make_label("NoMercenaryLabel", HOSPITAL_NO_MERCENARY_TEXT, DETAIL_FONT_SIZE)
+	_hospital_empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hospital_box.add_child(_hospital_empty_label)
+	_hospital_summary_label = _make_label("SummaryLabel", "", NAME_FONT_SIZE)
+	_hospital_summary_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hospital_panel.add_child(_hospital_summary_label)
+	_hospital_short_label = _make_label("ShortLabel", "", DETAIL_FONT_SIZE)
+	_hospital_short_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hospital_short_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45))
+	_hospital_panel.add_child(_hospital_short_label)
+	_hospital_confirm_button = _make_button("ConfirmRecoveryButton", HOSPITAL_CONFIRM_TEXT, _on_hospital_confirm_pressed)
+	_hospital_confirm_button.custom_minimum_size = Vector2(360, 88)
+	_hospital_confirm_button.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_hospital_panel.add_child(_hospital_confirm_button)
+	_refresh_hospital()
+
+
+## One character row: name / HP + MP / state / price on the left, its
+## button on the right.
+func _make_hospital_row(node_name: String, button_text: String, on_pressed: Callable) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.name = node_name
+	row.add_theme_constant_override("separation", 16)
+	var info := VBoxContainer.new()
+	info.name = "Info"
+	info.custom_minimum_size = Vector2(HOSPITAL_INFO_WIDTH, 0)
+	info.add_theme_constant_override("separation", 0)
+	info.add_child(_make_label("NameLabel", "", NAME_FONT_SIZE + 2))
+	for line in ["HpMpLabel", "StateLabel", "PriceLabel"]:
+		var label := _make_label(line, "", DETAIL_FONT_SIZE)
+		label.clip_text = true
+		label.custom_minimum_size = Vector2(HOSPITAL_INFO_WIDTH, 0)
+		info.add_child(label)
+	row.add_child(info)
+	var button := _make_button("RowButton", button_text, on_pressed)
+	button.custom_minimum_size = HOSPITAL_ROW_BUTTON_SIZE
+	button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(button)
+	return row
+
+
+## The Hospital's state from main.gd (RecoveryService.get_status: {hero,
+## mercenaries, balance, mercenary_price}). Rows follow the stable ids; the
+## selection keeps only ids that are still offered and still need recovery.
+func show_hospital(status: Dictionary) -> void:
+	_hospital_status = status.duplicate(true)
+	_refresh_hospital()
+	if _facility == FACILITY_HOSPITAL and not _traveling:
+		_note_label.text = HOSPITAL_NOTE % _thousands(int(_hospital_status.get("mercenary_price", 0)))
+
+
+func _refresh_hospital() -> void:
+	if _hospital_panel == null:
+		return
+	var hero: Dictionary = _hospital_status.get("hero", {})
+	_fill_hospital_row(_hospital_hero_row, hero, CharacterConfig.DISPLAY_NAMES["hero"])
+	var hero_button := _hospital_hero_row.find_child("RowButton", true, false) as Button
+	hero_button.disabled = not bool(hero.get("needs_recovery", false))
+	var entries: Array = _hospital_status.get("mercenaries", [])
+	var ids := entries.map(func(entry: Dictionary) -> String: return entry["id"])
+	if ids != _hospital_rows.keys():
+		for row in _hospital_rows.values():
+			_hospital_box.remove_child(row)
+			row.queue_free()
+		_hospital_rows.clear()
+		for id in ids:
+			var row := _make_hospital_row("Merc_" + id, HOSPITAL_SELECT_TEXT, _on_hospital_toggle.bind(id))
+			(row.find_child("RowButton", true, false) as Button).toggle_mode = true
+			_hospital_box.add_child(row)
+			_hospital_rows[id] = row
+	_hospital_empty_label.visible = ids.is_empty()
+	var offered := {}
+	for entry in entries:
+		offered[entry["id"]] = bool(entry["needs_recovery"])
+	_hospital_selected = _hospital_selected.filter(func(id: String) -> bool: return offered.get(id, false))
+	for entry in entries:
+		var row: Control = _hospital_rows[entry["id"]]
+		_fill_hospital_row(row, entry, str(entry.get("label", entry["id"])))
+		var button := row.find_child("RowButton", true, false) as Button
+		var chosen := _hospital_selected.has(entry["id"])
+		button.disabled = not bool(entry["needs_recovery"])
+		button.set_pressed_no_signal(chosen)
+		button.text = HOSPITAL_SELECTED_TEXT if chosen else HOSPITAL_SELECT_TEXT
+	var needed := _hospital_box.get_combined_minimum_size()
+	_hospital_scroll.custom_minimum_size = Vector2(needed.x, minf(needed.y, HOSPITAL_SCROLL_MAX_HEIGHT))
+	var total := get_hospital_total()
+	var balance := int(_hospital_status.get("balance", 0))
+	_hospital_summary_label.text = HOSPITAL_SUMMARY_TEXT % [_hospital_selected.size(), _thousands(total), _thousands(balance)]
+	var affordable := total <= balance
+	_hospital_short_label.text = "" if affordable else HOSPITAL_SHORT_TEXT
+	_hospital_confirm_button.text = HOSPITAL_CONFIRM_TEXT + ("（$%s）" % _thousands(total) if total > 0 else "")
+	_hospital_confirm_button.disabled = _hospital_selected.is_empty() or not affordable
+
+
+func _fill_hospital_row(row: Control, entry: Dictionary, name: String) -> void:
+	(row.find_child("NameLabel", true, false) as Label).text = name
+	if entry.is_empty():
+		for line in ["HpMpLabel", "StateLabel", "PriceLabel"]:
+			(row.find_child(line, true, false) as Label).text = ""
+		return
+	(row.find_child("HpMpLabel", true, false) as Label).text = HOSPITAL_HP_MP_TEXT % [int(entry["hp"]), int(entry["max_hp"]), int(entry["mp"]), int(entry["max_mp"])]
+	var state := HOSPITAL_HEALTHY_TEXT
+	if bool(entry["dead"]):
+		state = HOSPITAL_DEAD_TEXT
+	elif bool(entry["needs_recovery"]):
+		state = HOSPITAL_HURT_TEXT
+	var state_label := row.find_child("StateLabel", true, false) as Label
+	state_label.text = state
+	state_label.add_theme_color_override("font_color", Color(1.0, 0.5, 0.45) if bool(entry["dead"]) else (Color(0.94, 0.8, 0.4) if bool(entry["needs_recovery"]) else Color(0.6, 0.85, 0.6)))
+	var price := HOSPITAL_NO_PRICE_TEXT
+	if bool(entry["needs_recovery"]):
+		price = HOSPITAL_FREE_TEXT if bool(entry.get("hero", false)) else HOSPITAL_PRICE_TEXT % _thousands(int(entry["price"]))
+	(row.find_child("PriceLabel", true, false) as Label).text = price
+
+
+## The chosen Mercenaries' total: each one's price (RecoveryService, from
+## the status); the Hero never counts.
+func get_hospital_total() -> int:
+	var total := 0
+	for entry in _hospital_status.get("mercenaries", []):
+		if _hospital_selected.has(entry["id"]):
+			total += int(entry["price"])
+	return total
+
+
+## Chooses / drops a Mercenary by stable id (only one that needs recovery).
+func toggle_hospital_selection(mercenary_id: String) -> bool:
+	var entry := _hospital_entry(mercenary_id)
+	if entry.is_empty() or not bool(entry["needs_recovery"]):
+		_refresh_hospital()
+		return false
+	if _hospital_selected.has(mercenary_id):
+		_hospital_selected.erase(mercenary_id)
+	else:
+		_hospital_selected.append(mercenary_id)
+	_feedback_label.text = ""
+	_refresh_hospital()
+	return true
+
+
+func get_hospital_selection() -> Array:
+	return _hospital_selected.duplicate()
+
+
+func clear_hospital_selection() -> void:
+	_hospital_selected.clear()
+	_refresh_hospital()
+
+
+func get_hospital_ids() -> Array:
+	return _hospital_rows.keys()
+
+
+func get_hospital_hero_button() -> Button:
+	return _hospital_hero_row.find_child("RowButton", true, false) as Button
+
+
+func get_hospital_select_button(mercenary_id: String) -> Button:
+	return _hospital_rows[mercenary_id].find_child("RowButton", true, false) as Button if _hospital_rows.has(mercenary_id) else null
+
+
+func get_hospital_confirm_button() -> Button:
+	return _hospital_confirm_button
+
+
+## The texts of the Hero row ("hero") or a Mercenary row (stable id).
+func get_hospital_row_texts(id: String) -> Dictionary:
+	var row: Node = _hospital_hero_row if id == HOSPITAL_HERO_ID else _hospital_rows.get(id)
+	if row == null:
+		return {}
+	var texts := {}
+	for line in ["NameLabel", "HpMpLabel", "StateLabel", "PriceLabel"]:
+		texts[line] = (row.find_child(line, true, false) as Label).text
+	texts["button"] = (row.find_child("RowButton", true, false) as Button).text
+	return texts
+
+
+func get_hospital_summary_texts() -> Dictionary:
+	return {"summary": _hospital_summary_label.text, "short": _hospital_short_label.text, "confirm": _hospital_confirm_button.text}
+
+
+## The result of 免費治療 / 確認治療 (RecoveryService via main.gd). On success
+## the selection is cleared; on a stale choice it is dropped. main.gd then
+## shows the fresh status (refused / failed: the restored state).
+func show_hospital_feedback(result: Dictionary, hero_only: bool) -> void:
+	if result.get("success", false):
+		var parts := []
+		if result.get("hero_recovered", false):
+			parts.append(HOSPITAL_HERO_SUCCESS_TEXT)
+		var count: int = (result.get("mercenary_ids", []) as Array).size()
+		if count > 0 and not hero_only:
+			parts.append(HOSPITAL_SUCCESS_TEXT % [count, _thousands(int(result.get("total", 0)))])
+		_feedback_label.text = "；".join(parts)
+		# The free Hero recovery leaves the Mercenary choice as it is.
+		if not hero_only:
+			_hospital_selected.clear()
+	else:
+		var reason: String = result.get("reason", "")
+		_feedback_label.text = HOSPITAL_FAILURE_MESSAGES.get(reason, HOSPITAL_GENERIC_FAILURE)
+		if reason in ["ERR_NOT_NEEDED", "ERR_UNKNOWN_MERCENARY", "ERR_DUPLICATE", "ERR_HERO_SELECTED", "ERR_INVALID_REQUEST"]:
+			_hospital_selected.clear()
+	_refresh_hospital()
+
+
+func _hospital_entry(mercenary_id: String) -> Dictionary:
+	for entry in _hospital_status.get("mercenaries", []):
+		if entry["id"] == mercenary_id:
+			return entry
+	return {}
+
+
+func _on_hospital_toggle(mercenary_id: String) -> void:
+	toggle_hospital_selection(mercenary_id)
+
+
+func _on_hospital_hero_pressed() -> void:
+	hospital_hero_requested.emit()
+
+
+func _on_hospital_confirm_pressed() -> void:
+	if _hospital_selected.is_empty():
+		return
+	hospital_recover_requested.emit(_hospital_selected.duplicate())
 
 
 func _build_mercenary_panel() -> void:
@@ -1399,12 +1715,13 @@ func _apply_view(facility: String) -> void:
 	var warehouse := in_city and facility == FACILITY_WAREHOUSE
 	var mercenary := in_city and facility == FACILITY_MERCENARY
 	var equipment := in_city and facility == FACILITY_EQUIPMENT
-	var market := in_city and not transport and not warehouse and not mercenary and not equipment
+	var hospital := in_city and facility == FACILITY_HOSPITAL
+	var market := in_city and not transport and not warehouse and not mercenary and not equipment and not hospital
 	# The warehouse view trades the title, money and note lines for its own
 	# status line and city selector so the portrait layout keeps its height.
 	# The market view drops the prototype title for its T05 expected-result
 	# lines (prototype UI adjustment).
-	_title_label.visible = in_city and not warehouse and not market and not mercenary and not equipment
+	_title_label.visible = in_city and not warehouse and not market and not mercenary and not equipment and not hospital
 	_money_label.visible = not warehouse
 	_facility_tabs.visible = in_city
 	_note_label.visible = in_city and not warehouse
@@ -1416,17 +1733,20 @@ func _apply_view(facility: String) -> void:
 	_warehouse_rows_box.visible = warehouse
 	_warehouse_summary_label.visible = warehouse
 	# The warehouse view shows carrying capacity in its own summary line.
-	_cargo_label.visible = not warehouse and not mercenary and not equipment
+	_cargo_label.visible = not warehouse and not mercenary and not equipment and not hospital
 	_mercenary_panel.visible = mercenary
+	_hospital_panel.visible = hospital
+	_hospital_tab.visible = in_city and has_hospital()
 	# Stage 9 P02: the shop shows the chosen character's own capacity.
 	_equipment_panel.visible = equipment
 	_travel_panel.visible = _traveling
-	_note_label.text = TRANSPORT_NOTE if transport else (WAREHOUSE_NOTE if warehouse else (MERCENARY_NOTE if mercenary else (EQUIPMENT_NOTE if equipment else MARKET_NOTE)))
+	_note_label.text = TRANSPORT_NOTE if transport else (WAREHOUSE_NOTE if warehouse else (MERCENARY_NOTE if mercenary else (EQUIPMENT_NOTE if equipment else (HOSPITAL_NOTE % _thousands(int(_hospital_status.get("mercenary_price", 0))) if hospital else MARKET_NOTE))))
 	_market_tab.disabled = market
 	_transport_tab.disabled = transport
 	_warehouse_tab.disabled = warehouse
 	_mercenary_tab.disabled = mercenary
 	_equipment_tab.disabled = equipment
+	_hospital_tab.disabled = hospital
 
 
 static func _seconds(ms: int) -> int:

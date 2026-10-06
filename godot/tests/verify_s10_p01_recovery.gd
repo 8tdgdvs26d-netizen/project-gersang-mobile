@@ -346,7 +346,9 @@ func _verify_scope() -> void:
 	_check(service.contains("condition.set_condition(") and service.contains("wallet.spend(") and not service.contains("_records"), "Orchestrates CharacterCondition + Wallet (no second state)")
 	_check(RecoveryService.MERCENARY_PRICE == 100 and RecoveryService.HERO_PRICE == 0, "Prices: Mercenary $100, Hero $0")
 	var hub := _code_only("res://scripts/city_hub.gd").to_lower()
-	_check(not hub.contains("recover") and not hub.contains("hospital"), "No Hospital UI yet")
+	# Stage 10 P02 adds the 醫院 UI: it only shows the status and passes
+	# stable ids on — never runs a recovery, holds a price or touches money.
+	_check(not hub.contains("recoveryservice") and not hub.contains("$100") and not hub.contains("* 100") and not hub.contains("wallet") and not hub.contains("condition."), "The Hospital UI (Stage 10 P02) never runs recovery, holds the price or touches money")
 	_sections_done.append("scope")
 
 

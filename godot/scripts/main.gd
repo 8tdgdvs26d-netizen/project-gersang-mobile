@@ -162,6 +162,9 @@ func _ready() -> void:
 	_city_hub.dismiss_requested.connect(_on_dismiss_requested)
 	_city_hub.claim_requested.connect(_on_claim_requested)
 	_city_hub.equipment_buy_requested.connect(_on_equipment_buy_requested)
+	# Stage 10 P02: 醫院.
+	_city_hub.hospital_hero_requested.connect(_on_hospital_hero_requested)
+	_city_hub.hospital_recover_requested.connect(_on_hospital_recover_requested)
 	_enter_city_button.pressed.connect(_on_enter_city_button_pressed)
 	for child in $Actors.get_children():
 		if child is WorldMonster:
@@ -584,6 +587,7 @@ func _refresh_hub_summary() -> void:
 	_city_hub.show_warehouse(get_warehouse_view(view_city), inventory.get_items(), inventory.get_used_capacity(), inventory.get_max_capacity(), _next_request_id())
 	_refresh_mercenary_view()
 	_city_hub.show_equipment_shop(get_equipment_recipients())
+	_city_hub.show_hospital(get_hospital_status())
 
 
 ## Stage 9 P02: the 裝備商店 receiving characters — the Hero, then every owned
@@ -662,6 +666,48 @@ func transfer_character_item(from_id: Variant, to_id: Variant, item_id: Variant)
 ## the Hero and every owned Mercenary, prices, balance). Reads only.
 func get_recovery_status() -> Dictionary:
 	return RecoveryService.get_status(condition, wallet)
+
+
+## Stage 10 P02: the 醫院 view's state — get_recovery_status() with each
+## Mercenary's player label (by stable id; the hub never derives names).
+func get_hospital_status() -> Dictionary:
+	var status := get_recovery_status()
+	for entry in status.get("mercenaries", []):
+		var mercenary := mercenary_roster.get_mercenary(entry["id"])
+		entry["label"] = RecruitmentService.label(mercenary) if mercenary != null else entry["id"]
+	return status
+
+
+## Stage 10 P02: whether the player may use a Hospital now: inside a city
+## that has one (WorldLayout.city_has_hospital); never in the world or a
+## battle.
+func can_use_hospital() -> bool:
+	return is_in_city() and WorldLayout.city_has_hospital(current_city_id) and get_combat() == null
+
+
+## Stage 10 P02: 醫院 免費恢復 — recover_hero() where a Hospital may be used.
+func hospital_recover_hero() -> Dictionary:
+	if not can_use_hospital():
+		return {"success": false, "reason": "ERR_NO_HOSPITAL", "mercenary_ids": [], "total": 0, "affordable": false, "hero_recovered": false, "balance": wallet.get_balance()}
+	return recover_hero()
+
+
+## Stage 10 P02: 醫院 確認治療 — recover_characters(ids) where a Hospital may
+## be used (the Hero, free, is recovered with them when it needs it).
+func hospital_recover(mercenary_ids: Variant) -> Dictionary:
+	if not can_use_hospital():
+		return {"success": false, "reason": "ERR_NO_HOSPITAL", "mercenary_ids": [], "total": 0, "affordable": false, "hero_recovered": false, "balance": wallet.get_balance()}
+	return recover_characters(mercenary_ids)
+
+
+func _on_hospital_hero_requested() -> void:
+	_city_hub.show_hospital_feedback(hospital_recover_hero(), true)
+	_city_hub.show_hospital(get_hospital_status())
+
+
+func _on_hospital_recover_requested(mercenary_ids: Array) -> void:
+	_city_hub.show_hospital_feedback(hospital_recover(mercenary_ids), false)
+	_city_hub.show_hospital(get_hospital_status())
 
 
 ## Stage 10 P01: the Hero's free recovery alone, saved at once

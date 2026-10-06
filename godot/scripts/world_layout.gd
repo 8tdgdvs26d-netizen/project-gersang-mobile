@@ -19,6 +19,11 @@ const CITY_ANCHORS := {
 }
 const ACTIVE_CITY_IDS := ["A", "B"]
 const RESERVED_CITY_IDS := ["C", "D"]
+## Stage 10 P02 (approved Prototype rule): the cities with a Hospital — the
+## two active cities only; reserved C / D have none. Not a facility system:
+## one explicit list, easy to change.
+const HOSPITAL_CITY_IDS := ["A", "B"]
+
 
 ## Where the player reappears in the world after leaving each active city:
 ## beside the city on the A-B route, outside its entry trigger and collision.
@@ -95,3 +100,8 @@ const PROTOTYPE_GROUPS := [
 		"disposition": Disposition.PASSIVE,
 	},
 ]
+
+
+## Stage 10 P02: whether `city_id` has a Hospital (HOSPITAL_CITY_IDS).
+static func city_has_hospital(city_id: Variant) -> bool:
+	return typeof(city_id) == TYPE_STRING and HOSPITAL_CITY_IDS.has(city_id)
