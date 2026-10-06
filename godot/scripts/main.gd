@@ -658,6 +658,35 @@ func transfer_character_item(from_id: Variant, to_id: Variant, item_id: Variant)
 	return EquipmentTransferService.transfer(carrying, from_id, to_id, item_id, _persist)
 
 
+## Stage 10 P01: the Hospital's recovery state (RecoveryService.get_status:
+## the Hero and every owned Mercenary, prices, balance). Reads only.
+func get_recovery_status() -> Dictionary:
+	return RecoveryService.get_status(condition, wallet)
+
+
+## Stage 10 P01: the Hero's free recovery alone, saved at once
+## (RecoveryService.recover_hero); refused during a battle. A failure
+## changes nothing.
+func recover_hero() -> Dictionary:
+	if get_combat() != null:
+		return {"success": false, "reason": "ERR_IN_COMBAT", "mercenary_ids": [], "total": 0, "affordable": false, "hero_recovered": false, "balance": wallet.get_balance()}
+	var result := RecoveryService.recover_hero(condition, wallet, _persist)
+	_refresh_hub_summary()
+	return result
+
+
+## Stage 10 P01: the Hero (free) + the chosen Mercenaries (stable ids, $100
+## each) recovered and paid as one transaction, saved at once
+## (RecoveryService.recover); refused during a battle. A refusal or failure
+## changes nothing.
+func recover_characters(mercenary_ids: Variant) -> Dictionary:
+	if get_combat() != null:
+		return {"success": false, "reason": "ERR_IN_COMBAT", "mercenary_ids": [], "total": 0, "affordable": false, "hero_recovered": false, "balance": wallet.get_balance()}
+	var result := RecoveryService.recover(condition, wallet, mercenary_ids, _persist)
+	_refresh_hub_summary()
+	return result
+
+
 ## Stage 9 P02: buys one `item_id` at the 裝備商店 of the current city for
 ## the character `character_id` (stable id): paid, added to its carried
 ## equipment (not equipped) and saved as one transaction
