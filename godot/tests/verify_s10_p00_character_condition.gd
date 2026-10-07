@@ -730,6 +730,13 @@ func _verify_stress() -> void:
 	main._save_session()
 	var game_bad := 0
 	for cycle in range(6):
+		# Stage 10 P03 (approved): a RETREAT can become a DEFEAT when every
+		# friendly unit falls while retreating, and a DEFEAT returns the party
+		# to the nearest Hospital city. The next cycle departs again from there
+		# through the normal leave path (no outcome is forced or prevented).
+		if main.is_in_city():
+			_check(main.leave_city() and main.location.is_in_world(), "Stress: after a DEFEAT the party leaves the Hospital city and departs again")
+			await _settle()
 		await _respawn(main)
 		var battle: CombatBattle = await _start_battle(main)
 		if battle == null:
