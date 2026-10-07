@@ -219,7 +219,7 @@ func _verify_stress() -> void:
 	hub.recruit_requested.emit(["GUARDIAN", "MAGE", "STRATEGIST"][rng.randi_range(0, 2)])
 	var merc_id: String = main.mercenary_roster.get_owned()[0].get_id()
 	hub.deployment_requested.emit(merc_id, true)
-	var stats := {"rounds": 0, "bought": 0, "sold": 0, "victories": 0, "level_ups": 0, "transport": 0, "walk": 0, "reloads": 0, "duplicates": 0, "refused_trades": 0, "hospital": 0}
+	var stats := {"rounds": 0, "bought": 0, "sold": 0, "victories": 0, "level_ups": 0, "transport": 0, "walk": 0, "reloads": 0, "duplicates": 0, "refused_trades": 0, "hospital": 0, "transport_refused": 0}
 	var bad := {}
 	var start_money: int = main.wallet.get_balance()
 	var money_in := 0
@@ -311,15 +311,27 @@ func _verify_stress() -> void:
 		# To B: walk (placed at B's gate) or the passenger transport from A.
 		market_ref = _market_ref(main)
 		pre = _state(main)
-		if rng.randf() < 0.5:
+		var fare: int = TransportRoutes.get_route("A", "B")["fare"]
+		var by_transport := rng.randf() >= 0.5
+		if by_transport:
+			await _enter_city(main, WorldLayout.CITY_A)
+			_tally(bad, "reentered_a", main.current_city_id == "A")
+			if main.wallet.get_balance() < fare:
+				# The existing transport refuses an unaffordable fare (金錢不足)
+				# and changes nothing; the player walks instead.
+				stats["transport_refused"] += 1
+				var refused := _state(main)
+				hub.transport_requested.emit("B", "s11_%d_%d" % [_seed, round_index])
+				_tally(bad, "transport_refused", not main.is_traveling() and main.current_city_id == "A" and _same_except(refused, _state(main), []))
+				hub.leave_requested.emit()
+				await _settle()
+				by_transport = false
+		if not by_transport:
 			stats["walk"] += 1
 			await _enter_city(main, WorldLayout.CITY_B)
 			_tally(bad, "walk_b", main.current_city_id == "B" and _same_except(pre, _state(main), ["location", "market", "recovery"]))
 		else:
 			stats["transport"] += 1
-			await _enter_city(main, WorldLayout.CITY_A)
-			_tally(bad, "reentered_a", main.current_city_id == "A")
-			var fare: int = TransportRoutes.get_route("A", "B")["fare"]
 			hub.transport_requested.emit("B", "s11_%d_%d" % [_seed, round_index])
 			_tally(bad, "transport_started", main.is_traveling() and main.wallet.get_balance() == pre["wallet"] - fare)
 			money_out += fare
