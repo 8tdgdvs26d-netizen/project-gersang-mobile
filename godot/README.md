@@ -47,8 +47,25 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-Stage 11 P00: Core Loop Integration Gate (verification only). No production code, gameplay,
-balance, UI or Save change; Save stays v14.
+VS-01 WP00A: Repository Instruction Alignment (documentation only).
+
+Charlie approvals recorded on 2026-10-08 (Hong Kong time):
+
+- VS-00 Foundation & Prototype Audit Gate is formally closed
+- VS-01 WP01 Backend Provider & Authority Technical Spike v0.1 Blueprint is approved
+- Supabase is the first hands-on candidate, not the final locked provider
+- the Technical Spike uses Targeted Stress; the VS-01 System Gate remains Full Stress
+
+This package only aligns repository instructions with the current 2026-10-08 Project Sources.
+No production code, gameplay, balance, UI, Save, tests, CI, backend, environment variable or
+Development Save change. Save stays v14.
+
+After this documentation PR is reviewed and merged, reverify the live `main` exact SHA and begin
+VS-01 WP01 on a fresh branch. The Technical Spike remains isolated and may not silently become the
+production backend or lock a provider.
+
+Previous: Stage 11 P00: Core Loop Integration Gate (verification only). No production code,
+gameplay, balance, UI or Save change; Save stays v14.
 
 - `tests/verify_s11_p00_core_loop_integration.gd`: one session through the real runtime paths
   (City Hub signals, Enter button, encounter -> combat -> commit, Save v14): City A baseline ->
