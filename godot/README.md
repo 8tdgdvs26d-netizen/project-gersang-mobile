@@ -64,6 +64,21 @@ After this documentation PR is reviewed and merged, reverify the live `main` exa
 VS-01 WP01 on a fresh branch. The Technical Spike remains isolated and may not silently become the
 production backend or lock a provider.
 
+Previous: Stage 11 P00: Core Loop Integration Gate (verification only). No production code,
+gameplay, balance, UI or Save change; Save stays v14.
+
+- `tests/verify_s11_p00_core_loop_integration.gd`: one session through the real runtime paths
+  (City Hub signals, Enter button, encounter -> combat -> commit, Save v14): City A baseline ->
+  buy in A -> leave A -> real encounter -> VICTORY committed once (EXP / Level / Stat Points /
+  condition) -> City B -> sell the A good at B's quote (FIFO cost lot, realized profit) -> leave
+  B -> save / reload -> depart again. Every step's save equals the runtime state
+- reaching B: the player is placed at City B's gate (stands in for the walk; no travel mechanic
+  added); the stress also uses the existing passenger transport
+- seeded stress (`-- --seed=<n>`, 40 loops): random orders, duplicate commits / exit presses,
+  walk or transport, Hospital, sell-all in B, reloads; money conserved over the whole run
+- only the isolated test save `user://s11_p00_core_loop_test.json` is used; the test checks that
+  every Development Save file (`user://myrial_save*`) is byte-for-byte unchanged
+
 Previous: Stage 10 P03: Defeat -> nearest Hospital city safe return (stacked on P00 -> P01 ->
 P02). Save stays v14.
 
