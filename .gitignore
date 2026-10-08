@@ -3,3 +3,4 @@
 *.db
 .DS_Store
 node_modules/
+spikes/vs01_wp01_supabase/.env*
