@@ -43,12 +43,27 @@ WP01 boundaries:
   it back only if it is unchanged since the read (optimistic concurrency).
   The receipt is written create-only in the same transaction (`multiUpdate`).
   Lost races are recomputed (up to 32 attempts), and nothing partial is ever
-  stored.
+  stored. Only Nakama's version-check rejection (`Storage write rejected -
+  version check failed.`) counts as a lost race. Any other storage error
+  (database down, constraint, timeout) is not retried: the command fails at
+  once with `UNAVAILABLE storage_unavailable`. This applies equally to trade,
+  session begin and the rate limiter.
+- **Session first:** a trade checks the gameplay session before anything else.
+  A superseded session gets `gameplay_session_superseded`, with no write, no
+  replayed receipt and no progress.
 - **Idempotent:** the receipt is keyed by the client's idempotency key. The
   same key returns the original receipt (`replayed: true`) without applying
-  again, even from a new gameplay session after a reconnect or restart. Reusing
+  again. This holds for the CURRENT gameplay session, including a new session
+  begun after a reconnect or restart to recover an uncertain command. Reusing
   a key for a different order is refused. Business rejections (for example
   `insufficient_money`) are recorded too, so a retry gets the same answer.
+- **Client recovery:** only a receipt resolves a pending command. No answer,
+  an ambiguous storage error (gRPC 2 / 4 / 13 / 14) or a refused retry keeps
+  it pending under the same key. A new command refused before any decision
+  (malformed, superseded, rate limited) is dropped, because it never applied.
+- **Reads:** `vs01_progress_get` is open to any authenticated session of the
+  same account, superseded or not (D2 restricts writes). Other accounts never
+  see it.
 - **Audit:** every receipt stores before / after money and goods, price, total,
   server time, gameplay session and progress revision. It is also logged.
 - **Lock-down:** device, custom and social sign-in and linking are refused (A3,
