@@ -1,0 +1,30 @@
+name: nakama-server-unit-tests
+
+# VS-01 WP01: Nakama server (TypeScript) build + unit tests on Node.
+# This is NOT Godot CI and does not start a Nakama server. Godot tests and
+# live server tests run locally (see nakama/README.md).
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ["nakama/**", ".github/workflows/nakama-server.yml"]
+  push:
+    branches: [main]
+    paths: ["nakama/**", ".github/workflows/nakama-server.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  nakama-server-unit-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nakama
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm test
