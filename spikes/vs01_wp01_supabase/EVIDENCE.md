@@ -40,7 +40,14 @@ final provider, or establish a production backend architecture.
 | Live stress run 1 — `stress-1791531259707` (`--with-expiry`, one account) | **Overall PASS: 7 PASS, 1 NOT RUN — Charlie's Mac live run (reported)** | Started 2026-10-09T07:34:19Z (decoded from the run ID). parallel duplicate x20 PASS (20/20 accepted; the runner's PASS requires exactly one mutation); parallel unique x20 PASS (20/20); sequential burst x30 PASS (0 errors, p95 1529 ms); lost-response retry PASS; rejected-command atomic PASS; session takeover refused PASS; **lease-expiry takeover PASS**; cross-account isolation NOT RUN (no second test account) |
 | Live stress run 2 — `stress-1791532990918` (second account set, without `--with-expiry`) | **Overall PASS: 7 PASS, 1 NOT RUN — Charlie's Mac live run (reported)** | Started 2026-10-09T08:03:10Z (decoded from the run ID). **cross-account isolation PASS**: `foreignRowsVisible=0` (account B's REST read of account A's progress row returned no rows), `foreignCommand=ERR_SESSION_STALE` (account B's command against A's session was refused); lease-expiry takeover NOT RUN in this run (covered by run 1). Per-check figures for the other six checks were not provided |
 | Live stress — combined coverage | **All 8 checks PASS across the two runs** | Lease-expiry takeover from run 1, cross-account isolation from run 2; the other six checks passed in both runs |
+| Stress coverage acceptance (GPT, 2026-10-09) | Conditionally accepted for the WP01 disposable spike only | **The formal VS-01 Full Stress has not passed.** Long-running (soak), multi-account concurrency, reconnect and mobile lifecycle (background/foreground, mobile networks) still need verification in later VS-01 work |
 | Godot live probe (`live_probe.gd`) | **PASS on `7b51b25` (Mac, live)** | 2026-10-09, Charlie's Mac, clean acceptance checkout `myrial-wp01-acceptance` detached at `7b51b25`, Godot 4.7.2 macOS headless, disposable project `myrial-vs01-spike`: `GODOT_LIVE_PROBE PASS {"auth":"PASS","get_state":"PASS","idempotency":"PASS","revision":56,"session":"PASS"}`. The earlier run on `68d1470` failed with `ERR_UNCONFIGURED` (init timing, fixed above) |
+
+**Evidence boundary of the cross-account check:** it verified exactly two paths. Account B's REST read of
+account A's progress row returned no rows (`foreignRowsVisible=0`), and account B's command against
+account A's session was refused (`foreignCommand=ERR_SESSION_STALE`). It does **not** show that every
+cross-account attack path is closed; for example forged RPC parameters, other Edge Function actions
+and tampered JWTs were not specifically tested.
 
 **Provenance of the live smoke and live stress results:** these are Charlie's real runs on the Mac
 against the disposable project `myrial-vs01-spike`, as summarised by Charlie on 2026-10-09; the two
@@ -87,6 +94,7 @@ inherit the spike's grants.
 | Check | Status | Note |
 | --- | --- | --- |
 | Complete raw logs of the Mac live smoke and live stress runs | NOT PROVIDED | Results above are Charlie's summary; the commit of each run was not stated |
+| Rate limiting (Canonical A14) | NOT VERIFIED | The spike implements no rate limiting and platform-level limits were not tested; the overall A14 security requirement must not be claimed as met |
 | Lease expiry and cross-account isolation in a single run | NOT RUN | Each passed in a separate run (see the combined-coverage row) |
 | Physical iPhone/iPad network and resume test | DEFERRED (Charlie-approved 2026-10-09) | Not waived: acceptance stays owed by the later VS-01 work package that wires the game to the backend, at the latest before VS-14. See `BLUEPRINT.md` §10 |
 | PlayFab / Firebase hands-on spike | NOT RUN | Desk comparison only: `PROVIDER_COMPARISON.md` |

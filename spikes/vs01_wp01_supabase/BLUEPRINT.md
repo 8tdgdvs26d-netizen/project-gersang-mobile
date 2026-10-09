@@ -56,7 +56,7 @@ WP01 本身**冇直接玩家可見功能**。佢嘅價值係保護將來嘅 Core
 | AC4 | 多個唔同 command 並行冇遺失更新 | PASS：Live Stress 並行 x20 |
 | AC5 | 被拒 command 唔改任何狀態 | PASS：Live Stress、離線模型 |
 | AC6 | 單一 Active Session：搶佔被拒、Lease 過期後可以接手、舊 Session 失效 | PASS：Live Stress 兩次 run 合計 |
-| AC7 | 跨帳號隔離 | PASS：`stress-1791532990918` |
+| AC7 | 跨帳號隔離 | PASS（有限範圍）：`stress-1791532990918` 只驗證咗兩條路徑——B 帳號經 REST 讀 A 嘅進度（`foreignRowsVisible=0`）同 B 帳號用 A 嘅 session 落 command（`ERR_SESSION_STALE`）。**唔代表所有跨帳號攻擊路徑已驗證** |
 | AC8 | Secret 唔入 Client、Repo、Log | PASS：合約測試；Godot client 只讀 publishable key |
 | AC9 | Godot 4.x Client 可以登入、開 session、讀狀態、提交 idempotent command | PASS：Mac Godot Live Probe（`7b51b25`） |
 | AC10 | 現有 Regression 無退步 | PASS：`npm test` 516/516、Godot 65/65 + 新增 9/9、Node/npm CI |
@@ -64,6 +64,9 @@ WP01 本身**冇直接玩家可見功能**。佢嘅價值係保護將來嘅 Core
 | AC12 | 有 Provider 比較作鎖定前參考 | 已提交 `PROVIDER_COMPARISON.md`（文件比較，唔係實機 Spike） |
 | AC13 | iPhone／iPad 實機整合 | **DEFERRED（Charlie 批准延後，見 §10）** |
 | AC14 | 玩家體驗驗收 | **DEFERRED（Charlie 批准延後，見 §10）** |
+| AC15 | Canonical A14 Rate Limiting | **未完成正式驗證**：Spike 冇實作任何 Rate Limiting（Edge Function、RPC 都冇）；Supabase 平台層（例如 Auth）嘅速率限制亦未驗證 |
+
+**安全要求狀態：** A14 列明嘅 auth、permissions、server validation、duplicate／replay protection 已有 Spike 證據；**Rate Limiting 未驗證**。因此**唔可以宣稱 A14 整體安全要求已達標**。
 
 Live Smoke 同 Live Stress 係 Charlie 提供嘅 Mac 真實執行紀錄，冇完整原始日誌，Claude 冇獨立核實（見 `EVIDENCE.md` 來源說明）。
 
@@ -95,6 +98,8 @@ Live Smoke 同 Live Stress 係 Charlie 提供嘅 Mac 真實執行紀錄，冇完
 5. **Spike ≠ 正式架構**：測試 command 只係 `spike_item`；正式經濟、戰鬥結果驗證、市場 Aggregation 都未設計。
 6. **原 Blueprint 原文缺失**：本文件屬補寫，可能同原文有出入。
 7. **Provider 比較只係文件研究**：PlayFab／Firebase 冇實機驗證；成本需要以官方最新價格再核實。
+8. **Rate Limiting 未驗證（A14）**：Spike 冇實作；正式 Backend 必須設計並驗證 per-account／per-IP 嘅 command 及登入速率限制，先可以宣稱 A14 達標。
+9. **跨帳號隔離證據有限**：只驗證咗 REST 讀取同 command 兩條路徑；其他攻擊路徑（例如 RPC 參數偽造、Edge Function 其他 action、JWT 篡改）未有專門測試。
 
 ## 10. Charlie 批准嘅延後項目（2026-10-09）
 
@@ -110,7 +115,7 @@ Charlie 已批准 WP01 以「後端技術可行性驗證 Gate」處理，並**�
 - Canonical §21：VS-01 = **Stress Full**；Canonical §22：只可以升級，唔可以自行降低。WP01 沿用 **Full**，唔降級。
 - 已執行：離線模型（100 次重複、50 次連續、搶佔／過期）、Live 並行重複 x20、並行唯一 x20、連續 x30（延遲／錯誤）、回覆遺失重試、原子拒絕、Session 搶佔、Lease 過期接手、跨帳號隔離。
 - 未執行：長時間 soak、多帳號同時大量並發、真機流動網絡。
-- 以上已執行範圍是否足以滿足 WP01（可棄置 Spike）嘅「Full」要求，交 GPT 判斷；Claude 唔自行宣稱達標。
+- GPT 已對 WP01 可棄置技術 Spike 嘅現有 Stress Coverage **有條件接受**（2026-10-09）。呢個接受只限 WP01 Spike；**正式 VS-01 Full Stress 尚未通過**。長時間運行（soak）、多帳號並發、Reconnect、Mobile Lifecycle（背景／前景切換、流動網絡）仍須喺後續 VS-01 Work Package 驗證。
 
 ## 12. Gate 狀態
 
