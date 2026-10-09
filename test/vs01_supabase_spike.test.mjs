@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {spawnSync} from 'node:child_process';
 import {AuthorityModel} from '../spikes/vs01_wp01_supabase/model/authority_model.mjs';
 
 const command=(key,overrides={})=>({sessionId:'session-a',idempotencyKey:key,moneyDelta:-10,itemId:'spike_item',quantityDelta:1,...overrides});
@@ -82,4 +83,21 @@ test('VS-01 spike contracts keep authority and secrets out of the client',async(
   assert.doesNotMatch(godot,/SERVICE_ROLE|service_role|SUPABASE_SERVICE/);
   assert.match(godot,/OS\.get_environment/);
   assert.match(godot,/HTTPRequest/);
+});
+
+test('VS-01 spike live runners report BLOCKED without credentials and never print secrets',async()=>{
+  const root=new URL('..',import.meta.url);
+  const env=Object.fromEntries(Object.entries(process.env).filter(([name])=>!name.startsWith('MYRIAL_SPIKE_')));
+  for(const script of ['live_smoke.mjs','live_stress.mjs']){
+    const run=spawnSync(process.execPath,[new URL(`spikes/vs01_wp01_supabase/${script}`,root).pathname],{env,encoding:'utf8'});
+    assert.equal(run.status,2,script);
+    assert.match(run.stderr,/BLOCKED missing environment/,script);
+  }
+  const stress=await readFile(new URL('spikes/vs01_wp01_supabase/live_stress.mjs',root),'utf8');
+  const probe=await readFile(new URL('godot/spikes/vs01_wp01_supabase/live_probe.gd',root),'utf8');
+  assert.doesNotMatch(stress,/SERVICE_ROLE|service_role/);
+  assert.doesNotMatch(stress,/console\.\w+\([^)]*(token|password|key)\b/i);
+  assert.doesNotMatch(probe,/SERVICE_ROLE|service_role|SUPABASE_SERVICE/);
+  assert.doesNotMatch(probe,/print\([^)]*(password|access_token|_publishable_key)/);
+  assert.match(probe,/quit\(2\)/);
 });

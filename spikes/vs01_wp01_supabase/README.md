@@ -33,12 +33,24 @@ The live run must show authentication, session acquisition, one idempotent comma
 direct progress write. A missing environment exits with code 2 and means **BLOCKED / no evidence**,
 not PASS or FAIL.
 
+Then, with the same environment:
+
+7. `node spikes/vs01_wp01_supabase/live_stress.mjs --with-expiry` — parallel duplicate and unique
+   commands, a rapid burst with latency capture, lost-response retry, atomic rejection, refused
+   session takeover and (with `--with-expiry`, about 100 s) lease-expiry takeover. Set
+   `MYRIAL_SPIKE_EMAIL_B` / `MYRIAL_SPIKE_PASSWORD_B` for a second disposable account to add the
+   cross-account check. After a lease-expiry run the fixed session is stale for up to 90 s, so wait
+   before rerunning the smoke test.
+8. `godot/tests/run_tests.sh verify_tc_font` once (imports the project), then
+   `<Godot> --headless --path godot --script res://spikes/vs01_wp01_supabase/live_probe.gd` —
+   the Godot client signs in, acquires the session, reads state and checks one idempotent command.
+
+Both print only PASS/FAIL results and non-secret numbers, and exit 2 (BLOCKED) without the
+environment.
+
 ## Still required before a provider decision
 
-- live Supabase run against a disposable project;
-- a second active-session attempt and lease-expiry/takeover observation;
-- repeated/parallel remote requests and latency/error capture;
-- Godot Local Automated Test with a configured disposable account;
+- live Supabase runs of steps 6–8 against the disposable project;
 - real-iPhone login, command, reconnect and state-read smoke;
 - cost/limits observation and the same acceptance matrix for PlayFab and Firebase.
 

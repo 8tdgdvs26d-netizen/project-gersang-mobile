@@ -1,6 +1,6 @@
 # VS-01 WP01 Technical Spike Evidence
 
-Evidence dates: 2026-10-08 UTC (scaffold), 2026-10-09 UTC (service_role SELECT fix and deployed-permission check)
+Evidence dates: 2026-10-08 UTC (scaffold), 2026-10-09 UTC (service_role SELECT fix, deployed-permission check, live runners)
 
 Verified base: `main` at `3774aefacfb92736c63034c51565aa4e675d3aeb`
 
@@ -30,6 +30,9 @@ final provider, or establish a production backend architecture.
 | Godot local automated tests (existing suite) | PASS | Godot 4.7.2 headless, clean workspace and isolated `user://`, on `e3447d8`: 65/65 scripts passed. The fix changes no Godot file |
 | Local PostgreSQL 16 permission probe | PASS (local, not Supabase) | Unpatched: service_role SELECT on progress denied. Patched: allowed; every other role/privilege result unchanged; players still read only their own row |
 | Deployed Supabase permission check (read-only SQL v3, run by Charlie) | PASS with known platform difference | 39 rows: 29 OK, 6 INFO (all owners `postgres`), 4 MISMATCH (service_role extra privileges, below). Function bodies match the repository (md5), EXECUTE only for service_role, exact `search_path`, RLS on all four tables, single own-row SELECT policy, no PUBLIC grants, no unexpected objects, policies or grantees |
+| Live stress runner (`live_stress.mjs`) | READY, not run live | Against a local mock built on the authority model: all 8 checks PASS (including `--with-expiry` and cross-account); with a deliberately broken mock that drops receipts it FAILs the duplicate and retry checks; without environment it exits 2 (BLOCKED) |
+| Godot live probe (`live_probe.gd`) | READY, not run live | Godot 4.7.2 headless: parses and runs; exits 2 (BLOCKED) without environment and refuses a non-HTTPS URL |
+| Live-runner regression | PASS | `node --test test/vs01_supabase_spike.test.mjs`: 8 passed; both live runners exit 2 without environment and print no secret |
 | Deployed service_role SELECT fix | CONFIRMED | Deployed `spike_player_progress` grants SELECT to service_role, matching this branch |
 
 ## The service_role SELECT fix
@@ -67,9 +70,9 @@ inherit the spike's grants.
 
 | Check | Status | Note |
 | --- | --- | --- |
-| Live smoke (`live_smoke.mjs`) | NOT VERIFIED IN REPO | Reported 4/4 PASS in the Mac session handoff; no run output is recorded here, and it was not re-run with credentials in this session |
-| Live stress: parallel/repeated remote requests, second session and lease-expiry takeover, latency/error capture | NOT RUN | Requires disposable-project credentials |
-| Godot live probe with a disposable account | NOT RUN | Requires disposable-project credentials |
+| Live smoke (`live_smoke.mjs`) | BLOCKED (cloud session) | Reported 4/4 PASS in the Mac session handoff; no run output is recorded here. 2026-10-09: no disposable-project credentials in the cloud session, runner exited 2 |
+| Live stress (`live_stress.mjs --with-expiry`) | BLOCKED | Same: no credentials in the cloud session. Runner is ready |
+| Godot live probe (`live_probe.gd`) | BLOCKED | Same: no credentials in the cloud session. Probe is ready |
 | Physical iPhone/iPad network and resume test | NOT RUN | Requires live backend plus device build |
 | PlayFab / Firebase comparison | NOT RUN | |
 | Player experience acceptance | NOT RUN | A technical test pass is not a player-experience pass |
