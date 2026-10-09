@@ -37,15 +37,19 @@ final provider, or establish a production backend architecture.
 | Live-runner regression | PASS | `node --test test/vs01_supabase_spike.test.mjs`: 8 passed; both live runners exit 2 without environment and print no secret |
 | Deployed service_role SELECT fix | CONFIRMED | Deployed `spike_player_progress` grants SELECT to service_role, matching this branch |
 | Live smoke (`live_smoke.mjs`) | **PASS 4/4 — Charlie's Mac live run (reported)** | auth, session, idempotency and direct-write denial PASS; revision 1. See the provenance note below |
-| Live stress (`live_stress.mjs --with-expiry`) | **PASS 7/7 run, 1 NOT RUN — Charlie's Mac live run (reported)** | parallel duplicate x20 PASS (20/20 accepted; the runner's PASS requires exactly one mutation); parallel unique x20 PASS (20/20); sequential burst x30 PASS (0 errors, p95 1529 ms); lost-response retry PASS; rejected-command atomic PASS; session takeover refused PASS; lease-expiry takeover PASS; cross-account isolation NOT RUN (no second test account). See the provenance note below |
+| Live stress run 1 — `stress-1791531259707` (`--with-expiry`, one account) | **Overall PASS: 7 PASS, 1 NOT RUN — Charlie's Mac live run (reported)** | Started 2026-10-09T07:34:19Z (decoded from the run ID). parallel duplicate x20 PASS (20/20 accepted; the runner's PASS requires exactly one mutation); parallel unique x20 PASS (20/20); sequential burst x30 PASS (0 errors, p95 1529 ms); lost-response retry PASS; rejected-command atomic PASS; session takeover refused PASS; **lease-expiry takeover PASS**; cross-account isolation NOT RUN (no second test account) |
+| Live stress run 2 — `stress-1791532990918` (second account set, without `--with-expiry`) | **Overall PASS: 7 PASS, 1 NOT RUN — Charlie's Mac live run (reported)** | Started 2026-10-09T08:03:10Z (decoded from the run ID). **cross-account isolation PASS**: `foreignRowsVisible=0` (account B's REST read of account A's progress row returned no rows), `foreignCommand=ERR_SESSION_STALE` (account B's command against A's session was refused); lease-expiry takeover NOT RUN in this run (covered by run 1). Per-check figures for the other six checks were not provided |
+| Live stress — combined coverage | **All 8 checks PASS across the two runs** | Lease-expiry takeover from run 1, cross-account isolation from run 2; the other six checks passed in both runs |
 | Godot live probe (`live_probe.gd`) | **PASS on `7b51b25` (Mac, live)** | 2026-10-09, Charlie's Mac, clean acceptance checkout `myrial-wp01-acceptance` detached at `7b51b25`, Godot 4.7.2 macOS headless, disposable project `myrial-vs01-spike`: `GODOT_LIVE_PROBE PASS {"auth":"PASS","get_state":"PASS","idempotency":"PASS","revision":56,"session":"PASS"}`. The earlier run on `68d1470` failed with `ERR_UNCONFIGURED` (init timing, fixed above) |
 
 **Provenance of the live smoke and live stress results:** these are Charlie's real runs on the Mac
-against the disposable project `myrial-vs01-spike`, as summarised by Charlie on 2026-10-09. The
-complete raw output logs were not provided, and the exact commit, run order and account of each run
-were not recorded (both runners are unchanged since `68d1470`). Claude did not re-run or
-independently verify them; the cloud session has no credentials. The Godot live probe row records
-the raw PASS line Charlie pasted.
+against the disposable project `myrial-vs01-spike`, as summarised by Charlie on 2026-10-09; the two
+stress runs are identified by their run IDs (`stress-<start time in ms>`). The complete raw output
+logs were not provided, and the commit of each run was not stated. The runners are byte-identical
+from `68d1470` through `9652cfa` (`git diff` is empty), so every commit Charlie could have used ran
+the same smoke and stress code; by start time, stress run 1 predates the `7b51b25` commit and run 2
+follows `9652cfa`. Claude did not re-run or independently verify these results; the cloud session
+has no credentials. The Godot live probe row records the raw PASS line Charlie pasted.
 
 ## The service_role SELECT fix
 
@@ -82,8 +86,8 @@ inherit the spike's grants.
 
 | Check | Status | Note |
 | --- | --- | --- |
-| Live cross-account isolation (`live_stress.mjs` with `MYRIAL_SPIKE_EMAIL_B` / `MYRIAL_SPIKE_PASSWORD_B`) | NOT RUN | No second disposable test account was configured on the Mac |
-| Complete raw logs of the Mac live smoke and live stress runs | NOT PROVIDED | Results above are Charlie's summary |
+| Complete raw logs of the Mac live smoke and live stress runs | NOT PROVIDED | Results above are Charlie's summary; the commit of each run was not stated |
+| Lease expiry and cross-account isolation in a single run | NOT RUN | Each passed in a separate run (see the combined-coverage row) |
 | Physical iPhone/iPad network and resume test | NOT RUN | Requires live backend plus device build |
 | PlayFab / Firebase comparison | NOT RUN | |
 | Player experience acceptance | NOT RUN | A technical test pass is not a player-experience pass |
