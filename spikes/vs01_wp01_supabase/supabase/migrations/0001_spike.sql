@@ -47,6 +47,9 @@ revoke all on public.spike_active_sessions from anon, authenticated;
 revoke all on public.spike_command_receipts from anon, authenticated;
 revoke all on public.spike_audit_log from anon, authenticated;
 grant select on public.spike_player_progress to authenticated;
+-- The Edge Function's get_state reads progress with the service-role client; projects without
+-- default Data API grants deny that read unless it is granted explicitly. Writes stay in RPCs.
+grant select on public.spike_player_progress to service_role;
 
 create or replace function public.spike_start_session(
   p_user_id uuid,

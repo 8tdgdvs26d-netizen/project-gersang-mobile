@@ -1,6 +1,6 @@
 # VS-01 WP01 Technical Spike Evidence
 
-Evidence date: 2026-10-08 UTC
+Evidence dates: 2026-10-08 UTC (scaffold), 2026-10-09 UTC (service_role SELECT fix and deployed-permission check)
 
 Verified base: `main` at `3774aefacfb92736c63034c51565aa4e675d3aeb`
 
@@ -25,23 +25,53 @@ final provider, or establish a production backend architecture.
 | Cross-account access denial | PASS (model) | A second account cannot read or command the first account's state |
 | Rapid unique commands | PASS (model) | 50 unique commands produce 50 revisions and the expected balance |
 | SQL and client contract scan | PASS | RLS, revoked client writes, service-only functions and non-secret Godot env inputs are asserted |
-| Full JavaScript regression | PASS | `npm test`: 515 passed, 0 failed after spike changes |
+| service_role SELECT regression | PASS | New assertion fails on the unpatched migration (6/7) and passes with the fix (7/7); it also forbids service_role writes on progress |
+| Full JavaScript regression | PASS | `npm test`: 515 passed, 0 failed with the fix applied |
+| Godot local automated tests (existing suite) | PASS | Godot 4.7.2 headless, clean workspace and isolated `user://`, on `e3447d8`: 65/65 scripts passed. The fix changes no Godot file |
+| Local PostgreSQL 16 permission probe | PASS (local, not Supabase) | Unpatched: service_role SELECT on progress denied. Patched: allowed; every other role/privilege result unchanged; players still read only their own row |
+| Deployed Supabase permission check (read-only SQL v3, run by Charlie) | PASS with known platform difference | 39 rows: 29 OK, 6 INFO (all owners `postgres`), 4 MISMATCH (service_role extra privileges, below). Function bodies match the repository (md5), EXECUTE only for service_role, exact `search_path`, RLS on all four tables, single own-row SELECT policy, no PUBLIC grants, no unexpected objects, policies or grantees |
+| Deployed service_role SELECT fix | CONFIRMED | Deployed `spike_player_progress` grants SELECT to service_role, matching this branch |
+
+## The service_role SELECT fix
+
+The Edge Function's `get_state` reads `spike_player_progress` through the service-role client. On this
+Supabase project, new tables in `public` do not grant SELECT/INSERT/UPDATE/DELETE to `service_role`
+by default, so that read was denied. The migration now grants only `SELECT` on that one table to
+`service_role`. Writes still go through the two `SECURITY DEFINER` RPCs. No player (`anon`,
+`authenticated`) privilege changed.
+
+## Known platform difference / known risk (accepted by Charlie for the disposable spike)
+
+Read-only catalog checks on the Supabase project show:
+
+- `postgres` default privileges for new tables in `public` grant `MAINTAIN, REFERENCES, TRIGGER,
+  TRUNCATE` to `service_role` (and to `anon`/`authenticated`, which the migration revokes);
+- each spike table carries exactly that direct grant for `service_role`, plus `SELECT` on progress;
+- `service_role` is not a member of any other role (no inheritance path);
+- `supabase_admin` has a separate, broader set of default privileges.
+
+Therefore `service_role` holds `MAINTAIN/TRUNCATE/REFERENCES/TRIGGER` on the four spike tables. These
+are not reachable through the Data API or the Edge Function (no TRUNCATE/DDL endpoint), and no player
+role is affected. Someone running SQL as `service_role` could, for example, truncate receipts or the
+audit log, but that party already holds a credential that bypasses RLS. Risk for this disposable
+spike: low. The spike keeps these privileges; no REVOKE was applied.
+
+The v3 check did not test `MAINTAIN` (a PostgreSQL 17 privilege); its presence comes from the
+default-privilege query above.
+
+**Production requirement:** the formal backend schema must re-review least privilege table by table
+(including explicit revokes from `service_role` and handling of `supabase_admin` defaults). It must not
+inherit the spike's grants.
 
 ## Evidence not yet obtained
 
-| Check | Status | Blocker |
+| Check | Status | Note |
 | --- | --- | --- |
-| Disposable Supabase live smoke | BLOCKED | No spike URL, publishable key, test account or session id is configured |
-| Deployed Edge Function and migration | NOT RUN | Requires a disposable Supabase project; no provider has been locked |
-| Godot headless validation | NOT RUN | Godot executable is unavailable in this environment |
-| Physical iPhone/iPad network and resume test | NOT RUN | Requires live disposable backend plus device build |
+| Live smoke (`live_smoke.mjs`) | NOT VERIFIED IN REPO | Reported 4/4 PASS in the Mac session handoff; no run output is recorded here, and it was not re-run with credentials in this session |
+| Live stress: parallel/repeated remote requests, second session and lease-expiry takeover, latency/error capture | NOT RUN | Requires disposable-project credentials |
+| Godot live probe with a disposable account | NOT RUN | Requires disposable-project credentials |
+| Physical iPhone/iPad network and resume test | NOT RUN | Requires live backend plus device build |
+| PlayFab / Firebase comparison | NOT RUN | |
 | Player experience acceptance | NOT RUN | A technical test pass is not a player-experience pass |
 
-The provider decision therefore remains open. The current evidence validates the proposed authority
-contract and test harness only; it does not establish that Supabase has passed the Technical Spike.
-
-## Next evidence step
-
-Create or nominate one disposable Supabase project, apply only the spike migration and Edge Function,
-create two disposable test users, and run the live smoke plus cross-account/session-takeover checks.
-No production data, gameplay wiring or Save v14 migration is required.
+The provider decision therefore remains open.

@@ -73,6 +73,8 @@ test('VS-01 spike contracts keep authority and secrets out of the client',async(
   assert.match(sql,/pg_advisory_xact_lock/);
   assert.match(sql,/primary key \(user_id, idempotency_key\)/);
   assert.match(sql,/spike_audit_log/);
+  assert.match(sql,/grant select on public\.spike_player_progress to service_role;/);
+  assert.doesNotMatch(sql,/grant (insert|update|delete|all)[^;]* on public\.spike_player_progress to service_role/);
   assert.match(edge,/auth\.getUser\(\)/);
   assert.match(edge,/SUPABASE_SERVICE_ROLE_KEY/);
   assert.match(edge,/safeDatabaseError/);
