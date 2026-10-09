@@ -17,6 +17,14 @@ extends Node
 ## memory and can be exported / imported by the caller; writing them to disk
 ## needs a separately approved local-storage decision (Save v14 untouched).
 
+## Session policy A (Charlie, 2026-10-10): another device took over this
+## character. This client can no longer act on it or read its latest
+## progress until begin_gameplay_session() takes it back. A later UI WP shows
+## the prompt; WP01 only provides the signal and state.
+signal gameplay_session_superseded
+
+const SUPERSEDED_REASON := "gameplay_session_superseded"
+
 const NakamaHTTPAdapterScript := preload("res://addons/com.heroiclabs.nakama/client/NakamaHTTPAdapter.gd")
 
 const RPC_SESSION_BEGIN := "vs01_session_begin"
@@ -49,6 +57,7 @@ var _client: NakamaClient
 var _adapter: Node
 var _session: NakamaSession
 var _gameplay_session_id := ""
+var _superseded := false
 ## Last server-confirmed progress view, or {} when none. Read-only cache.
 var _confirmed := {}
 ## idempotency_key -> {"action", "city_id", "good_id", "quantity"}
@@ -77,6 +86,10 @@ func get_user_id() -> String:
 
 func get_gameplay_session_id() -> String:
 	return _gameplay_session_id
+
+
+func is_gameplay_session_superseded() -> bool:
+	return _superseded
 
 
 ## Deep copy, so callers cannot edit the cache.
@@ -113,6 +126,7 @@ func sign_in_email_test(email: String, password: String, create: bool = true) ->
 func sign_out_local() -> void:
 	_session = null
 	_gameplay_session_id = ""
+	_superseded = false
 	_confirmed = {}
 
 
@@ -122,14 +136,21 @@ func begin_gameplay_session() -> Dictionary:
 	var result := await _rpc(RPC_SESSION_BEGIN, {})
 	if result["status"] == OK:
 		_gameplay_session_id = result["data"]["gameplay_session_id"]
+		_superseded = false
 		_confirmed = result["data"]["progress"]
 	return result
 
 
+## Policy A: only the active gameplay session may read the latest progress.
 func refresh_progress() -> Dictionary:
-	var result := await _rpc(RPC_PROGRESS_GET, {})
+	if _gameplay_session_id.is_empty():
+		return _outcome(NO_GAMEPLAY_SESSION, "no_gameplay_session")
+	if _superseded:
+		return _outcome(REJECTED, SUPERSEDED_REASON)
+	var result := await _rpc(RPC_PROGRESS_GET, {"gameplay_session_id": _gameplay_session_id})
 	if result["status"] == OK:
 		_confirmed = result["data"]["progress"]
+	_note_superseded(result)
 	return result
 
 
@@ -165,11 +186,21 @@ func _trade(command: Dictionary, key: String) -> Dictionary:
 		return _outcome(NO_GAMEPLAY_SESSION, "no_gameplay_session")
 	var is_retry := _pending.has(key)
 	_pending[key] = command.duplicate(true)
+	if _superseded:
+		# Known to be taken over: nothing is sent. A retry stays pending for
+		# recovery after begin_gameplay_session(); a new command is dropped.
+		if not is_retry:
+			_pending.erase(key)
+		var refused := _outcome(REJECTED, SUPERSEDED_REASON)
+		refused["idempotency_key"] = key
+		refused["pending"] = _pending.has(key)
+		return refused
 	var payload := command.duplicate(true)
 	payload["gameplay_session_id"] = _gameplay_session_id
 	payload["idempotency_key"] = key
 	var result := await _rpc(RPC_TRADE, payload)
 	result["idempotency_key"] = key
+	_note_superseded(result)
 	if result["status"] == REJECTED and result.get("grpc_status", 0) in AMBIGUOUS_GRPC_CODES:
 		result["status"] = UNCERTAIN
 	if result["status"] == OK:
@@ -189,6 +220,12 @@ func _trade(command: Dictionary, key: String) -> Dictionary:
 	# superseded client recovers by beginning a new gameplay session first.
 	result["pending"] = _pending.has(key)
 	return result
+
+
+func _note_superseded(result: Dictionary) -> void:
+	if result["status"] == REJECTED and result["reason"] == SUPERSEDED_REASON and not _superseded:
+		_superseded = true
+		gameplay_session_superseded.emit()
 
 
 func _rpc(id: String, payload: Dictionary) -> Dictionary:

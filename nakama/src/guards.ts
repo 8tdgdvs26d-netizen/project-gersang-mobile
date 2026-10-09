@@ -76,11 +76,21 @@ function guardParsePayload(payload: string, keys: string[]): { [key: string]: an
   return data;
 }
 
-function guardParseTrade(payload: string): { gameplaySessionId: string; idempotencyKey: string; req: TradeRequest } {
-  const d = guardParsePayload(payload, ["gameplay_session_id", "idempotency_key", "action", "city_id", "good_id", "quantity"]);
-  if (typeof d.gameplay_session_id !== "string" || !GUARD_SESSION_ID_PATTERN.test(d.gameplay_session_id)) {
+function guardParseSessionId(value: any): string {
+  if (typeof value !== "string" || !GUARD_SESSION_ID_PATTERN.test(value)) {
     throw guardError(nkruntime.Codes.INVALID_ARGUMENT, "invalid_gameplay_session_id");
   }
+  return value;
+}
+
+// Payload of a read that only names the caller's gameplay session.
+function guardParseSessionOnly(payload: string): string {
+  return guardParseSessionId(guardParsePayload(payload, ["gameplay_session_id"]).gameplay_session_id);
+}
+
+function guardParseTrade(payload: string): { gameplaySessionId: string; idempotencyKey: string; req: TradeRequest } {
+  const d = guardParsePayload(payload, ["gameplay_session_id", "idempotency_key", "action", "city_id", "good_id", "quantity"]);
+  guardParseSessionId(d.gameplay_session_id);
   if (typeof d.idempotency_key !== "string" || !GUARD_IDEMPOTENCY_KEY_PATTERN.test(d.idempotency_key)) {
     throw guardError(nkruntime.Codes.INVALID_ARGUMENT, "invalid_idempotency_key");
   }

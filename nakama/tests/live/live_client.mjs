@@ -1,5 +1,7 @@
 // Minimal Nakama HTTP client for the LIVE tests (local server only).
 import { randomBytes } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 export const BASE = process.env.MYRIAL_NAKAMA_URL ?? "http://127.0.0.1:17350";
 const SERVER_KEY = process.env.MYRIAL_NAKAMA_SERVER_KEY ?? "defaultkey";
@@ -50,10 +52,12 @@ export async function api(account, method, path, payload) {
 
 export const newKey = () => randomBytes(16).toString("hex");
 
+// Starts (takes over) the gameplay session and remembers it on the account.
 export async function begin(account) {
   const r = await rpc(account, "vs01_session_begin", {});
   if (r.status !== 200) throw new Error(`begin failed ${r.status} ${JSON.stringify(r.body)}`);
-  return r.body.gameplay_session_id;
+  account.gsid = r.body.gameplay_session_id;
+  return account.gsid;
 }
 
 export function order(gsid, overrides = {}) {
@@ -63,23 +67,21 @@ export function order(gsid, overrides = {}) {
   };
 }
 
-export async function progress(account) {
-  const r = await rpc(account, "vs01_progress_get", {});
-  if (r.status !== 200) throw new Error(`progress failed ${r.status}`);
+// Session policy A: progress is readable only by the ACTIVE gameplay session.
+export async function progress(account, gsid = account.gsid) {
+  const r = await rpc(account, "vs01_progress_get", { gameplay_session_id: gsid });
+  if (r.status !== 200) throw new Error(`progress failed ${r.status} ${JSON.stringify(r.body)}`);
   return r.body.progress;
 }
 
+// Receipts are server-only (policy A), so tests read them straight from the
+// LOCAL test database. The user id comes from the server-issued token.
+const COMPOSE_DIR = fileURLToPath(new URL("../..", import.meta.url));
 export async function receipts(account) {
-  const out = [];
-  let cursor = "";
-  do {
-    const q = new URLSearchParams({ limit: "100", user_id: account.userId });
-    if (cursor) q.set("cursor", cursor);
-    const r = await api(account, "GET", `/v2/storage/vs01_wp01_receipts?${q}`);
-    for (const o of r.body.objects ?? []) out.push(JSON.parse(o.value));
-    cursor = r.body.cursor ?? "";
-  } while (cursor);
-  return out;
+  if (!/^[0-9a-f-]{36}$/.test(account.userId)) throw new Error("bad user id");
+  const out = execFileSync(process.env.DOCKER ?? "docker", ["compose", "exec", "-T", "postgres", "psql", "-U", "postgres", "-d", "nakama", "-tAc",
+    `SELECT value FROM storage WHERE collection = 'vs01_wp01_receipts' AND user_id = '${account.userId}'`], { cwd: COMPOSE_DIR, maxBuffer: 64 * 1024 * 1024 });
+  return out.toString().split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

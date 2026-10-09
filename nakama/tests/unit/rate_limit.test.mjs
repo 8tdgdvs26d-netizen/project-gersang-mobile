@@ -163,9 +163,13 @@ test("tampered or client-made rate state fails closed", () => {
 test("session begin and progress reads are limited with the same mechanism", () => {
   const { nk } = setup();
   let begins = 0;
-  for (let i = 0; i < 15; i++) if (call(m, "rpcSessionBegin", nk, ctxFor(U), "{}").ok) begins += 1;
+  let g = null;
+  for (let i = 0; i < 15; i++) {
+    const r = call(m, "rpcSessionBegin", nk, ctxFor(U), "{}");
+    if (r.ok) { begins += 1; g = r.value.gameplay_session_id; }
+  }
   assert.equal(begins, 9, "10 per 60 s, one already used by setup");
   let reads = 0;
-  for (let i = 0; i < 70; i++) if (call(m, "rpcProgressGet", nk, ctxFor(U), "{}").ok) reads += 1;
+  for (let i = 0; i < 70; i++) if (call(m, "rpcProgressGet", nk, ctxFor(U), { gameplay_session_id: g }).ok) reads += 1;
   assert.equal(reads, 60);
 });

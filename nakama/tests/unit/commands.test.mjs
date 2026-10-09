@@ -37,7 +37,9 @@ test("session begin creates server default progress", () => {
   assert.equal(r.value.progress.max_capacity, 100);
   assert.equal(r.value.progress.quotes.A.test_good_01.buy_price, 84);
   assert.equal(stored(nk, U1).gameplay_session_id, r.value.gameplay_session_id);
-  assert.equal(nk.storageRead([{ collection: "vs01_wp01_progress", key: "trade", userId: U1 }])[0].permissionWrite, 0);
+  const obj = nk.storageRead([{ collection: "vs01_wp01_progress", key: "trade", userId: U1 }])[0];
+  assert.equal(obj.permissionWrite, 0);
+  assert.equal(obj.permissionRead, 0, "policy A: server-only, no owner read through the storage API");
 });
 
 test("buy applies atomically and writes an audit receipt", () => {
@@ -55,6 +57,8 @@ test("buy applies atomically and writes an audit receipt", () => {
   assert.equal(p.market.A.test_good_01.current_stock, 90);
   const receipt = nk.storageRead([{ collection: "vs01_wp01_receipts", key: "receipt-key-00000001", userId: U1 }])[0];
   assert.equal(receipt.permissionWrite, 0);
+  assert.equal(receipt.permissionRead, 0, "policy A: server-only");
+  assert.equal(stored(nk, U1) && nk.storageRead([{ collection: "vs01_wp01_progress", key: "trade", userId: U1 }])[0].permissionRead, 0, "progress stays server-only after a trade");
   assert.equal(receipt.value.progress_revision, p.revision);
 });
 
@@ -146,6 +150,19 @@ test("a superseded session cannot replay receipts or read progress through trade
   assert.deepEqual(fresh.value.receipt, first.value.receipt);
   assert.notEqual(g2, g4);
   assert.equal(stored(nk, U1).money, 9160, "applied once");
+});
+
+test("the session check and the receipt replay come from ONE storage read (one snapshot)", () => {
+  const nk = new FakeNakama();
+  const g = begin(nk, U1);
+  const key = "snapshot-key-0000001";
+  trade(nk, U1, g, { idempotency_key: key });
+  const reads = [];
+  const original = nk.storageRead.bind(nk);
+  nk.storageRead = (ids) => { reads.push(JSON.parse(JSON.stringify(ids.map((i) => i.collection)))); return original(ids); };
+  assert.equal(trade(nk, U1, g, { idempotency_key: key }).value.replayed, true);
+  const tradeReads = reads.filter((r) => r.includes("vs01_wp01_progress") || r.includes("vs01_wp01_receipts"));
+  assert.deepEqual(tradeReads, [["vs01_wp01_progress", "vs01_wp01_receipts"]], "progress (session) and receipt are read together, once");
 });
 
 test("a non-conflict database error in the trade transaction fails fast, unretried (review finding 3)", () => {
@@ -293,7 +310,7 @@ test("accounts are isolated: one player's command never touches another's progre
 
 test("unauthenticated (server-key) calls are refused", () => {
   const nk = new FakeNakama();
-  for (const fn of ["rpcSessionBegin", "rpcProgressGet", "rpcTrade", "rpcCombatRewardClaim"]) {
+  for (const fn of ["rpcSessionBegin", "rpcProgressGet", "rpcTrade", "rpcCombatRewardClaim"]) {  // payload irrelevant: auth is first
     assert.equal(call(m, fn, nk, ctxFor(""), "{}").code, UNAUTHENTICATED, fn);
   }
 });
@@ -333,12 +350,56 @@ test("API lock-down hooks: guest auth denied, email only with the local test fla
   assert.throws(() => m.guardDenyClientStorageWrite(ctx, null, null, {}), (e) => e.code === PERMISSION_DENIED);
 });
 
+test("progress_get is limited to the ACTIVE gameplay session (policy A)", () => {
+  const nk = new FakeNakama();
+  const g1 = begin(nk, U1);
+  assert.equal(call(m, "rpcProgressGet", nk, ctxFor(U1), { gameplay_session_id: g1 }).value.progress.money, 10000);
+  const g2 = begin(nk, U1); // another device takes over
+  const stale = call(m, "rpcProgressGet", nk, ctxFor(U1), { gameplay_session_id: g1 });
+  assert.equal(stale.code, ABORTED);
+  assert.equal(stale.message, "gameplay_session_superseded");
+  assert.equal(stale.value, undefined, "no progress for the old session");
+  assert.ok(call(m, "rpcProgressGet", nk, ctxFor(U1), { gameplay_session_id: g2 }).ok);
+  // The old device takes the character back: now the other one is refused.
+  const g3 = begin(nk, U1);
+  assert.equal(call(m, "rpcProgressGet", nk, ctxFor(U1), { gameplay_session_id: g2 }).message, "gameplay_session_superseded");
+  assert.ok(call(m, "rpcProgressGet", nk, ctxFor(U1), { gameplay_session_id: g3 }).ok);
+  // Malformed or missing session ids, and no session at all.
+  assert.equal(call(m, "rpcProgressGet", nk, ctxFor(U1), "{}").code, INVALID_ARGUMENT);
+  assert.equal(call(m, "rpcProgressGet", nk, ctxFor(U1), { gameplay_session_id: "x" }).message, "invalid_gameplay_session_id");
+  assert.equal(call(m, "rpcProgressGet", nk, ctxFor(U1), { gameplay_session_id: g3, extra: 1 }).message, "unexpected_fields");
+  assert.equal(call(m, "rpcProgressGet", nk, ctxFor(U2), { gameplay_session_id: g3 }).code, FAILED_PRECONDITION, "another account without a session");
+  begin(nk, U2);
+  assert.equal(call(m, "rpcProgressGet", nk, ctxFor(U2), { gameplay_session_id: g3 }).message, "gameplay_session_superseded", "another account cannot use this session id");
+});
+
+test("device switching never loses or doubles confirmed progress (policy A rule 5)", () => {
+  const nk = new FakeNakama();
+  let g = begin(nk, U1);
+  const keys = [];
+  let spent = 0;
+  for (let i = 0; i < 6; i++) {
+    const key = `switch-key-${String(i).padStart(9, "0")}`;
+    keys.push(key);
+    const r = trade(nk, U1, g, { idempotency_key: key, quantity: 1 });
+    assert.equal(r.value.receipt.status, "applied");
+    spent += r.value.receipt.total;
+    const old = g;
+    g = begin(nk, U1); // switch device after every order
+    assert.equal(trade(nk, U1, old, { quantity: 1 }).message, "gameplay_session_superseded");
+  }
+  for (const key of keys) assert.equal(trade(nk, U1, g, { idempotency_key: key, quantity: 1 }).value.replayed, true);
+  const p = stored(nk, U1);
+  assert.equal(p.backpack.test_good_01, 6, "six orders, each exactly once");
+  assert.equal(p.money, 10000 - spent, "money moved exactly once per order");
+});
+
 test("progress_get shows recovered prices without persisting them", () => {
   const nk = new FakeNakama();
   const g = begin(nk, U1);
   trade(nk, U1, g);
   const before = JSON.stringify(stored(nk, U1));
-  const r = call(m, "rpcProgressGet", nk, ctxFor(U1), "{}");
+  const r = call(m, "rpcProgressGet", nk, ctxFor(U1), { gameplay_session_id: g });
   assert.ok(r.ok);
   assert.equal(r.value.progress.money, 9160);
   assert.equal(JSON.stringify(stored(nk, U1)), before);

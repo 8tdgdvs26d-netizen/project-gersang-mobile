@@ -67,16 +67,40 @@ func _run() -> void:
 	_check(p1b.get_user_id() == p1a.get_user_id(), "Same account on both devices")
 	_check((await p1b.begin_gameplay_session())["status"] == OnlineProgressClient.OK, "Second device starts a gameplay session")
 	_check(p1b.get_confirmed_progress()["money"] == 10300, "Second device reads the same server progress")
+	# Session policy A: the old device is told, can neither act nor read, and
+	# can take the character back; nothing is lost or doubled.
+	var prompts := [0]
+	p1a.gameplay_session_superseded.connect(func(): prompts[0] += 1)
 	var stale := await p1a.buy("A", "test_good_01", 1)
 	_check(stale["status"] == OnlineProgressClient.REJECTED and stale["reason"] == "gameplay_session_superseded", "Old session can no longer write: %s" % str(stale))
+	_check(p1a.is_gameplay_session_superseded() and prompts[0] == 1, "Old device is told its session was taken over (signal once)")
+	p1a._superseded = false  # bypass the local block once: the SERVER must refuse the read too
+	var stale_read := await p1a.refresh_progress()
+	_check(stale_read["status"] == OnlineProgressClient.REJECTED and stale_read["reason"] == "gameplay_session_superseded" and not stale_read.has("data"), "Old session cannot read the latest progress (server-side)")
+	_check((await p1a.refresh_progress())["reason"] == "gameplay_session_superseded", "...and is refused locally once known")
+	var own_native = await p1a._get_client().read_storage_objects_async(p1a._session, [NakamaStorageObjectId.new("vs01_wp01_progress", "trade", p1a.get_user_id())])
+	_check(not own_native.is_exception() and own_native.objects.is_empty(), "Old device's token cannot read the progress through the generic storage API either")
 	_check((await p1b.buy("A", "test_good_01", 1))["receipt"]["status"] == "applied", "New session can write")
-	# Review finding 1: the old session cannot replay an old key either, and a
+	# The old session cannot replay an old key either (server-side), and a
 	# refused retry keeps the command pending (its outcome is unknown to it).
 	var old_key: String = bought["idempotency_key"]
 	p1a.import_pending_commands({old_key: {"action": "buy", "city_id": "A", "good_id": "test_good_01", "quantity": 10}})
+	p1a._superseded = false
 	var stale_replay := await p1a.recover_pending()
 	_check(stale_replay[0]["status"] == OnlineProgressClient.REJECTED and stale_replay[0]["reason"] == "gameplay_session_superseded" and not stale_replay[0].has("receipt"), "Old session gets no receipt replay: %s" % str(stale_replay[0]))
 	_check(p1a.get_pending_commands().has(old_key), "Refused retry stays pending in the old client")
+	# The player takes the character back on the old device, recovers there.
+	var money_before_back: int = p1b.get_confirmed_progress()["money"]
+	var prompts_b := [0]
+	p1b.gameplay_session_superseded.connect(func(): prompts_b[0] += 1)
+	_check((await p1a.begin_gameplay_session())["status"] == OnlineProgressClient.OK and not p1a.is_gameplay_session_superseded(), "Old device can take the character back")
+	_check(p1a.get_confirmed_progress()["money"] == money_before_back, "Taking back loses no confirmed progress")
+	var back_replay := await p1a.recover_pending()
+	_check(back_replay[0]["status"] == OnlineProgressClient.OK and back_replay[0]["replayed"] == true and p1a.get_pending_commands().is_empty(), "After taking back, the pending key replays its original receipt")
+	_check(p1a.get_confirmed_progress()["money"] == money_before_back, "No duplicate charge from the recovery")
+	_check((await p1b.refresh_progress())["reason"] == "gameplay_session_superseded" and prompts_b[0] == 1, "Now the second device is told it was taken over")
+	_check((await p1b.begin_gameplay_session())["status"] == OnlineProgressClient.OK, "Second device takes it back again for the next steps")
+	_check(p1b.get_confirmed_progress()["money"] == money_before_back, "Device switching kept the progress exactly")
 	var money_after_takeover: int = p1b.get_confirmed_progress()["money"]
 
 	# 5. Network loss mid-command: uncertain, then deterministic recovery.

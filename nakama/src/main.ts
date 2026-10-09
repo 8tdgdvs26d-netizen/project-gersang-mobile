@@ -2,7 +2,7 @@
 //
 // Client commands (all require an authenticated Nakama session):
 //   vs01_session_begin       start a gameplay session; any earlier one is superseded (D2)
-//   vs01_progress_get        read the server-confirmed progress
+//   vs01_progress_get        read the server-confirmed progress (current gameplay session only)
 //   vs01_trade               one buy / sell order, atomic and idempotent (D3)
 //   vs01_combat_reward_claim always rejected until combat validation is approved (D4)
 
@@ -13,26 +13,66 @@ const RECEIPT_COLLECTION = "vs01_wp01_receipts";
 // with ABORTED and the client may retry.
 const TRADE_MAX_ATTEMPTS = 32;
 
-function readServerObject(nk: nkruntime.Nakama, collection: string, key: string, userId: string): nkruntime.StorageObject | null {
-  const found = nk.storageRead([{ collection: collection, key: key, userId: userId }]);
-  if (found.length === 0) return null;
-  // Every WP01 object is server-written with permissionWrite 0. Anything else
-  // did not come from this module: fail closed instead of trusting it.
-  if (found[0].permissionWrite !== 0) throw guardError(nkruntime.Codes.INTERNAL, "server_object_not_trusted");
-  return found[0];
+// Every WP01 object is server-written with permissionWrite 0. Anything else
+// did not come from this module: fail closed instead of trusting it.
+function trustServerObject(obj: nkruntime.StorageObject): nkruntime.StorageObject {
+  if (obj.permissionWrite !== 0) throw guardError(nkruntime.Codes.INTERNAL, "server_object_not_trusted");
+  return obj;
 }
 
-function readProgress(nk: nkruntime.Nakama, userId: string): { progress: TradeProgress; version: string } | null {
-  const obj = readServerObject(nk, PROGRESS_COLLECTION, PROGRESS_KEY, userId);
+function trustProgress(obj: nkruntime.StorageObject | null): { progress: TradeProgress; version: string } | null {
   if (obj === null) return null;
+  trustServerObject(obj);
   if (!progressIsValid(obj.value)) throw guardError(nkruntime.Codes.INTERNAL, "progress_corrupt");
   return { progress: obj.value as TradeProgress, version: obj.version };
 }
 
+function readProgress(nk: nkruntime.Nakama, userId: string): { progress: TradeProgress; version: string } | null {
+  const found = nk.storageRead([{ collection: PROGRESS_COLLECTION, key: PROGRESS_KEY, userId: userId }]);
+  return trustProgress(found.length > 0 ? found[0] : null);
+}
+
+// Progress and one receipt in ONE storageRead. Nakama v3.25.0 serves a
+// multi-object read with a single SELECT (server/core_storage.go,
+// StorageReadObjects), which in PostgreSQL READ COMMITTED sees one snapshot:
+// the session check and the receipt replay describe the same moment, so a
+// takeover cannot slip in between them.
+function readProgressAndReceipt(nk: nkruntime.Nakama, userId: string, key: string): {
+  current: { progress: TradeProgress; version: string } | null; receipt: nkruntime.StorageObject | null;
+} {
+  const found = nk.storageRead([
+    { collection: PROGRESS_COLLECTION, key: PROGRESS_KEY, userId: userId },
+    { collection: RECEIPT_COLLECTION, key: key, userId: userId },
+  ]);
+  let progressObj: nkruntime.StorageObject | null = null;
+  let receipt: nkruntime.StorageObject | null = null;
+  for (let i = 0; i < found.length; i++) {
+    if (found[i].collection === PROGRESS_COLLECTION && found[i].key === PROGRESS_KEY) progressObj = found[i];
+    else if (found[i].collection === RECEIPT_COLLECTION && found[i].key === key) receipt = trustServerObject(found[i]);
+  }
+  return { current: trustProgress(progressObj), receipt: receipt };
+}
+
+// Session policy A (Charlie, 2026-10-10): only the active gameplay session
+// may act on the character OR read its latest progress. A superseded device
+// is told so and can take over again with vs01_session_begin.
+function requireActiveSession(current: { progress: TradeProgress; version: string } | null, gameplaySessionId: string): { progress: TradeProgress; version: string } {
+  if (current === null) throw guardError(nkruntime.Codes.FAILED_PRECONDITION, "no_gameplay_session");
+  if (current.progress.gameplay_session_id !== gameplaySessionId) {
+    throw guardError(nkruntime.Codes.ABORTED, "gameplay_session_superseded");
+  }
+  return current;
+}
+
+// Policy A: progress and receipts are server-only (permissionRead 0). With
+// owner read (1), any auth token of the account, including a superseded
+// device's, could read them through Nakama's generic storage API and bypass
+// the gameplay-session check. Clients read only through the session-checked
+// RPCs.
 function progressWrite(userId: string, p: TradeProgress, version: string): nkruntime.StorageWriteRequest {
   return {
     collection: PROGRESS_COLLECTION, key: PROGRESS_KEY, userId: userId, value: p,
-    version: version, permissionRead: 1, permissionWrite: 0,
+    version: version, permissionRead: 0, permissionWrite: 0,
   };
 }
 
@@ -62,9 +102,8 @@ function rpcSessionBegin(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: n
 function rpcProgressGet(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, payload: string): string {
   const userId = guardRequireUser(ctx);
   guardRateLimit(ctx, logger, nk, "progress_get", userId);
-  guardParsePayload(payload, []);
-  const current = readProgress(nk, userId);
-  if (current === null) throw guardError(nkruntime.Codes.FAILED_PRECONDITION, "no_gameplay_session");
+  const gameplaySessionId = guardParseSessionOnly(payload);
+  const current = requireActiveSession(readProgress(nk, userId), gameplaySessionId);
   // Show recovered prices without persisting; the next trade persists them.
   const view = progressClone(current.progress);
   progressAdvanceRecovery(view, Date.now());
@@ -77,17 +116,15 @@ function rpcTrade(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntim
   const cmd = guardParseTrade(payload);
   const hash = guardRequestHash(cmd.req);
   for (let attempt = 0; attempt < TRADE_MAX_ATTEMPTS; attempt++) {
-    // 1. Single active gameplay session (D2), checked BEFORE anything else:
-    //    a superseded session gets no write, no replayed receipt and no
-    //    progress. A client recovering an uncertain command first begins a
-    //    new session and retries the same key from it (step 2 then replays).
-    const current = readProgress(nk, userId);
-    if (current === null) throw guardError(nkruntime.Codes.FAILED_PRECONDITION, "no_gameplay_session");
-    if (current.progress.gameplay_session_id !== cmd.gameplaySessionId) {
-      throw guardError(nkruntime.Codes.ABORTED, "gameplay_session_superseded");
-    }
+    // 1. Single active gameplay session (D2 / policy A), checked BEFORE
+    //    anything else and in the same snapshot as the receipt: a superseded
+    //    session gets no write, no replayed receipt and no progress. A client
+    //    recovering an uncertain command first begins a new session and
+    //    retries the same key from it (step 2 then replays).
+    const read = readProgressAndReceipt(nk, userId, cmd.idempotencyKey);
+    const current = requireActiveSession(read.current, cmd.gameplaySessionId);
     // 2. Idempotency: a known key returns its original receipt, unchanged.
-    const prior = readServerObject(nk, RECEIPT_COLLECTION, cmd.idempotencyKey, userId);
+    const prior = read.receipt;
     if (prior !== null) {
       if (prior.value.request_hash !== hash) throw guardError(nkruntime.Codes.INVALID_ARGUMENT, "idempotency_key_reused");
       return JSON.stringify({ replayed: true, receipt: prior.value, progress: progressView(current.progress) });
@@ -119,7 +156,7 @@ function rpcTrade(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntim
     };
     const writes: nkruntime.StorageWriteRequest[] = [{
       collection: RECEIPT_COLLECTION, key: cmd.idempotencyKey, userId: userId, value: receipt,
-      version: "*", permissionRead: 1, permissionWrite: 0,
+      version: "*", permissionRead: 0, permissionWrite: 0,
     }];
     // A rejection changes no progress; only its receipt is recorded so a
     // retry of the same key gets the same answer.

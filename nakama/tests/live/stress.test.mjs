@@ -67,7 +67,12 @@ test("racing gameplay-session takeovers leave exactly one writer", async () => {
   const writers = results.filter((r) => r.status === 200);
   assert.equal(writers.length, 1, `exactly one live session: ${results.map((r) => r.status)}`);
   for (const r of results.filter((x) => x.status !== 200)) assert.equal(r.body.message, "gameplay_session_superseded");
-  assert.equal(checkLedger(await receipts(a), await progress(a)), 1);
+  const active = sessions[results.findIndex((r) => r.status === 200)];
+  // Policy A: exactly the same single session may read; every other one is refused.
+  const reads = await Promise.all(sessions.map((g) => rpc(a, "vs01_progress_get", { gameplay_session_id: g })));
+  assert.equal(reads.filter((r) => r.status === 200).length, 1);
+  for (const r of reads.filter((x) => x.status !== 200)) assert.equal(r.body.message, "gameplay_session_superseded");
+  assert.equal(checkLedger(await receipts(a), await progress(a, active)), 1);
 });
 
 test("10 accounts trading in parallel stay isolated and consistent", async () => {
@@ -166,6 +171,16 @@ test("security: guest auth, forged values, other accounts' data, client storage"
   assert.equal(staleReplay.body.message, "gameplay_session_superseded");
   assert.equal(staleReplay.body.receipt, undefined);
   assert.equal(staleReplay.body.progress, undefined);
+  // Policy A: no token of this account (old device included) reads progress
+  // or receipts through Nakama's generic storage API either.
+  const ownRead = await api(a, "POST", "/v2/storage", { object_ids: [{ collection: "vs01_wp01_progress", key: "trade", user_id: a.userId }, { collection: "vs01_wp01_receipts", key: appliedOrder.idempotency_key, user_id: a.userId }] });
+  assert.equal(ownRead.status, 200);
+  assert.deepEqual(ownRead.body.objects ?? [], [], "server-only objects are not readable by the owner token");
+  const ownList = await api(a, "GET", `/v2/storage/vs01_wp01_receipts?user_id=${a.userId}&limit=10`);
+  assert.deepEqual(ownList.body.objects ?? [], []);
+  const staleRead = await rpc(a, "vs01_progress_get", { gameplay_session_id: ga });
+  assert.equal(staleRead.status, 409, "policy A: the old session cannot read the latest progress");
+  assert.equal(staleRead.body.progress, undefined);
   assert.equal((await rpc(a, "vs01_trade", { ...appliedOrder, gameplay_session_id: ga2 })).body.replayed, true, "new session may replay");
   const moneyA = (await progress(a)).money;
   // B cannot use A's session, read A's data, or write progress for itself.

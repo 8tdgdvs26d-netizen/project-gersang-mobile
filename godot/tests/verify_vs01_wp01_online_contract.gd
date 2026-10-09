@@ -47,6 +47,7 @@ func _initialize() -> void:
 	await _verify_signed_out_and_local_only()
 	await _verify_uncertain_command_stays_pending()
 	await _verify_pending_resolution_rules()
+	await _verify_superseded_session_policy()
 	_check(_dev_save_fingerprint() == dev_before, "Development Save (%s) is untouched" % SaveStore.DEFAULT_PATH)
 	await process_frame  # let the freed clients and their HTTP nodes go
 	if _failures == 0:
@@ -103,7 +104,7 @@ func _verify_signed_out_and_local_only() -> void:
 	var client := _new_client("127.0.0.1", CLOSED_PORT)
 	_check((await client.buy("A", "test_good_01", 10))["status"] == OnlineProgressClient.NO_GAMEPLAY_SESSION, "No trade without a gameplay session")
 	_check((await client.begin_gameplay_session())["status"] == OnlineProgressClient.NOT_SIGNED_IN, "No gameplay session without sign-in")
-	_check((await client.refresh_progress())["status"] == OnlineProgressClient.NOT_SIGNED_IN, "No progress read without sign-in")
+	_check((await client.refresh_progress())["status"] == OnlineProgressClient.NO_GAMEPLAY_SESSION, "No progress read without an active gameplay session (policy A)")
 	_check((await client.sign_in_apple(""))["reason"] == "missing_identity_token", "Apple sign-in needs an identity token")
 	client.configure("api.example.invalid", 443, "https")
 	_check(not client.is_local_test_host(), "Remote host is not a local test host")
@@ -161,22 +162,58 @@ func _verify_pending_resolution_rules() -> void:
 		client.answers = [_server_refusal(refusal[0], refusal[1])]
 		var fresh := await client.buy("A", "test_good_01", 1)
 		_check(fresh["status"] == OnlineProgressClient.REJECTED and not fresh["pending"], "A new command refused with %s never applied and is not kept" % refusal[1])
+	# The superseded refusal above also marked the session (policy A, checked
+	# in _verify_superseded_session_policy); take it back for the next case.
+	_check(client.is_gameplay_session_superseded(), "A superseded refusal marks the session")
+	client._superseded = false
 	# A command whose first attempt got no answer, then a refused retry
 	# (superseded / rate limited): the original outcome is still unknown.
 	client.answers = [{"status": OnlineProgressClient.UNCERTAIN, "reason": "no answer"}]
 	var lost := await client.buy("A", "test_good_01", 1)
 	var key: String = lost["idempotency_key"]
+	_check(lost["pending"], "No answer keeps the new command pending")
 	for refusal in [[10, "gameplay_session_superseded"], [8, "rate_limited"], [14, "storage_unavailable"]]:
 		client.answers = [_server_refusal(refusal[0], refusal[1])]
+		client._superseded = false  # each case starts from an active session
 		var retried := await client.recover_pending()
-		_check(retried[0]["idempotency_key"] == key and retried[0]["pending"], "A retry refused with %s keeps the command pending" % refusal[1])
+		_check(retried.size() == 1 and retried[0]["idempotency_key"] == key and retried[0]["pending"], "A retry refused with %s keeps the command pending" % refusal[1])
+	client._superseded = false
 	client.answers = [_server_receipt("applied")]
 	var resolved := await client.recover_pending()
-	_check(resolved[0]["status"] == OnlineProgressClient.OK and not resolved[0]["pending"] and client.get_pending_commands().is_empty(), "A receipt resolves the pending command")
+	_check(resolved.size() == 1 and resolved[0]["status"] == OnlineProgressClient.OK and not resolved[0]["pending"] and client.get_pending_commands().is_empty(), "A receipt resolves the pending command")
 	client.answers = [{"status": OnlineProgressClient.UNCERTAIN, "reason": "no answer"}, _server_receipt("rejected")]
 	await client.buy("A", "test_good_06", 10)
 	await client.recover_pending()
 	_check(client.get_pending_commands().is_empty(), "A business-rule rejection receipt also resolves it")
+	client.queue_free()
+
+
+## Session policy A on the client: the first "superseded" answer raises the
+## signal once and blocks further reads / actions locally (nothing is sent);
+## begin_gameplay_session() takes the character back and clears it.
+func _verify_superseded_session_policy() -> void:
+	var client := ScriptedClient.new()
+	root.add_child(client)
+	client._gameplay_session_id = "00000000-0000-0000-0000-00000000000d"
+	var prompts := [0]
+	client.gameplay_session_superseded.connect(func(): prompts[0] += 1)
+	client.answers = [{"status": OnlineProgressClient.UNCERTAIN, "reason": "no answer"}]
+	var lost := await client.buy("A", "test_good_01", 1)
+	client.answers = [_server_refusal(10, "gameplay_session_superseded")]
+	var refused_read := await client.refresh_progress()
+	_check(refused_read["reason"] == "gameplay_session_superseded" and client.is_gameplay_session_superseded() and prompts[0] == 1, "A superseded answer marks the session and signals the player once")
+	client.answers = []  # any network call would now fail the test (pop_front on empty)
+	_check((await client.refresh_progress())["reason"] == "gameplay_session_superseded", "Superseded: reading is refused locally")
+	var blocked := await client.buy("A", "test_good_01", 1)
+	_check(blocked["reason"] == "gameplay_session_superseded" and not blocked["pending"], "Superseded: a new action is refused locally and not kept")
+	var kept := await client.recover_pending()
+	_check(kept.size() == 1 and kept[0]["pending"] and client.get_pending_commands().has(lost["idempotency_key"]), "Superseded: the uncertain command stays pending for later recovery")
+	_check(prompts[0] == 1, "The prompt is raised once, not per call")
+	client.answers = [{"status": OnlineProgressClient.OK, "reason": "", "data": {"gameplay_session_id": "00000000-0000-0000-0000-00000000000e", "progress": {"money": 5}}}]
+	_check((await client.begin_gameplay_session())["status"] == OnlineProgressClient.OK and not client.is_gameplay_session_superseded(), "Taking the character back clears the superseded state")
+	client.answers = [_server_receipt("applied")]
+	var resolved := await client.recover_pending()
+	_check(resolved.size() == 1 and resolved[0]["status"] == OnlineProgressClient.OK and client.get_pending_commands().is_empty(), "After taking back, the pending command resolves")
 	client.queue_free()
 
 
