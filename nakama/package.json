@@ -1,0 +1,18 @@
+{
+  "name": "myrial-nakama-server",
+  "private": true,
+  "version": "0.1.0",
+  "description": "VS-01 WP01 Nakama server runtime (TypeScript). Local development only.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test tests/unit/*.test.mjs",
+    "test:live": "node --test --test-concurrency=1 tests/live/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "nakama-runtime": "github:heroiclabs/nakama-common#v1.35.0",
+    "typescript": "5.6.3"
+  }
+}
