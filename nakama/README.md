@@ -56,12 +56,20 @@ WP01 boundaries:
   `MYRIAL_ALLOW_EMAIL_TEST_AUTH=true` (local config only). All client storage
   writes and deletes are refused. Server objects use `permissionWrite: 0`
   (owner read only), and an object without it is treated as untrusted.
-- **Rate limits** (per user, fixed window, node-local cache): trade 30 / 10 s,
-  progress read 60 / 10 s, session begin 10 / 60 s. Overridable through runtime
-  env. Known limit: the counter is approximate (non-atomic, per node). In live
-  45-request bursts, 31 and 34 passed against a limit of 30, and a window edge
-  can allow up to 2x. Whatever passes is still exactly-once. A
-  production-grade limiter is a follow-up item.
+- **Rate limits (A14)** per user: trade 30 / 10 s, progress read 60 / 10 s,
+  session begin 10 / 60 s, overridable through runtime env. Each limiter is a
+  sliding-window log of accepted request times in a server-only storage object
+  (`vs01_wp01_rate_limits`, no client read or write). A request is accepted
+  only through Nakama's version-checked write, which is a compare-and-swap in
+  PostgreSQL: an `UPDATE ... WHERE version = <read version>`, or an INSERT for
+  the first entry, in a READ COMMITTED transaction (verified in the Nakama
+  v3.25.0 source, `server/core_storage.go`). A request that loses a race
+  re-reads and re-checks. When retries run out, the request is refused (fail
+  closed). The result is at most N accepted in every continuous window, on any
+  number of nodes sharing the database, across restarts. Nakama versions are
+  `md5(value)`, so every write bumps `seq` and no stored value repeats (no ABA).
+  The cost per accepted request is +1 read and +1 conditional update. A
+  throttled request costs 1 read and no write (measured, see the evidence doc).
 
 ### Sign in with Apple (D1)
 
@@ -98,10 +106,12 @@ GODOT=/Applications/Godot.app/Contents/MacOS/Godot scripts/run_live_tests.sh   #
 
 | Suite | Where | Needs server |
 |---|---|---|
-| Server unit tests (rules parity, commands, races, forged input, lock-down) | `tests/unit`, `npm test` | No |
+| Server unit tests (rules parity, commands, races, forged input, lock-down, rate limit with a controlled clock) | `tests/unit`, `npm test` | No |
 | Godot offline contract (vectors, client recovery, isolation) | `godot/tests/verify_vs01_wp01_online_contract.gd`, part of the normal Godot regression | No |
-| Live stress (concurrency, duplicate keys, takeover races, 10 accounts, 300-command soak, aborts, security, rate limit) | `tests/live/stress.test.mjs` | Yes |
-| Live restart (server restart mid-command) | `tests/live/z_restart.test.mjs` | Yes (restarts the local container) |
+| Live stress (concurrency, duplicate keys, takeover races, 10 accounts, 300-command soak, aborts, security, rate limit incl. window edges) | `tests/live/stress.test.mjs` | Yes |
+| Live database load of the rate limiter (evidence) | `tests/live/x_db_load.test.mjs` | Yes |
+| Live multi-node rate limit (second Nakama node on the same database) | `tests/live/y_multinode.test.mjs` | Yes (`multinode` profile) |
+| Live restart (server restart mid-command; rate window survives) | `tests/live/z_restart.test.mjs` | Yes (restarts the local container) |
 | Live Godot SDK probe (two accounts, takeover, network loss, app restart, isolation) | `godot/tests/live_vs01_wp01_nakama.gd` | Yes |
 
 CI naming: `.github/workflows/nakama-server.yml` runs **Nakama server unit
