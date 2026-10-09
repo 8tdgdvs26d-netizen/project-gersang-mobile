@@ -47,7 +47,7 @@ export filter on all resources (or include `fonts/`) so the font is packaged.
 
 ## Current work package
 
-VS-01 WP00A: Repository Instruction Alignment (documentation only).
+VS-01 WP01: Backend Provider & Authority Technical Spike (isolated feasibility work).
 
 Charlie approvals recorded on 2026-10-08 (Hong Kong time):
 
@@ -56,13 +56,14 @@ Charlie approvals recorded on 2026-10-08 (Hong Kong time):
 - Supabase is the first hands-on candidate, not the final locked provider
 - the Technical Spike uses Targeted Stress; the VS-01 System Gate remains Full Stress
 
-This package only aligns repository instructions with the current 2026-10-08 Project Sources.
-No production code, gameplay, balance, UI, Save, tests, CI, backend, environment variable or
-Development Save change. Save stays v14.
+This package tests the smallest account-bound online-save authority contract using Supabase as the
+first hands-on candidate. It is not wired into the production game or Save v14. It may not silently
+become the production backend, lock a provider, alter gameplay, or migrate a Development Save.
+Live-provider, Godot and device evidence remain separately required before the spike can pass.
 
-After this documentation PR is reviewed and merged, reverify the live `main` exact SHA and begin
-VS-01 WP01 on a fresh branch. The Technical Spike remains isolated and may not silently become the
-production backend or lock a provider.
+Previous: VS-01 WP00A: Repository Instruction Alignment (documentation only). It aligned repository
+instructions with the 2026-10-08 Project Sources; no production code, gameplay, balance, UI, Save,
+tests, CI, backend, environment variable or Development Save changed.
 
 Previous: Stage 11 P00: Core Loop Integration Gate (verification only). No production code,
 gameplay, balance, UI or Save change; Save stays v14.
