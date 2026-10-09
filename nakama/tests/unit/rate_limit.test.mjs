@@ -7,7 +7,7 @@ import { loadModule, FakeNakama, ctxFor, call } from "./harness.mjs";
 const clock = { t: 1_000_000, now() { return this.t; } };
 const m = loadModule(clock);
 const U = "33333333-3333-3333-3333-333333333333";
-const RESOURCE_EXHAUSTED = 8, INTERNAL = 13;
+const RESOURCE_EXHAUSTED = 8, UNAVAILABLE = 14;
 let seq = 0;
 
 function setup() {
@@ -107,6 +107,22 @@ test("retries never bypass the limit: exhausted retries fail closed", () => {
   assert.equal(JSON.stringify(log(nk)), before, "nothing recorded");
   assert.equal(nk.storageRead([{ collection: "vs01_wp01_receipts", key: "rate-exhaust-0000001", userId: U }]).length, 0, "no trade happened");
   nk.failNextRateWrites = 0;
+});
+
+test("a non-conflict database error fails closed immediately, without retries (review finding 2)", () => {
+  const { nk, g } = setup();
+  const before = JSON.stringify(log(nk));
+  const writes = nk.rateWrites;
+  nk.faultNextRateWrites = 1;
+  const r = call(m, "rpcTrade", nk, ctxFor(U), {
+    gameplay_session_id: g, idempotency_key: "rate-dbfault-000001", action: "buy", city_id: "A", good_id: "test_good_01", quantity: 1,
+  });
+  assert.equal(r.code, UNAVAILABLE);
+  assert.equal(r.message, "storage_unavailable");
+  assert.equal(nk.rateWrites - writes, 1, "one attempt only");
+  assert.equal(JSON.stringify(log(nk)), before, "nothing recorded");
+  assert.equal(nk.storageRead([{ collection: "vs01_wp01_receipts", key: "rate-dbfault-000001", userId: U }]).length, 0, "no trade happened");
+  assert.equal(hit(nk, g), "ok", "works again once storage is back");
 });
 
 test("every write carries a new seq (no repeated value, so no md5-version ABA)", () => {

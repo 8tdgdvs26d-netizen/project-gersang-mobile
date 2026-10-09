@@ -20,10 +20,19 @@ export const fixtures = JSON.parse(
   readFileSync(fileURLToPath(new URL("../fixtures/rules_vectors.json", import.meta.url)), "utf8"),
 );
 
+// Nakama v3.25.0 error texts (server/runtime_javascript_nakama.go wraps
+// runtime.ErrStorageRejectedVersion from nakama-common runtime/runtime.go).
+export const VERSION_CONFLICT = "Storage write rejected - version check failed.";
+const WRITE_PREFIX = "failed to write storage objects: ";
+const MULTI_PREFIX = "error running multi update: ";
+export const DB_FAULT = "ERROR: wp01 injected storage fault (SQLSTATE P0001)";
+
 // Storage double: version "*" = create only; any other version must match.
 // multiUpdate is all-or-nothing. `failNextWrites` injects lost races into
 // batches that touch progress / receipts; `failNextRateWrites` into rate-limit
 // writes; `beforeWrite` / `beforeRateWrite` run a competing writer first.
+// `faultNextWrites` / `faultNextRateWrites` inject NON-conflict database
+// errors. `writeCalls` counts write attempts per API.
 export class FakeNakama {
   constructor() {
     this.objects = new Map();
@@ -34,6 +43,9 @@ export class FakeNakama {
     this.beforeWrite = null; // hook to simulate a concurrent writer
     this.beforeRateWrite = null;
     this.rateWrites = 0;
+    this.faultNextWrites = 0;
+    this.faultNextRateWrites = 0;
+    this.writeCalls = { storageWrite: 0, multiUpdate: 0 };
   }
   id(o) { return `${o.collection}/${o.key}/${o.userId}`; }
   storageRead(ids) {
@@ -44,10 +56,10 @@ export class FakeNakama {
     }
     return out;
   }
-  _check(w) {
+  _check(w, prefix) {
     const existing = this.objects.get(this.id(w));
-    if (w.version === "*" && existing) throw new Error("version conflict (exists)");
-    if (w.version && w.version !== "*" && (!existing || existing.version !== w.version)) throw new Error("version conflict");
+    if (w.version === "*" && existing) throw new Error(prefix + VERSION_CONFLICT);
+    if (w.version && w.version !== "*" && (!existing || existing.version !== w.version)) throw new Error(prefix + VERSION_CONFLICT);
   }
   _apply(w) {
     this.versionCounter += 1;
@@ -58,25 +70,29 @@ export class FakeNakama {
     });
   }
   storageWrite(writes) {
-    this._maybeInterfere(writes);
-    writes.forEach((w) => this._check(w));
+    this.writeCalls.storageWrite += 1;
+    this._maybeInterfere(writes, WRITE_PREFIX);
+    writes.forEach((w) => this._check(w, WRITE_PREFIX));
     writes.forEach((w) => this._apply(w));
   }
   multiUpdate(_accounts, writes, _deletes, _wallets) {
-    this._maybeInterfere(writes);
-    writes.forEach((w) => this._check(w));
+    this.writeCalls.multiUpdate += 1;
+    this._maybeInterfere(writes, MULTI_PREFIX);
+    writes.forEach((w) => this._check(w, MULTI_PREFIX));
     writes.forEach((w) => this._apply(w));
     return { storageWriteAcks: [], walletUpdateAcks: [] };
   }
-  _maybeInterfere(writes) {
+  _maybeInterfere(writes, prefix) {
     if (writes.some((w) => w.collection === "vs01_wp01_rate_limits")) {
       this.rateWrites += 1;
       if (this.beforeRateWrite) { const f = this.beforeRateWrite; this.beforeRateWrite = null; f(this); }
-      if (this.failNextRateWrites > 0) { this.failNextRateWrites -= 1; throw new Error("injected rate conflict"); }
+      if (this.faultNextRateWrites > 0) { this.faultNextRateWrites -= 1; throw new Error(prefix + DB_FAULT); }
+      if (this.failNextRateWrites > 0) { this.failNextRateWrites -= 1; throw new Error(prefix + VERSION_CONFLICT); }
       return;
     }
     if (this.beforeWrite) { const f = this.beforeWrite; this.beforeWrite = null; f(this); }
-    if (this.failNextWrites > 0) { this.failNextWrites -= 1; throw new Error("injected conflict"); }
+    if (this.faultNextWrites > 0) { this.faultNextWrites -= 1; throw new Error(prefix + DB_FAULT); }
+    if (this.failNextWrites > 0) { this.failNextWrites -= 1; throw new Error(prefix + VERSION_CONFLICT); }
   }
   uuidv4() { return randomUUID(); }
   localcacheGet(k) { return this.cache.get(k); }

@@ -35,6 +35,10 @@ const UNCERTAIN := "uncertain"      # no server answer; the command may or may n
 const NOT_SIGNED_IN := "not_signed_in"
 const NO_GAMEPLAY_SESSION := "no_gameplay_session"
 
+## gRPC codes where the server could not tell whether a write committed
+## (UNKNOWN, DEADLINE_EXCEEDED, INTERNAL, UNAVAILABLE): treated like no answer.
+const AMBIGUOUS_GRPC_CODES := [2, 4, 13, 14]
+
 var host := "127.0.0.1"
 var port := 17350
 var scheme := "http"
@@ -159,21 +163,31 @@ static func new_idempotency_key() -> String:
 func _trade(command: Dictionary, key: String) -> Dictionary:
 	if _gameplay_session_id.is_empty():
 		return _outcome(NO_GAMEPLAY_SESSION, "no_gameplay_session")
+	var is_retry := _pending.has(key)
 	_pending[key] = command.duplicate(true)
 	var payload := command.duplicate(true)
 	payload["gameplay_session_id"] = _gameplay_session_id
 	payload["idempotency_key"] = key
 	var result := await _rpc(RPC_TRADE, payload)
 	result["idempotency_key"] = key
-	if result["status"] == UNCERTAIN:
-		return result  # stays pending; recover_pending() resolves it
-	_pending.erase(key)
+	if result["status"] == REJECTED and result.get("grpc_status", 0) in AMBIGUOUS_GRPC_CODES:
+		result["status"] = UNCERTAIN
 	if result["status"] == OK:
+		# Only a receipt (applied or rejected by the rules) resolves a command.
+		_pending.erase(key)
 		var data: Dictionary = result["data"]
 		if data.get("progress") != null:
 			_confirmed = data["progress"]
 		result["receipt"] = data["receipt"]
 		result["replayed"] = data["replayed"]
+	elif result["status"] == REJECTED and not is_retry:
+		# A NEW command refused before any decision (malformed, superseded
+		# session, rate limited, ...) never applied: nothing to recover.
+		_pending.erase(key)
+	# Otherwise it stays pending: no answer, an ambiguous storage error, or a
+	# refused RETRY, which says nothing about the original attempt. A
+	# superseded client recovers by beginning a new gameplay session first.
+	result["pending"] = _pending.has(key)
 	return result
 
 

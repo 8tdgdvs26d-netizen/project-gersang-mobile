@@ -157,8 +157,19 @@ test("security: guest auth, forged values, other accounts' data, client storage"
     const r = await rpc(a, "vs01_trade", order(ga, { quantity }));
     assert.equal(r.body.receipt.reason, "invalid_quantity", `quantity ${quantity}`);
   }
+  // Review finding 1: after a takeover the old session gets no replay.
+  const appliedOrder = order(ga);
+  assert.equal((await rpc(a, "vs01_trade", appliedOrder)).status, 200);
+  const ga2 = await begin(a);
+  const staleReplay = await rpc(a, "vs01_trade", appliedOrder);
+  assert.equal(staleReplay.status, 409);
+  assert.equal(staleReplay.body.message, "gameplay_session_superseded");
+  assert.equal(staleReplay.body.receipt, undefined);
+  assert.equal(staleReplay.body.progress, undefined);
+  assert.equal((await rpc(a, "vs01_trade", { ...appliedOrder, gameplay_session_id: ga2 })).body.replayed, true, "new session may replay");
+  const moneyA = (await progress(a)).money;
   // B cannot use A's session, read A's data, or write progress for itself.
-  assert.equal((await rpc(b, "vs01_trade", order(ga))).body.message, "gameplay_session_superseded");
+  assert.equal((await rpc(b, "vs01_trade", order(ga2))).body.message, "gameplay_session_superseded");
   const peek = await api(b, "POST", "/v2/storage", { object_ids: [{ collection: "vs01_wp01_progress", key: "trade", user_id: a.userId }] });
   assert.deepEqual(peek.body.objects ?? [], []);
   const list = await api(b, "GET", `/v2/storage/vs01_wp01_receipts?user_id=${a.userId}&limit=10`);
@@ -167,7 +178,7 @@ test("security: guest auth, forged values, other accounts' data, client storage"
   assert.equal(write.status, 403);
   const reward = await rpc(a, "vs01_combat_reward_claim", { money: 50000 });
   assert.equal(reward.status, 403);
-  assert.equal((await progress(a)).money, 10000);
+  assert.equal((await progress(a)).money, moneyA);
   assert.equal((await progress(b)).money, 10000);
   // No auth at all.
   const anon = await fetch(`${process.env.MYRIAL_NAKAMA_URL ?? "http://127.0.0.1:17350"}/v2/rpc/vs01_trade`, { method: "POST", body: "{}" });

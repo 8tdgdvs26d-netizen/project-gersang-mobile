@@ -70,6 +70,13 @@ func _run() -> void:
 	var stale := await p1a.buy("A", "test_good_01", 1)
 	_check(stale["status"] == OnlineProgressClient.REJECTED and stale["reason"] == "gameplay_session_superseded", "Old session can no longer write: %s" % str(stale))
 	_check((await p1b.buy("A", "test_good_01", 1))["receipt"]["status"] == "applied", "New session can write")
+	# Review finding 1: the old session cannot replay an old key either, and a
+	# refused retry keeps the command pending (its outcome is unknown to it).
+	var old_key: String = bought["idempotency_key"]
+	p1a.import_pending_commands({old_key: {"action": "buy", "city_id": "A", "good_id": "test_good_01", "quantity": 10}})
+	var stale_replay := await p1a.recover_pending()
+	_check(stale_replay[0]["status"] == OnlineProgressClient.REJECTED and stale_replay[0]["reason"] == "gameplay_session_superseded" and not stale_replay[0].has("receipt"), "Old session gets no receipt replay: %s" % str(stale_replay[0]))
+	_check(p1a.get_pending_commands().has(old_key), "Refused retry stays pending in the old client")
 	var money_after_takeover: int = p1b.get_confirmed_progress()["money"]
 
 	# 5. Network loss mid-command: uncertain, then deterministic recovery.

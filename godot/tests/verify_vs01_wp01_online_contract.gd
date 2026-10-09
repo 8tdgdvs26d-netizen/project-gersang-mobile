@@ -14,6 +14,25 @@ extends SceneTree
 const RulesVectors := preload("res://tests/vs01_wp01_rules_vectors.gd")
 const CLOSED_PORT := 1
 
+
+## Test double: answers trades from a script instead of the network.
+class ScriptedClient extends OnlineProgressClient:
+	var answers: Array = []
+
+	func is_signed_in() -> bool:
+		return true
+
+	func _rpc(_id: String, _payload: Dictionary) -> Dictionary:
+		return answers.pop_front()
+
+
+static func _server_refusal(grpc: int, reason: String) -> Dictionary:
+	return {"status": OnlineProgressClient.REJECTED, "reason": reason, "grpc_status": grpc}
+
+
+static func _server_receipt(status: String) -> Dictionary:
+	return {"status": OnlineProgressClient.OK, "reason": "", "data": {"replayed": false, "receipt": {"status": status}, "progress": {"money": 1}}}
+
 var _checks := 0
 var _failures := 0
 
@@ -27,6 +46,7 @@ func _initialize() -> void:
 	_verify_idempotency_keys()
 	await _verify_signed_out_and_local_only()
 	await _verify_uncertain_command_stays_pending()
+	await _verify_pending_resolution_rules()
 	_check(_dev_save_fingerprint() == dev_before, "Development Save (%s) is untouched" % SaveStore.DEFAULT_PATH)
 	await process_frame  # let the freed clients and their HTTP nodes go
 	if _failures == 0:
@@ -124,6 +144,40 @@ func _verify_uncertain_command_stays_pending() -> void:
 	_check(restarted.get_pending_commands() == client.get_pending_commands(), "Pending commands survive an export / import")
 	client.queue_free()
 	restarted.queue_free()
+
+
+## Only a receipt resolves a command. Ambiguous storage errors and refused
+## RETRIES keep it pending; a NEW command refused before any decision is gone.
+func _verify_pending_resolution_rules() -> void:
+	var client := ScriptedClient.new()
+	root.add_child(client)
+	client._gameplay_session_id = "00000000-0000-0000-0000-00000000000c"
+	for grpc in [2, 4, 13, 14]:
+		client.answers = [_server_refusal(grpc, "storage_unavailable")]
+		var ambiguous := await client.buy("A", "test_good_01", 1)
+		_check(ambiguous["status"] == OnlineProgressClient.UNCERTAIN and ambiguous["pending"], "gRPC %d (commit unknown) keeps the command pending as uncertain" % grpc)
+		client._pending.clear()
+	for refusal in [[3, "unexpected_fields"], [7, "permission_denied"], [8, "rate_limited"], [9, "no_gameplay_session"], [10, "gameplay_session_superseded"]]:
+		client.answers = [_server_refusal(refusal[0], refusal[1])]
+		var fresh := await client.buy("A", "test_good_01", 1)
+		_check(fresh["status"] == OnlineProgressClient.REJECTED and not fresh["pending"], "A new command refused with %s never applied and is not kept" % refusal[1])
+	# A command whose first attempt got no answer, then a refused retry
+	# (superseded / rate limited): the original outcome is still unknown.
+	client.answers = [{"status": OnlineProgressClient.UNCERTAIN, "reason": "no answer"}]
+	var lost := await client.buy("A", "test_good_01", 1)
+	var key: String = lost["idempotency_key"]
+	for refusal in [[10, "gameplay_session_superseded"], [8, "rate_limited"], [14, "storage_unavailable"]]:
+		client.answers = [_server_refusal(refusal[0], refusal[1])]
+		var retried := await client.recover_pending()
+		_check(retried[0]["idempotency_key"] == key and retried[0]["pending"], "A retry refused with %s keeps the command pending" % refusal[1])
+	client.answers = [_server_receipt("applied")]
+	var resolved := await client.recover_pending()
+	_check(resolved[0]["status"] == OnlineProgressClient.OK and not resolved[0]["pending"] and client.get_pending_commands().is_empty(), "A receipt resolves the pending command")
+	client.answers = [{"status": OnlineProgressClient.UNCERTAIN, "reason": "no answer"}, _server_receipt("rejected")]
+	await client.buy("A", "test_good_06", 10)
+	await client.recover_pending()
+	_check(client.get_pending_commands().is_empty(), "A business-rule rejection receipt also resolves it")
+	client.queue_free()
 
 
 func _new_client(host: String, port: int) -> OnlineProgressClient:

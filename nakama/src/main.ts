@@ -38,7 +38,7 @@ function progressWrite(userId: string, p: TradeProgress, version: string): nkrun
 
 function rpcSessionBegin(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, payload: string): string {
   const userId = guardRequireUser(ctx);
-  guardRateLimit(ctx, nk, "session_begin", userId);
+  guardRateLimit(ctx, logger, nk, "session_begin", userId);
   guardParsePayload(payload, []);
   for (let attempt = 0; attempt < TRADE_MAX_ATTEMPTS; attempt++) {
     const current = readProgress(nk, userId);
@@ -50,6 +50,7 @@ function rpcSessionBegin(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: n
       // "*" = create only; otherwise only if unchanged since the read.
       nk.storageWrite([progressWrite(userId, next, current === null ? "*" : current.version)]);
     } catch (e) {
+      if (!guardIsVersionConflict(e)) throw guardStorageUnavailable(logger, "session_begin", e);
       continue; // a concurrent begin / trade won; re-read and take over again
     }
     logger.info("vs01 session_begin user=%s session=%s superseded=%s", userId, next.gameplay_session_id, superseded || "none");
@@ -60,7 +61,7 @@ function rpcSessionBegin(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: n
 
 function rpcProgressGet(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, payload: string): string {
   const userId = guardRequireUser(ctx);
-  guardRateLimit(ctx, nk, "progress_get", userId);
+  guardRateLimit(ctx, logger, nk, "progress_get", userId);
   guardParsePayload(payload, []);
   const current = readProgress(nk, userId);
   if (current === null) throw guardError(nkruntime.Codes.FAILED_PRECONDITION, "no_gameplay_session");
@@ -72,22 +73,24 @@ function rpcProgressGet(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nk
 
 function rpcTrade(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, payload: string): string {
   const userId = guardRequireUser(ctx);
-  guardRateLimit(ctx, nk, "trade", userId);
+  guardRateLimit(ctx, logger, nk, "trade", userId);
   const cmd = guardParseTrade(payload);
   const hash = guardRequestHash(cmd.req);
   for (let attempt = 0; attempt < TRADE_MAX_ATTEMPTS; attempt++) {
-    // 1. Idempotency: a known key returns its original receipt, unchanged.
-    const prior = readServerObject(nk, RECEIPT_COLLECTION, cmd.idempotencyKey, userId);
-    if (prior !== null) {
-      if (prior.value.request_hash !== hash) throw guardError(nkruntime.Codes.INVALID_ARGUMENT, "idempotency_key_reused");
-      const now = readProgress(nk, userId);
-      return JSON.stringify({ replayed: true, receipt: prior.value, progress: now === null ? null : progressView(now.progress) });
-    }
-    // 2. Single active gameplay session (D2).
+    // 1. Single active gameplay session (D2), checked BEFORE anything else:
+    //    a superseded session gets no write, no replayed receipt and no
+    //    progress. A client recovering an uncertain command first begins a
+    //    new session and retries the same key from it (step 2 then replays).
     const current = readProgress(nk, userId);
     if (current === null) throw guardError(nkruntime.Codes.FAILED_PRECONDITION, "no_gameplay_session");
     if (current.progress.gameplay_session_id !== cmd.gameplaySessionId) {
       throw guardError(nkruntime.Codes.ABORTED, "gameplay_session_superseded");
+    }
+    // 2. Idempotency: a known key returns its original receipt, unchanged.
+    const prior = readServerObject(nk, RECEIPT_COLLECTION, cmd.idempotencyKey, userId);
+    if (prior !== null) {
+      if (prior.value.request_hash !== hash) throw guardError(nkruntime.Codes.INVALID_ARGUMENT, "idempotency_key_reused");
+      return JSON.stringify({ replayed: true, receipt: prior.value, progress: progressView(current.progress) });
     }
     // 3. Decide on a copy with server time and server prices.
     const nowMs = Date.now();
@@ -125,6 +128,9 @@ function rpcTrade(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntim
       // 4. One transaction: receipt (create-only) + progress (unchanged-since-read).
       nk.multiUpdate(null, writes, null, null, false);
     } catch (e) {
+      // Not a version conflict: the commit outcome may be unknown. Fail now;
+      // the client keeps the command pending and retries the same key.
+      if (!guardIsVersionConflict(e)) throw guardStorageUnavailable(logger, "trade", e);
       continue; // lost a race: either the same key was just written, or progress moved
     }
     logger.info("vs01 trade receipt %s", JSON.stringify(receipt));

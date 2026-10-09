@@ -7,7 +7,7 @@ import { loadModule, FakeNakama, ctxFor, call } from "./harness.mjs";
 const m = loadModule();
 const U1 = "11111111-1111-1111-1111-111111111111";
 const U2 = "22222222-2222-2222-2222-222222222222";
-const INVALID_ARGUMENT = 3, PERMISSION_DENIED = 7, RESOURCE_EXHAUSTED = 8, FAILED_PRECONDITION = 9, ABORTED = 10, INTERNAL = 13, UNAUTHENTICATED = 16;
+const INVALID_ARGUMENT = 3, PERMISSION_DENIED = 7, FAILED_PRECONDITION = 9, ABORTED = 10, INTERNAL = 13, UNAVAILABLE = 14, UNAUTHENTICATED = 16;
 
 let keySeq = 0;
 const newKey = () => `unit-key-${String(++keySeq).padStart(10, "0")}`;
@@ -119,6 +119,71 @@ test("uncertain command retried from a NEW session returns the original receipt"
   assert.equal(retry.value.replayed, true);
   assert.deepEqual(retry.value.receipt, first.value.receipt);
   assert.equal(stored(nk, U1).money, 9160);
+});
+
+test("a superseded session cannot replay receipts or read progress through trade (review finding 1)", () => {
+  const nk = new FakeNakama();
+  const g1 = begin(nk, U1);
+  const key = "stale-replay-key-001";
+  const first = trade(nk, U1, g1, { idempotency_key: key });
+  assert.equal(first.value.receipt.status, "applied");
+  const g2 = begin(nk, U1); // another device / newer run takes over
+  const stale = trade(nk, U1, g1, { idempotency_key: key });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.code, ABORTED);
+  assert.equal(stale.message, "gameplay_session_superseded");
+  assert.equal(stale.value, undefined, "no receipt and no progress for the old session");
+  // The rejected receipt of a business rule is not readable either.
+  const rejectedKey = "stale-replay-key-002";
+  const g3 = begin(nk, U1);
+  trade(nk, U1, g3, { idempotency_key: rejectedKey, good_id: "test_good_06" });
+  begin(nk, U1);
+  assert.equal(trade(nk, U1, g3, { idempotency_key: rejectedKey, good_id: "test_good_06" }).message, "gameplay_session_superseded");
+  // The legitimate path still works: the CURRENT session retries the same key.
+  const g4 = begin(nk, U1);
+  const fresh = trade(nk, U1, g4, { idempotency_key: key });
+  assert.equal(fresh.value.replayed, true);
+  assert.deepEqual(fresh.value.receipt, first.value.receipt);
+  assert.notEqual(g2, g4);
+  assert.equal(stored(nk, U1).money, 9160, "applied once");
+});
+
+test("a non-conflict database error in the trade transaction fails fast, unretried (review finding 3)", () => {
+  const nk = new FakeNakama();
+  const g = begin(nk, U1);
+  const before = JSON.stringify(stored(nk, U1));
+  const calls = nk.writeCalls.multiUpdate;
+  nk.faultNextWrites = 1;
+  const key = "db-fault-key-000001";
+  const r = trade(nk, U1, g, { idempotency_key: key });
+  assert.equal(r.code, UNAVAILABLE);
+  assert.equal(r.message, "storage_unavailable");
+  assert.equal(nk.writeCalls.multiUpdate - calls, 1, "exactly one attempt, no retry storm");
+  assert.equal(JSON.stringify(stored(nk, U1)), before, "nothing written");
+  // The client keeps it pending and retries the same key once storage is back.
+  const retry = trade(nk, U1, g, { idempotency_key: key });
+  assert.equal(retry.value.replayed, false);
+  assert.equal(retry.value.receipt.status, "applied");
+  assert.equal(stored(nk, U1).money, 9160);
+});
+
+test("version conflicts are still retried in the trade transaction", () => {
+  const nk = new FakeNakama();
+  const g = begin(nk, U1);
+  const calls = nk.writeCalls.multiUpdate;
+  nk.failNextWrites = 3;
+  assert.equal(trade(nk, U1, g).value.receipt.status, "applied");
+  assert.equal(nk.writeCalls.multiUpdate - calls, 4, "3 conflicts + 1 success");
+});
+
+test("a non-conflict database error in session begin fails fast", () => {
+  const nk = new FakeNakama();
+  begin(nk, U1);
+  const calls = nk.writeCalls.storageWrite;
+  nk.faultNextWrites = 1;
+  const r = call(m, "rpcSessionBegin", nk, ctxFor(U1), "{}");
+  assert.equal(r.code, UNAVAILABLE);
+  assert.equal(nk.writeCalls.storageWrite - calls, 2, "one rate-limit write + one failed progress write, no retry");
 });
 
 test("trade without a gameplay session is refused", () => {

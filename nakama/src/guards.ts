@@ -33,6 +33,28 @@ function guardError(code: number, message: string): { message: string; code: num
   return { message: message, code: code };
 }
 
+// Nakama v3.25.0 reports a failed version check (including a lost create-only
+// "*" race) as runtime.ErrStorageRejectedVersion, "Storage write rejected -
+// version check failed.", wrapped by the JS runtime as "failed to write
+// storage objects: ..." (storageWrite) or "error running multi update: ..."
+// (multiUpdate). Only that is a concurrency conflict worth retrying; any other
+// write error (database down, constraint, timeout) must not be retried as one.
+const GUARD_VERSION_CONFLICT_TEXT = "Storage write rejected - version check failed.";
+
+function guardIsVersionConflict(e: any): boolean {
+  const text = e !== null && typeof e === "object" && typeof e.message === "string" ? e.message : String(e);
+  return text.indexOf(GUARD_VERSION_CONFLICT_TEXT) >= 0;
+}
+
+// A storage write failed for a reason other than a version conflict. Nothing
+// is retried. For a transaction the outcome may be unknown (for example the
+// connection broke during commit), so the client keeps the command pending
+// and retries it with the same idempotency key.
+function guardStorageUnavailable(logger: nkruntime.Logger | null, where: string, e: any): { message: string; code: number } {
+  if (logger) logger.error("vs01 %s storage write failed (not a version conflict): %s", where, e && e.message ? e.message : String(e));
+  return guardError(nkruntime.Codes.UNAVAILABLE, "storage_unavailable");
+}
+
 function guardRequireUser(ctx: nkruntime.Context): string {
   if (!ctx.userId) throw guardError(nkruntime.Codes.UNAUTHENTICATED, "unauthenticated");
   return ctx.userId;
@@ -90,7 +112,7 @@ function guardRateLimitValue(value: any): boolean {
   return true;
 }
 
-function guardRateLimit(ctx: nkruntime.Context, nk: nkruntime.Nakama, name: string, userId: string): void {
+function guardRateLimit(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, name: string, userId: string): void {
   const rule = GUARD_DEFAULT_LIMITS[name];
   let limit = rule.perWindow;
   const override = ctx.env ? ctx.env[rule.env] : undefined;
@@ -119,6 +141,7 @@ function guardRateLimit(ctx: nkruntime.Context, nk: nkruntime.Nakama, name: stri
       }]);
       return;
     } catch (e) {
+      if (!guardIsVersionConflict(e)) throw guardStorageUnavailable(logger, "rate_limit", e); // fail closed now
       continue; // another request of this user was accepted first: re-read, re-check
     }
   }
