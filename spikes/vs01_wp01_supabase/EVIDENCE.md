@@ -74,7 +74,7 @@ inherit the spike's grants.
 | --- | --- | --- |
 | Live smoke (`live_smoke.mjs`) | BLOCKED (cloud session) | Reported 4/4 PASS in the Mac session handoff; no run output is recorded here. 2026-10-09: no disposable-project credentials in the cloud session, runner exited 2 |
 | Live stress (`live_stress.mjs --with-expiry`) | BLOCKED | Same: no credentials in the cloud session. Runner is ready |
-| Godot live probe (`live_probe.gd`) | FAIL on `68d1470` (Mac); fix pending a Mac rerun | First Mac run failed with `ERR_UNCONFIGURED` (init timing, fixed above). Needs a Mac rerun on the fixed commit |
+| Godot live probe (`live_probe.gd`) | **PASS on `7b51b25` (Mac, live)** | 2026-10-09, Charlie's Mac, clean acceptance checkout `myrial-wp01-acceptance` detached at `7b51b25`, Godot 4.7.2 macOS headless, disposable project `myrial-vs01-spike`: `GODOT_LIVE_PROBE PASS {"auth":"PASS","get_state":"PASS","idempotency":"PASS","revision":56,"session":"PASS"}`. The earlier run on `68d1470` failed with `ERR_UNCONFIGURED` (init timing, fixed above) |
 | Physical iPhone/iPad network and resume test | NOT RUN | Requires live backend plus device build |
 | PlayFab / Firebase comparison | NOT RUN | |
 | Player experience acceptance | NOT RUN | A technical test pass is not a player-experience pass |
