@@ -100,4 +100,8 @@ test('VS-01 spike live runners report BLOCKED without credentials and never prin
   assert.doesNotMatch(probe,/SERVICE_ROLE|service_role|SUPABASE_SERVICE/);
   assert.doesNotMatch(probe,/print\([^)]*(password|access_token|_publishable_key)/);
   assert.match(probe,/quit\(2\)/);
+  // HTTPRequest fails with ERR_UNCONFIGURED before the root enters the tree, which happens after _initialize.
+  assert.ok(probe.indexOf('await process_frame')>-1&&probe.indexOf('await process_frame')<probe.indexOf('.new()'),'probe waits a frame before creating the client');
+  const godotClient=await readFile(new URL('godot/spikes/vs01_wp01_supabase/supabase_spike_client.gd',root),'utf8');
+  assert.match(godotClient,/if not is_inside_tree\(\):\s+return \{"ok": false, "errorCode": "ERR_NOT_IN_TREE"\}/);
 });

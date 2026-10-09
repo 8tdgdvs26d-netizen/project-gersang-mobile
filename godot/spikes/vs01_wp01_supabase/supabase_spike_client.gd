@@ -41,6 +41,9 @@ func invoke(payload: Dictionary) -> Dictionary:
 
 
 func _request_json(url: String, method: int, extra_headers: PackedStringArray, payload: Dictionary) -> Dictionary:
+	# HTTPRequest only works inside the Scene Tree; fail clearly instead of with ERR_UNCONFIGURED.
+	if not is_inside_tree():
+		return {"ok": false, "errorCode": "ERR_NOT_IN_TREE"}
 	var http := HTTPRequest.new()
 	http.timeout = 15.0
 	add_child(http)
