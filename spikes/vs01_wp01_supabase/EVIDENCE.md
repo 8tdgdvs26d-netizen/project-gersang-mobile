@@ -88,8 +88,8 @@ inherit the spike's grants.
 | --- | --- | --- |
 | Complete raw logs of the Mac live smoke and live stress runs | NOT PROVIDED | Results above are Charlie's summary; the commit of each run was not stated |
 | Lease expiry and cross-account isolation in a single run | NOT RUN | Each passed in a separate run (see the combined-coverage row) |
-| Physical iPhone/iPad network and resume test | NOT RUN | Requires live backend plus device build |
-| PlayFab / Firebase comparison | NOT RUN | |
-| Player experience acceptance | NOT RUN | A technical test pass is not a player-experience pass |
+| Physical iPhone/iPad network and resume test | DEFERRED (Charlie-approved 2026-10-09) | Not waived: acceptance stays owed by the later VS-01 work package that wires the game to the backend, at the latest before VS-14. See `BLUEPRINT.md` §10 |
+| PlayFab / Firebase hands-on spike | NOT RUN | Desk comparison only: `PROVIDER_COMPARISON.md` |
+| Player experience acceptance | DEFERRED (Charlie-approved 2026-10-09) | Not waived; same responsibility as above. A technical test pass is not a player-experience pass |
 
 The provider decision therefore remains open.
