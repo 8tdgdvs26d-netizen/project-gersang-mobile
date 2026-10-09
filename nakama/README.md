@@ -58,9 +58,10 @@ WP01 boundaries:
   (owner read only), and an object without it is treated as untrusted.
 - **Rate limits** (per user, fixed window, node-local cache): trade 30 / 10 s,
   progress read 60 / 10 s, session begin 10 / 60 s. Overridable through runtime
-  env. Known limit: the counter is approximate (non-atomic, per node). A burst
-  measured 31 of 45 passing against a limit of 30, and a window edge can allow
-  up to 2x. A production-grade limiter is a follow-up item.
+  env. Known limit: the counter is approximate (non-atomic, per node). In live
+  45-request bursts, 31 and 34 passed against a limit of 30, and a window edge
+  can allow up to 2x. Whatever passes is still exactly-once. A
+  production-grade limiter is a follow-up item.
 
 ### Sign in with Apple (D1)
 
