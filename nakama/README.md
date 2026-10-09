@@ -13,7 +13,7 @@ accepted, not device-accepted, not wired into gameplay.
 | Command (RPC) | Purpose |
 |---|---|
 | `vs01_session_begin` | Starts a gameplay session. Any earlier session of the same account is superseded and can no longer write (D2). Creates the default progress on first use. |
-| `vs01_progress_get` | Server-confirmed progress view (money, backpack, capacity, prices). The client caches it; it is never sent back. |
+| `vs01_progress_get` | `{gameplay_session_id}` → server-confirmed progress view (money, backpack, capacity, prices), **only for the active gameplay session** (session policy A). The client caches it; it is never sent back. |
 | `vs01_trade` | One buy / sell order: `{gameplay_session_id, idempotency_key, action, city_id, good_id, quantity}`. Nothing else is accepted (no price, money or stock from the client). |
 | `vs01_combat_reward_claim` | Always refused (`combat_reward_requires_server_validation`) until combat validation is approved in a later WP (D4). |
 
@@ -61,16 +61,30 @@ WP01 boundaries:
   an ambiguous storage error (gRPC 2 / 4 / 13 / 14) or a refused retry keeps
   it pending under the same key. A new command refused before any decision
   (malformed, superseded, rate limited) is dropped, because it never applied.
-- **Reads:** `vs01_progress_get` is open to any authenticated session of the
-  same account, superseded or not (D2 restricts writes). Other accounts never
-  see it.
+- **Session policy A (Charlie, 2026-10-10):** one active gameplay session per
+  character. After a takeover, the old session can neither act nor read the
+  latest progress (`vs01_progress_get` and trade replay both answer
+  `gameplay_session_superseded`). The Godot client raises
+  `gameplay_session_superseded` once, so a later UI can show the prompt. The
+  player can take the character back with `vs01_session_begin`. Switching
+  devices never kills the character, loses confirmed progress or doubles an
+  order: pending commands are recovered by key after taking back.
+- **Server-only objects:** progress, receipts and rate-limit logs use
+  `permissionRead: 0` and `permissionWrite: 0`. No client token, not even the
+  owner's, can read them through Nakama's generic storage API, which would
+  otherwise bypass the session check. Clients read only through the RPCs.
+- **One snapshot:** a trade reads progress (with the session) and the receipt
+  in one `storageRead`. Nakama serves that as a single SELECT, one snapshot
+  under READ COMMITTED, so the session check and the replay describe the same
+  moment.
 - **Audit:** every receipt stores before / after money and goods, price, total,
   server time, gameplay session and progress revision. It is also logged.
 - **Lock-down:** device, custom and social sign-in and linking are refused (A3,
   D1). Email sign-in is accepted only when the runtime env sets
   `MYRIAL_ALLOW_EMAIL_TEST_AUTH=true` (local config only). All client storage
   writes and deletes are refused. Server objects use `permissionWrite: 0`
-  (owner read only), and an object without it is treated as untrusted.
+  (and `permissionRead: 0`), and an object without `permissionWrite: 0` is
+  treated as untrusted.
 - **Rate limits (A14)** per user: trade 30 / 10 s, progress read 60 / 10 s,
   session begin 10 / 60 s, overridable through runtime env. Each limiter is a
   sliding-window log of accepted request times in a server-only storage object

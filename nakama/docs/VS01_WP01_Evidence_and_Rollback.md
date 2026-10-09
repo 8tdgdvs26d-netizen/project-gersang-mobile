@@ -3,8 +3,8 @@
 - Repository: `8tdgdvs26d-netizen/project-gersang-mobile`
 - Branch: `claude/vs01-wp01-nakama` (not rebased, no force push)
 - Base `main`: `3774aefacfb92736c63034c51565aa4e675d3aeb`
-- **Code under test:** `bb3e55645366a9e1321736520dfb5ca3b68c8c95`. This is
-  the fix for PR #132 review round 1, on top of the A14 fix `fc87435`. The
+- **Code under test:** `4c80863ab72a3f0e8ae1cb2cfeb6f74d5cd062f3`. This is
+  session policy A, on top of review fix `bb3e556` and A14 fix `fc87435`. The
   commit after it adds only this document and README text.
 - Mac: Docker Desktop 29.8.2, Godot 4.7.2.stable, Node 24.21.0, Nakama 3.25.0,
   PostgreSQL 16 (local Docker only). Recorded 2026-10-10.
@@ -20,19 +20,48 @@
 | GPT Accepted / Mac Accepted / iPhone Accepted / iPad Accepted / Playtested / Player Value Verified | **PENDING** |
 | Sign in with Apple on device | **PENDING** (needs native plugin + Apple Developer setup; only rejection paths tested) |
 
-## Results on `bb3e556`
+## Results on `4c80863`
 
 | Suite | Command | Result |
 |---|---|---|
 | Godot full normal regression, **baseline** `main` 3774aef (isolated `user://`) | `HOME=$(mktemp -d) godot/tests/run_tests.sh` | 65 / 65 PASS |
-| Godot full normal regression, **branch** (isolated `user://`) | `nakama/scripts/run_godot_regression_isolated.sh` | 66 / 66 PASS (65 existing + `verify_vs01_wp01_online_contract`, 125 checks) |
+| Godot full normal regression, **branch** (isolated `user://`) | `nakama/scripts/run_godot_regression_isolated.sh` | 66 / 66 PASS (65 existing + `verify_vs01_wp01_online_contract`, 134 checks), 0 script errors |
 | Node / npm CI suite (existing) | `npm test` (repo root) | 508 / 508 PASS |
-| Nakama server unit tests (clean `npm ci`) | `cd nakama && npm ci && npm test` | 40 / 40 PASS |
+| Nakama server unit tests (clean `npm ci`) | `cd nakama && npm ci && npm test` | 43 / 43 PASS |
 | Live stress, fault injection, DB load, multi-node, restart | `nakama/scripts/run_live_tests.sh` | 14 / 14 PASS |
-| Live Godot SDK probe (Nakama Godot SDK v3.4.0) | same script | 36 / 36 checks PASS |
+| Live Godot SDK probe (Nakama Godot SDK v3.4.0) | same script | 47 / 47 checks PASS |
 
 The A14 numbers below were first recorded on `fc87435`. They were re-run on
-`bb3e556` with the same results: 30 / 15, two nodes 30 / 15, bursts 30, 0, 0, 0.
+`bb3e556` and on `4c80863` with the same results: 30 / 15, two nodes 30 / 15,
+bursts 30, 0, 0, 0. The fault-injection test was re-run on `4c80863`: 503 in
+20–23 ms, 1 attempt each.
+
+## Session policy A (`4c80863`)
+
+Approved by Charlie on 2026-10-10:
+1. One active gameplay session per character.
+2. After a takeover, the old session can neither act on the character nor read
+   its latest progress.
+3. The old device is told.
+4. The player may take the character back.
+5. Switching devices never kills the character, loses confirmed progress or
+   doubles a reward.
+
+| Rule | Implementation | Evidence |
+|---|---|---|
+| 1, 2 act | Trade checks the session first (`bb3e556`). | Unit + live: stale writes and stale receipt replays refused (409). |
+| 2 read | `vs01_progress_get` takes `{gameplay_session_id}` and refuses a superseded one. | Unit: old session refused; after taking back, the other device is refused; malformed / other-account ids refused. Live: 8 racing takeovers leave exactly one session that can write AND read. Godot probe: server refuses the old device's read. |
+| 2 read (bypass found while testing) | Progress and receipts were `permissionRead: 1`, so any token of the account could read them through Nakama's generic storage API, bypassing the session check. They are now server-only (`permissionRead: 0`). | Live: the owner token's generic reads and lists return nothing. Godot probe: the old device's SDK `read_storage_objects` returns nothing. Unit: permissions asserted. |
+| 2 race | Trade reads progress and the receipt in ONE `storageRead`. Nakama v3.25.0 serves this with a single SELECT (`StorageReadObjects`), one snapshot under READ COMMITTED. | Unit: exactly one combined read per trade (fails on the previous code). This closes former known risk 11. |
+| 3 | Godot client raises `gameplay_session_superseded` once, sets `is_gameplay_session_superseded()`, and refuses reads and actions locally (nothing sent). | Godot offline: 1 signal for many calls; no network call after it is known. Godot probe: signal on the old device. |
+| 4 | `vs01_session_begin` takes the character back; the client clears the state. | Godot probe: the old device takes it back, the other device then gets the signal, and the other device takes it back again. |
+| 5 | Idempotent keys + pending recovery after taking back. No death logic in WP01. | Unit: 6 orders with a device switch after each, then replays: each applied once, money exact. Godot probe: progress identical across 3 switches; the pending key replays its original receipt after taking back, with no second charge. |
+
+Test strength: run against the previous server code (`d4ea241`), the new unit
+tests fail (policy-A read checks; the one-snapshot check).
+
+Not in WP01 (UI scope): the visible prompt itself. The client provides the
+signal and state a later UI WP needs.
 
 Unit-suite strength check: deliberately breaking a rule makes at least one test
 fail. The rules checked were the spread %, market stock limit, cargo limit,
@@ -64,10 +93,8 @@ PostgreSQL trigger and an attempt counter (a sequence) on the disposable local
 database, and removes them afterwards. A check after the run found 0
 triggers, functions, sequences or database settings left behind.
 
-Design note (for review): `vs01_progress_get` stays readable by any
-authenticated session of the SAME account, including a superseded one,
-because D2 restricts writes. Restricting reads to the current gameplay session
-would be a session-policy change, so it was not made here.
+Design note: the open question about reads was decided by Charlie (session
+policy A) and is implemented in `4c80863`. See above.
 
 ## A14 rate limit: finding, cause, fix, proof
 
@@ -162,6 +189,8 @@ every applied price matches the rules.
 | After the A14 runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
 | Before the review-fix runs (`bb3e556`) | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
 | After the review-fix runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
+| Before the policy-A runs (`4c80863`) | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
+| After the policy-A runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
 
 - Every Godot run used an isolated `HOME`, so `user://` was a temporary folder.
 - `main` is still `3774aef` and PR #131 is still `a1165aa` (Draft).
@@ -194,11 +223,15 @@ every applied price matches the rules.
     Nakama upgrade must re-run the unit tests and the live fault-injection
     test; if the text changes, conflicts would fail fast as
     `storage_unavailable` (safe, but less available).
-11. Within one request, a takeover that happens between the session check
-    and the receipt read can still return an existing receipt to the
-    just-superseded session. That is read-only, for the same account, and the
-    window is milliseconds. Any WRITE is still blocked by the progress
-    version check.
+11. (Closed in `4c80863`) The former millisecond read window between the
+    session check and the receipt read is gone: both come from one snapshot.
+12. Taking the character back is not rate-limited beyond session begin's
+    10 per 60 s. Two devices swapping control quickly will start refusing
+    each other's session begins after that limit. This is intended
+    protection; the UX for it belongs to the UI WP.
+13. Existing progress / receipt rows written before `4c80863` in a local test
+    database keep `permissionRead: 1` until they are next written. This
+    affects disposable local test data only; there are no production data.
 
 ## Rollback plan
 
@@ -208,6 +241,8 @@ every applied price matches the rules.
    changes no existing behaviour.
    - To undo only the review fixes, revert `bb3e556`. This is not
      recommended: it restores the stale-session replay and the retry storm.
+   - To undo only session policy A, revert `4c80863`. That restores
+     same-account reads by a superseded session and owner-readable storage.
    - To undo only the A14 fix, revert `fc87435`. This is not recommended: it
      restores the inexact limiter.
 3. **Local data:** in `nakama/`, `docker compose --profile multinode stop`
