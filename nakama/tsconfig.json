@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "es5",
+    "lib": ["es2015"],
+    "module": "none",
+    "outFile": "build/index.js",
+    "strict": true,
+    "skipLibCheck": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "typeRoots": ["./node_modules"],
+    "types": ["nakama-runtime"]
+  },
+  "files": [
+    "./node_modules/nakama-runtime/index.d.ts",
+    "src/rules.ts",
+    "src/progress.ts",
+    "src/trade.ts",
+    "src/guards.ts",
+    "src/main.ts"
+  ]
+}
