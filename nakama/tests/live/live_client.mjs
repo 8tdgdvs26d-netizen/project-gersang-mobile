@@ -27,8 +27,9 @@ export async function authRaw(path, payload) {
 }
 
 // Returns {status, body}. body is the parsed RPC result, or the error object.
-export async function rpc(account, id, payload, { signal } = {}) {
-  const res = await fetch(`${BASE}/v2/rpc/${id}?unwrap=true`, {
+// `base` selects another node (multi-node test).
+export async function rpc(account, id, payload, { signal, base = BASE } = {}) {
+  const res = await fetch(`${base}/v2/rpc/${id}?unwrap=true`, {
     method: "POST", signal,
     headers: { Authorization: `Bearer ${account.token}`, "Content-Type": "application/json" },
     body: typeof payload === "string" ? payload : JSON.stringify(payload ?? {}),

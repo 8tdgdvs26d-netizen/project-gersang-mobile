@@ -174,21 +174,40 @@ test("security: guest auth, forged values, other accounts' data, client storage"
   assert.equal(anon.status, 401);
 });
 
-// The WP01 limiter is a fixed 10 s window counted in the node-local cache
-// with a non-atomic increment (documented limit). Guarantee tested here:
-// a burst is throttled, never more than 2 x limit passes (window boundary),
-// and whatever passes is still exactly-once and consistent. The observed
-// counts are printed as evidence.
-test("rate limit: a 45-trade burst is throttled, state stays consistent", async (t) => {
+// A14: at most 30 accepted trades in every continuous 10 s window.
+test("rate limit: 45 concurrent requests, at most 30 accepted, state consistent", async (t) => {
   const a = await authEmail("rate");
   const g = await begin(a);
   const results = await Promise.all(Array.from({ length: 45 }, () => rpc(a, "vs01_trade", order(g))));
   const limited = results.filter((r) => r.status === 429).length;
   const applied = results.filter((r) => r.status === 200).length;
-  t.diagnostic(`rate limit evidence: sent 45, applied ${applied}, throttled ${limited} (limit 30 per 10 s)`);
+  t.diagnostic(`rate limit evidence (45 concurrent): applied ${applied}, throttled ${limited} (limit 30 per 10 s)`);
   assert.equal(limited + applied, 45, "every request is either throttled or decided");
-  assert.ok(limited >= 10, `throttled ${limited}`);
-  assert.ok(applied <= 60, `applied ${applied}`);
+  assert.ok(applied <= 30, `applied ${applied} > 30`);
   const final = await progress(a);
   assert.equal(checkLedger(await receipts(a), final), applied);
+});
+
+test("rate limit: bursts spread across any window boundary never exceed 30 in 10 s", async (t) => {
+  const a = await authEmail("rate-edge");
+  const g = await begin(a);
+  const start = Date.now();
+  let applied = 0;
+  const perBurst = [];
+  // 4 bursts of 30 within ~8 s: whatever fixed boundary falls in between,
+  // all of them sit inside one sliding 10 s window.
+  for (let burst = 0; burst < 4; burst++) {
+    const results = await Promise.all(Array.from({ length: 30 }, () => rpc(a, "vs01_trade", order(g))));
+    const ok = results.filter((r) => r.status === 200).length;
+    perBurst.push(ok);
+    applied += ok;
+    if (burst < 3) await sleep(2500);
+  }
+  const span = Date.now() - start;
+  t.diagnostic(`rate limit evidence (4 x 30 over ${span} ms): applied per burst ${perBurst.join(", ")}`);
+  assert.ok(span < 10000, `test span ${span} ms must stay inside one window`);
+  assert.ok(applied <= 30, `applied ${applied} > 30 within ${span} ms`);
+  // After the window has passed, the account can trade again.
+  await sleep(10500);
+  assert.equal((await rpc(a, "vs01_trade", order(g))).status, 200);
 });

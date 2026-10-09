@@ -44,3 +44,19 @@ test("server restart: confirmed state persists, retries stay exactly-once", asyn
   // The gameplay session also survives; no forced death / reset on reconnect.
   assert.equal((await rpc(a, "vs01_trade", order(g))).status, 200);
 });
+
+test("server restart: the rate-limit window survives (state is in PostgreSQL)", async () => {
+  const a = await authEmail("restart-rate");
+  const g = await begin(a);
+  const first = Date.now();
+  const results = await Promise.all(Array.from({ length: 30 }, () => rpc(a, "vs01_trade", order(g))));
+  assert.equal(results.filter((r) => r.status === 200).length, 30);
+  execFileSync(DOCKER, ["compose", "restart", "nakama"], { cwd: COMPOSE_DIR, stdio: "ignore" });
+  await waitHealthy();
+  const elapsed = Date.now() - first;
+  assert.ok(elapsed < 9000, `restart took too long for this check (${elapsed} ms)`);
+  const after = await Promise.all(Array.from({ length: 5 }, () => rpc(a, "vs01_trade", order(g))));
+  assert.deepEqual(after.map((r) => r.status), [429, 429, 429, 429, 429], "no fresh allowance after a restart");
+  await sleep(Math.max(0, 10500 - (Date.now() - first)));
+  assert.equal((await rpc(a, "vs01_trade", order(g))).status, 200, "allowed again once the window has passed");
+});

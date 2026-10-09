@@ -8,8 +8,10 @@ import { randomUUID } from "node:crypto";
 
 const BUILD = fileURLToPath(new URL("../../build/index.js", import.meta.url));
 
-export function loadModule() {
-  const context = createContext({ JSON, Math, Object, String, Date, parseInt, isFinite });
+// `clock` (optional): { now() } replacing Date.now inside the module.
+export function loadModule(clock) {
+  const FakeDate = clock ? { now: () => clock.now() } : Date;
+  const context = createContext({ JSON, Math, Object, String, Date: FakeDate, parseInt, isFinite });
   runInContext(readFileSync(BUILD, "utf8"), context, { filename: "index.js" });
   return context;
 }
@@ -19,14 +21,19 @@ export const fixtures = JSON.parse(
 );
 
 // Storage double: version "*" = create only; any other version must match.
-// multiUpdate is all-or-nothing. `failNextWrites` injects lost races.
+// multiUpdate is all-or-nothing. `failNextWrites` injects lost races into
+// batches that touch progress / receipts; `failNextRateWrites` into rate-limit
+// writes; `beforeWrite` / `beforeRateWrite` run a competing writer first.
 export class FakeNakama {
   constructor() {
     this.objects = new Map();
     this.cache = new Map();
     this.versionCounter = 0;
     this.failNextWrites = 0;
+    this.failNextRateWrites = 0;
     this.beforeWrite = null; // hook to simulate a concurrent writer
+    this.beforeRateWrite = null;
+    this.rateWrites = 0;
   }
   id(o) { return `${o.collection}/${o.key}/${o.userId}`; }
   storageRead(ids) {
@@ -51,17 +58,23 @@ export class FakeNakama {
     });
   }
   storageWrite(writes) {
-    this._maybeInterfere();
+    this._maybeInterfere(writes);
     writes.forEach((w) => this._check(w));
     writes.forEach((w) => this._apply(w));
   }
   multiUpdate(_accounts, writes, _deletes, _wallets) {
-    this._maybeInterfere();
+    this._maybeInterfere(writes);
     writes.forEach((w) => this._check(w));
     writes.forEach((w) => this._apply(w));
     return { storageWriteAcks: [], walletUpdateAcks: [] };
   }
-  _maybeInterfere() {
+  _maybeInterfere(writes) {
+    if (writes.some((w) => w.collection === "vs01_wp01_rate_limits")) {
+      this.rateWrites += 1;
+      if (this.beforeRateWrite) { const f = this.beforeRateWrite; this.beforeRateWrite = null; f(this); }
+      if (this.failNextRateWrites > 0) { this.failNextRateWrites -= 1; throw new Error("injected rate conflict"); }
+      return;
+    }
     if (this.beforeWrite) { const f = this.beforeWrite; this.beforeWrite = null; f(this); }
     if (this.failNextWrites > 0) { this.failNextWrites -= 1; throw new Error("injected conflict"); }
   }

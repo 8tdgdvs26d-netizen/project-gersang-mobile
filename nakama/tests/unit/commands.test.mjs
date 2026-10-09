@@ -233,19 +233,6 @@ test("unauthenticated (server-key) calls are refused", () => {
   }
 });
 
-test("rate limit rejects bursts above the per-user window", () => {
-  const nk = new FakeNakama();
-  const g = begin(nk, U1);
-  const env = { MYRIAL_RL_TRADE_PER_10S: "5" };
-  let limited = 0;
-  for (let i = 0; i < 12; i++) {
-    const r = trade(nk, U1, g, { quantity: 1 }, env);
-    if (!r.ok && r.code === RESOURCE_EXHAUSTED) limited += 1;
-  }
-  assert.ok(limited >= 6, `limited ${limited}`);
-  assert.ok(stored(nk, U1).backpack.test_good_01 <= 6);
-});
-
 test("combat reward claims are always refused (D4)", () => {
   const nk = new FakeNakama();
   begin(nk, U1);

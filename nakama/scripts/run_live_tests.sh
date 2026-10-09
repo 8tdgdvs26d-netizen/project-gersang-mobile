@@ -15,19 +15,22 @@ export DOCKER
 cd "$NAKAMA_DIR"
 [ -d node_modules ] || npm ci
 npm run build
-"$DOCKER" compose up -d
-i=0
-until curl -sf http://127.0.0.1:17350/healthcheck >/dev/null; do
-	i=$((i + 1)); [ "$i" -lt 90 ] || { echo "Nakama did not become healthy" >&2; exit 2; }
-	sleep 1
-done
-# Restart so the freshly built module is loaded.
-"$DOCKER" compose restart nakama >/dev/null
-i=0
-until curl -sf http://127.0.0.1:17350/healthcheck >/dev/null; do
-	i=$((i + 1)); [ "$i" -lt 90 ] || { echo "Nakama did not come back" >&2; exit 2; }
-	sleep 1
-done
+wait_healthy() {
+	i=0
+	until curl -sf "$1/healthcheck" >/dev/null; do
+		i=$((i + 1)); [ "$i" -lt 90 ] || { echo "Nakama at $1 did not become healthy" >&2; exit 2; }
+		sleep 1
+	done
+}
+# Two nodes on one database: the second exists only for the multi-node test.
+"$DOCKER" compose --profile multinode up -d
+wait_healthy http://127.0.0.1:17350
+wait_healthy http://127.0.0.1:17360
+# Restart so the freshly built module is loaded on both nodes.
+"$DOCKER" compose --profile multinode restart nakama nakama2 >/dev/null
+wait_healthy http://127.0.0.1:17350
+wait_healthy http://127.0.0.1:17360
+export MYRIAL_NAKAMA_URL_2=http://127.0.0.1:17360
 
 echo "== Nakama live stress (Node, local server)"
 node --test --test-concurrency=1 tests/live/*.test.mjs

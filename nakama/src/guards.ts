@@ -4,14 +4,29 @@ const GUARD_IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9_-]{16,64}$/;
 const GUARD_SESSION_ID_PATTERN = /^[0-9a-f-]{36}$/;
 const GUARD_MAX_PAYLOAD_BYTES = 1024;
 
-// Per-user limits per fixed window. Security settings, not gameplay rules;
-// overridable through runtime env (see config/local.yml). Counters live in
-// this node's local cache, so with several Nakama nodes each node counts on
-// its own (documented WP01 limit).
-const GUARD_DEFAULT_LIMITS: { [name: string]: { env: string; perWindow: number; windowSec: number } } = {
-  trade: { env: "MYRIAL_RL_TRADE_PER_10S", perWindow: 30, windowSec: 10 },
-  progress_get: { env: "MYRIAL_RL_PROGRESS_GET_PER_10S", perWindow: 60, windowSec: 10 },
-  session_begin: { env: "MYRIAL_RL_SESSION_BEGIN_PER_60S", perWindow: 10, windowSec: 60 },
+// Per-user rate limits (A14). Security settings, not gameplay rules;
+// overridable through runtime env (see config/local.yml).
+//
+// Sliding-window log kept in PostgreSQL (Nakama storage), one server-only
+// object per user and limiter: the server times of the requests accepted in
+// the last window. A request is accepted only by a version-checked write
+// (compare-and-swap: Nakama runs `UPDATE ... WHERE version = <read version>`,
+// or a plain INSERT for "*", in a READ COMMITTED transaction, so two writers
+// can never both succeed from the same read). Hence, in every continuous
+// window of `windowMs`, at most `perWindow` requests are accepted, on any
+// number of Nakama nodes sharing the database, across server restarts. A lost
+// race re-reads and re-checks; when retries run out the request is refused
+// (fail closed), so contention can never let a request through.
+//
+// Nakama versions are md5(value), so a value must never repeat: `seq` grows
+// on every write, which rules out an old version matching again (ABA).
+const GUARD_RATE_COLLECTION = "vs01_wp01_rate_limits";
+const GUARD_RATE_MAX_ATTEMPTS = 64;
+const GUARD_RATE_MAX_ENTRIES = 10000; // sanity bound on the stored log
+const GUARD_DEFAULT_LIMITS: { [name: string]: { env: string; perWindow: number; windowMs: number } } = {
+  trade: { env: "MYRIAL_RL_TRADE_PER_10S", perWindow: 30, windowMs: 10000 },
+  progress_get: { env: "MYRIAL_RL_PROGRESS_GET_PER_10S", perWindow: 60, windowMs: 10000 },
+  session_begin: { env: "MYRIAL_RL_SESSION_BEGIN_PER_60S", perWindow: 10, windowMs: 60000 },
 };
 
 function guardError(code: number, message: string): { message: string; code: number } {
@@ -65,16 +80,49 @@ function guardRequestHash(req: TradeRequest): string {
   return [req.action, req.city_id, req.good_id, String(req.quantity)].join("|");
 }
 
+function guardRateLimitValue(value: any): boolean {
+  if (!progressKeysExactly(value, ["seq", "accepted_ms"]) || !rulesIsInt(value.seq) || value.seq < 0) return false;
+  if (Object.prototype.toString.call(value.accepted_ms) !== "[object Array]" || value.accepted_ms.length > GUARD_RATE_MAX_ENTRIES) return false;
+  for (let i = 0; i < value.accepted_ms.length; i++) {
+    if (!rulesIsInt(value.accepted_ms[i]) || value.accepted_ms[i] < 0) return false;
+    if (i > 0 && value.accepted_ms[i] < value.accepted_ms[i - 1]) return false;
+  }
+  return true;
+}
+
 function guardRateLimit(ctx: nkruntime.Context, nk: nkruntime.Nakama, name: string, userId: string): void {
   const rule = GUARD_DEFAULT_LIMITS[name];
   let limit = rule.perWindow;
   const override = ctx.env ? ctx.env[rule.env] : undefined;
   if (override !== undefined && /^[0-9]+$/.test(override)) limit = parseInt(override, 10);
-  const windowIndex = Math.floor(Date.now() / 1000 / rule.windowSec);
-  const key = "rl:" + name + ":" + userId + ":" + windowIndex;
-  const count = (nk.localcacheGet(key) || 0) + 1;
-  nk.localcachePut(key, count, rule.windowSec * 2);
-  if (count > limit) throw guardError(nkruntime.Codes.RESOURCE_EXHAUSTED, "rate_limited");
+  for (let attempt = 0; attempt < GUARD_RATE_MAX_ATTEMPTS; attempt++) {
+    const found = nk.storageRead([{ collection: GUARD_RATE_COLLECTION, key: name, userId: userId }]);
+    const obj = found.length > 0 ? found[0] : null;
+    if (obj !== null && (obj.permissionWrite !== 0 || !guardRateLimitValue(obj.value))) {
+      throw guardError(nkruntime.Codes.INTERNAL, "rate_limit_state_not_trusted");
+    }
+    const previous: number[] = obj === null ? [] : obj.value.accepted_ms;
+    // Never step back in time: on a clock step the window only gets stricter.
+    const last = previous.length > 0 ? previous[previous.length - 1] : 0;
+    const now = Math.max(Date.now(), last);
+    const recent: number[] = [];
+    for (let i = 0; i < previous.length; i++) {
+      if (previous[i] > now - rule.windowMs) recent.push(previous[i]);
+    }
+    if (recent.length >= limit) throw guardError(nkruntime.Codes.RESOURCE_EXHAUSTED, "rate_limited");
+    recent.push(now);
+    try {
+      nk.storageWrite([{
+        collection: GUARD_RATE_COLLECTION, key: name, userId: userId,
+        value: { seq: obj === null ? 1 : obj.value.seq + 1, accepted_ms: recent },
+        version: obj === null ? "*" : obj.version, permissionRead: 0, permissionWrite: 0,
+      }]);
+      return;
+    } catch (e) {
+      continue; // another request of this user was accepted first: re-read, re-check
+    }
+  }
+  throw guardError(nkruntime.Codes.RESOURCE_EXHAUSTED, "rate_limit_contention");
 }
 
 // ---------- API lock-down hooks (A3 no guest progress, A4 server authority) ----------
