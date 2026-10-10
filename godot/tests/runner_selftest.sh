@@ -8,17 +8,24 @@
 # so they cannot affect the normal regression or an export.
 #
 # Usage:
-#   GODOT=/Applications/Godot.app/Contents/MacOS/Godot godot/tests/runner_selftest.sh [runner]
-# [runner] defaults to the run_tests.sh next to this file. Exit 0 only if
-# every fixture got the expected verdict and the runner's exit codes match.
+#   GODOT=/Applications/Godot.app/Contents/MacOS/Godot godot/tests/runner_selftest.sh [runner] [wrapper]
+# [runner] defaults to the run_tests.sh next to this file. [wrapper] defaults
+# to nakama/scripts/run_godot_regression_isolated.sh of this repository (the
+# WP01 isolated-user:// wrapper); it is run against the same fixtures to check
+# that its exit code follows the runner (pass -> 0, any failure -> non-zero).
+# Exit 0 only if every fixture got the expected verdict and all exit codes
+# match.
 
 GODOT="${GODOT:-godot}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 RUNNER="${1:-$HERE/run_tests.sh}"
+WRAPPER="${2:-$HERE/../../nakama/scripts/run_godot_regression_isolated.sh}"
 WORK="$(mktemp -d)"
-PROJ="$WORK/project"
-mkdir -p "$PROJ/tests" "$WORK/home"
+# Same layout as the repository: <repo>/godot/tests and <repo>/nakama/scripts.
+PROJ="$WORK/repo/godot"
+mkdir -p "$PROJ/tests" "$WORK/home" "$WORK/repo/nakama/scripts"
 cp "$RUNNER" "$PROJ/tests/run_tests.sh"
+[ -f "$WRAPPER" ] && cp "$WRAPPER" "$WORK/repo/nakama/scripts/run_godot_regression_isolated.sh"
 printf 'config_version=5\n\n[application]\n\nconfig/name="RunnerSelfTest"\n' > "$PROJ/project.godot"
 # One class_name script so the import writes the class cache the runner checks.
 printf 'class_name RunnerSelfTestMarker\nextends RefCounted\n' > "$PROJ/marker.gd"
@@ -114,6 +121,22 @@ HOME="$WORK/home" GODOT="$GODOT" sh "$PROJ/tests/run_tests.sh" verify_a_normal_p
 mixed_exit=$?
 if [ "$all_pass_exit" -eq 0 ]; then echo "ok       runner exit 0 when every test passes"; else echo "MISMATCH runner exit $all_pass_exit when every test passes (want 0)"; mismatch=$((mismatch + 1)); fi
 if [ "$mixed_exit" -eq 1 ]; then echo "ok       runner exit 1 when a test fails"; else echo "MISMATCH runner exit $mixed_exit when a test fails (want 1)"; mismatch=$((mismatch + 1)); fi
+
+# The WP01 wrapper must keep the runner's verdict.
+if [ -f "$WORK/repo/nakama/scripts/run_godot_regression_isolated.sh" ]; then
+	W="$WORK/repo/nakama/scripts/run_godot_regression_isolated.sh"
+	echo "Wrapper under test: $WRAPPER"
+	GODOT="$GODOT" sh "$W" verify_a_normal_pass >/dev/null 2>&1
+	w_pass=$?
+	for broken in verify_b_parse_error verify_c_script_error verify_d_no_success_line verify_e2_failed_exit0; do
+		GODOT="$GODOT" sh "$W" verify_a_normal_pass "$broken" >/dev/null 2>&1
+		w_fail=$?
+		if [ "$w_fail" -ne 0 ]; then echo "ok       wrapper exit $w_fail with $broken (non-zero)"; else echo "MISMATCH wrapper exit 0 with $broken (want non-zero)"; mismatch=$((mismatch + 1)); fi
+	done
+	if [ "$w_pass" -eq 0 ]; then echo "ok       wrapper exit 0 when every test passes"; else echo "MISMATCH wrapper exit $w_pass when every test passes (want 0)"; mismatch=$((mismatch + 1)); fi
+else
+	echo "note     no wrapper found at $WRAPPER (skipped)"
+fi
 
 rm -rf "$WORK"
 if [ "$mismatch" -ne 0 ]; then
