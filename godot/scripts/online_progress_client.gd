@@ -16,6 +16,21 @@ extends Node
 ## original receipt instead of trading twice. Pending commands are kept in
 ## memory and can be exported / imported by the caller; writing them to disk
 ## needs a separately approved local-storage decision (Save v14 untouched).
+##
+## Consistency of the confirmed cache (WP01-B-S01). Answers can arrive late or
+## in any order, so the cache only moves FORWARD:
+## - a view is accepted only if its server revision is newer than the cached
+##   one, or, at the same revision (same money and goods by definition; only
+##   time-dependent quotes can differ), if it answers a LATER-issued request;
+## - an answer to a request sent before a sign-out or an account switch (an
+##   older "account epoch") never touches the current state; it is reported
+##   as uncertain and its command stays pending for its own account;
+## - pending commands belong to the account that sent them; another account
+##   never sees or resends them;
+## - a "superseded" answer counts only for the gameplay session it was sent
+##   under (session policy A is unchanged); a late answer for an older local
+##   session cannot mark the current one, and the session id only moves to
+##   the newest begun session.
 
 ## Session policy A (Charlie, 2026-10-10): another device took over this
 ## character. This client can no longer act on it or read its latest
@@ -60,8 +75,20 @@ var _gameplay_session_id := ""
 var _superseded := false
 ## Last server-confirmed progress view, or {} when none. Read-only cache.
 var _confirmed := {}
+## Revision of _confirmed and issue number of the request that brought it.
+var _confirmed_revision := -1
+var _confirmed_seq := -1
+## Revision of the view that set _gameplay_session_id (newest begun session).
+var _session_revision := -1
+## Local request counter (issue order) and the account epoch: +1 on every
+## sign-out and every switch to a different account.
+var _issued := 0
+var _auth_epoch := 0
+## The CURRENT account's pending commands:
 ## idempotency_key -> {"action", "city_id", "good_id", "quantity"}
 var _pending := {}
+## Pending commands of accounts that are not signed in right now (user_id -> dict).
+var _pending_by_user := {}
 
 
 func configure(p_host: String, p_port: int, p_scheme: String = "http", p_server_key: String = "defaultkey") -> void:
@@ -124,20 +151,33 @@ func sign_in_email_test(email: String, password: String, create: bool = true) ->
 
 
 func sign_out_local() -> void:
+	_park_pending(get_user_id())
 	_session = null
 	_gameplay_session_id = ""
 	_superseded = false
-	_confirmed = {}
+	_reset_confirmed()
+	_auth_epoch += 1
 
 
 ## D2: starts this device's gameplay session; any earlier one (other device or
 ## an older run) can no longer write.
 func begin_gameplay_session() -> Dictionary:
+	var epoch := _auth_epoch
+	var seq := _next_seq()
 	var result := await _rpc(RPC_SESSION_BEGIN, {})
+	if epoch != _auth_epoch:
+		return _stale(result)
 	if result["status"] == OK:
-		_gameplay_session_id = result["data"]["gameplay_session_id"]
-		_superseded = false
-		_confirmed = result["data"]["progress"]
+		var view: Dictionary = result["data"]["progress"]
+		# Each begin raises the server revision, so the newest begun session
+		# is the one with the highest view revision (two begins never share
+		# one); an older begin answering late must not bring back its
+		# (already superseded) session id.
+		if int(view.get("revision", -1)) >= _session_revision:
+			_session_revision = int(view.get("revision", -1))
+			_gameplay_session_id = result["data"]["gameplay_session_id"]
+			_superseded = false
+		_offer(view, seq)
 	return result
 
 
@@ -147,10 +187,15 @@ func refresh_progress() -> Dictionary:
 		return _outcome(NO_GAMEPLAY_SESSION, "no_gameplay_session")
 	if _superseded:
 		return _outcome(REJECTED, SUPERSEDED_REASON)
-	var result := await _rpc(RPC_PROGRESS_GET, {"gameplay_session_id": _gameplay_session_id})
+	var epoch := _auth_epoch
+	var seq := _next_seq()
+	var sent_session := _gameplay_session_id
+	var result := await _rpc(RPC_PROGRESS_GET, {"gameplay_session_id": sent_session})
+	if epoch != _auth_epoch:
+		return _stale(result)
 	if result["status"] == OK:
-		_confirmed = result["data"]["progress"]
-	_note_superseded(result)
+		_offer(result["data"]["progress"], seq)
+	_note_superseded(result, sent_session)
 	return result
 
 
@@ -165,9 +210,14 @@ func sell(city_id: String, good_id: String, quantity: int) -> Dictionary:
 ## Resends every pending command with its original key. Each one resolves to
 ## its single recorded outcome (applied or rejected) or stays pending.
 func recover_pending() -> Array:
+	var epoch := _auth_epoch
+	var pending := _pending
 	var outcomes := []
-	for key in _pending.keys():
-		outcomes.append(await _trade(_pending[key], key))
+	for key in pending.keys():
+		if epoch != _auth_epoch:
+			break  # signed out or switched account: stop resending this account's orders
+		if pending.has(key):
+			outcomes.append(await _trade(pending[key], key))
 	return outcomes
 
 
@@ -184,48 +234,105 @@ static func new_idempotency_key() -> String:
 func _trade(command: Dictionary, key: String) -> Dictionary:
 	if _gameplay_session_id.is_empty():
 		return _outcome(NO_GAMEPLAY_SESSION, "no_gameplay_session")
-	var is_retry := _pending.has(key)
-	_pending[key] = command.duplicate(true)
+	# This account's pending list, held by reference: whatever happens to the
+	# sign-in meanwhile, the answer is filed with the account that sent it.
+	var pending := _pending
+	var is_retry := pending.has(key)
+	pending[key] = command.duplicate(true)
 	if _superseded:
 		# Known to be taken over: nothing is sent. A retry stays pending for
 		# recovery after begin_gameplay_session(); a new command is dropped.
 		if not is_retry:
-			_pending.erase(key)
+			pending.erase(key)
 		var refused := _outcome(REJECTED, SUPERSEDED_REASON)
 		refused["idempotency_key"] = key
-		refused["pending"] = _pending.has(key)
+		refused["pending"] = pending.has(key)
 		return refused
+	var epoch := _auth_epoch
+	var seq := _next_seq()
+	var sent_session := _gameplay_session_id
 	var payload := command.duplicate(true)
-	payload["gameplay_session_id"] = _gameplay_session_id
+	payload["gameplay_session_id"] = sent_session
 	payload["idempotency_key"] = key
 	var result := await _rpc(RPC_TRADE, payload)
 	result["idempotency_key"] = key
-	_note_superseded(result)
+	if epoch != _auth_epoch:
+		# Signed out or another account meanwhile: the order stays pending for
+		# its own account (resolved by that account's recovery later).
+		var stale := _stale(result)
+		stale["idempotency_key"] = key
+		stale["pending"] = pending.has(key)
+		return stale
+	_note_superseded(result, sent_session)
 	if result["status"] == REJECTED and result.get("grpc_status", 0) in AMBIGUOUS_GRPC_CODES:
 		result["status"] = UNCERTAIN
 	if result["status"] == OK:
 		# Only a receipt (applied or rejected by the rules) resolves a command.
-		_pending.erase(key)
+		pending.erase(key)
 		var data: Dictionary = result["data"]
-		if data.get("progress") != null:
-			_confirmed = data["progress"]
+		if typeof(data.get("progress")) == TYPE_DICTIONARY:
+			_offer(data["progress"], seq)
 		result["receipt"] = data["receipt"]
 		result["replayed"] = data["replayed"]
 	elif result["status"] == REJECTED and not is_retry:
 		# A NEW command refused before any decision (malformed, superseded
 		# session, rate limited, ...) never applied: nothing to recover.
-		_pending.erase(key)
+		pending.erase(key)
 	# Otherwise it stays pending: no answer, an ambiguous storage error, or a
 	# refused RETRY, which says nothing about the original attempt. A
 	# superseded client recovers by beginning a new gameplay session first.
-	result["pending"] = _pending.has(key)
+	result["pending"] = pending.has(key)
 	return result
 
 
-func _note_superseded(result: Dictionary) -> void:
+## Policy A: marks THIS session as taken over, but only if the refused
+## request was sent under the gameplay session that is current now.
+func _note_superseded(result: Dictionary, sent_session: String) -> void:
+	if sent_session != _gameplay_session_id:
+		return
 	if result["status"] == REJECTED and result["reason"] == SUPERSEDED_REASON and not _superseded:
 		_superseded = true
 		gameplay_session_superseded.emit()
+
+
+func _next_seq() -> int:
+	_issued += 1
+	return _issued - 1
+
+
+## Accepts a server-confirmed view only if it is newer (see the header).
+func _offer(view: Variant, seq: int) -> void:
+	if typeof(view) != TYPE_DICTIONARY:
+		return
+	var revision := int((view as Dictionary).get("revision", -1))
+	if revision < _confirmed_revision or (revision == _confirmed_revision and seq < _confirmed_seq):
+		return
+	_confirmed = (view as Dictionary).duplicate(true)
+	_confirmed_revision = revision
+	_confirmed_seq = seq
+
+
+func _reset_confirmed() -> void:
+	_confirmed = {}
+	_confirmed_revision = -1
+	_confirmed_seq = -1
+	_session_revision = -1
+
+
+## Keeps an account's pending commands aside while it is not signed in.
+func _park_pending(user_id: String) -> void:
+	if not _pending.is_empty():
+		_pending_by_user[user_id] = _pending
+	_pending = {}
+
+
+## An answer to a request sent under an older account epoch: never applied to
+## the current state; its outcome is unknown to the current account.
+static func _stale(result: Dictionary) -> Dictionary:
+	var stale := _outcome(UNCERTAIN, "answer_after_sign_out_or_account_change")
+	stale["stale"] = true
+	stale["original_status"] = result.get("status")
+	return stale
 
 
 func _rpc(id: String, payload: Dictionary) -> Dictionary:
@@ -256,6 +363,17 @@ func _accept_session(session: NakamaSession) -> Dictionary:
 		if error != null:
 			rejected["grpc_status"] = error.grpc_status_code
 		return rejected
+	var previous_user := get_user_id()
+	if _session == null or session.user_id != previous_user:
+		# Signed out before, or a different account: nothing of the previous
+		# state may leak in, and late answers to its requests are ignored.
+		if _session != null:
+			_park_pending(previous_user)
+		_pending = _pending_by_user.get(session.user_id, {})
+		_pending_by_user.erase(session.user_id)
+		_reset_confirmed()
+		_superseded = false
+		_auth_epoch += 1
 	_session = session
 	_gameplay_session_id = ""
 	return _outcome(OK, "")
