@@ -67,4 +67,7 @@ done
 DOCKER_BIN="$(command -v "$DOCKER")"
 run_godot_strict "VS-01 WP01-B live online trade harness passed" --script res://tests/live_vs01_wp01b_online_trade.gd -- \
 	127.0.0.1 17350 "$PROXY_PORT" "$NAKAMA_DIR" "$DOCKER_BIN" "$HOME"
+echo "== Godot live UI, WP01-C Online TEST mode (market buttons, lossy proxy, takeover, isolated user://)"
+run_godot_strict "VS-01 WP01-C live online trade UI passed" --script res://tests/live_vs01_wp01c_online_trade_ui.gd -- \
+	127.0.0.1 17350 "$PROXY_PORT"
 echo "Lossy proxy counters: $(curl -sf "http://127.0.0.1:$PROXY_PORT/__lossy_proxy/stats")"

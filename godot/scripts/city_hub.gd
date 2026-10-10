@@ -780,6 +780,13 @@ func show_trade_feedback(action: String, good_id: String, quantity: int, result:
 		_feedback_label.text = FAILURE_MESSAGES.get(result.get("reason", ""), GENERIC_FAILURE)
 
 
+## Shows a ready-made feedback line (VS-01 WP01-C: states such as "result not
+## confirmed" that are neither a success nor a rule failure). The hub only
+## shows the text it is given.
+func show_feedback_text(text: String) -> void:
+	_feedback_label.text = text
+
+
 func close() -> void:
 	close_dismiss_confirm()
 	close_dismiss_blocked()
