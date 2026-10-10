@@ -76,10 +76,11 @@ func _verify_rules_parity() -> void:
 func _verify_isolation() -> void:
 	var dir := DirAccess.open("res://scripts")
 	for file in dir.get_files():
-		if file.ends_with(".gd") and file != "online_progress_client.gd":
+		# The online layer itself: the WP01 client and the WP01-B adapter.
+		if file.ends_with(".gd") and not file in ["online_progress_client.gd", "online_trade_adapter.gd"]:
 			var source := FileAccess.get_file_as_string("res://scripts/" + file)
-			_check(not source.contains("OnlineProgressClient") and not source.contains("Nakama"),
-				"WP01 does not wire the online client into gameplay yet (%s)" % file)
+			_check(not source.contains("OnlineProgressClient") and not source.contains("OnlineTradeAdapter") and not source.contains("Nakama"),
+				"WP01 / WP01-B do not wire the online layer into gameplay yet (%s)" % file)
 	var project := FileAccess.get_file_as_string("res://project.godot")
 	_check(not project.contains("heroiclabs"), "Nakama SDK is not an autoload")
 	_check(SaveStore.VERSION == 14, "Save schema stays v14 (D6: assess only)")
