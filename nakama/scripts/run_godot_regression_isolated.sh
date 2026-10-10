@@ -10,10 +10,17 @@ REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 ISOLATED_HOME="$(mktemp -d)"
 echo "Isolated HOME (user:// root): $ISOLATED_HOME"
 OUT="$(mktemp)"
+STATUS_FILE="$(mktemp)"
 set +e
-HOME="$ISOLATED_HOME" GODOT="${GODOT:-godot}" sh "$REPO_DIR/godot/tests/run_tests.sh" "$@" | tee "$OUT"
-STATUS=$?
+# POSIX sh has no pipefail: after "runner | tee", $? is tee's exit code. The
+# runner's own exit code is therefore written to a file inside the pipeline
+# and read back (PR #133 fix: a failing runner must not exit 0 here).
+{ HOME="$ISOLATED_HOME" GODOT="${GODOT:-godot}" sh "$REPO_DIR/godot/tests/run_tests.sh" "$@"; echo "$?" > "$STATUS_FILE"; } | tee "$OUT"
+STATUS="$(cat "$STATUS_FILE" 2>/dev/null)"
 set -e
+case "$STATUS" in
+	''|*[!0-9]*) echo "Runner exit code not captured: treating the run as failed" >&2; STATUS=1 ;;
+esac
 # Strict re-check (WP01-B finding): Godot 4.7.2 exits 0 when a --script fails
 # to PARSE, so godot/tests/run_tests.sh alone would report such a script as
 # PASS. Every PASS line must carry its script's own "passed" message and no
