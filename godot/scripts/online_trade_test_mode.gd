@@ -304,8 +304,10 @@ func _show_signed_out() -> void:
 	_session_box.visible = false
 	_account_label.text = SIGNED_OUT_TEXT
 	_status_label.text = ""
-	_email_edit.text = "player-%d%04d@myrial.test" % [Time.get_unix_time_from_system(), randi() % 10000]
-	_password_edit.text = "localtest-%08x" % randi()
+	# Disposable local test account: random, no clock needed (project rule:
+	# time is read only through TimeSource).
+	_email_edit.text = "player-%s@myrial.test" % OnlineProgressClient.new_idempotency_key().substr(0, 16)
+	_password_edit.text = "localtest-%s" % OnlineProgressClient.new_idempotency_key().substr(0, 12)
 	_render()
 
 
