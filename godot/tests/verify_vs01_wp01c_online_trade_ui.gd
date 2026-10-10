@@ -144,7 +144,10 @@ func _verify_player_flow() -> void:
 	hub.get_market_button(REP, "buy").pressed.emit()
 	await _until_idle(mode)
 	_check(hub.get_feedback_text() == OnlineTradeTestMode.HUB_UNCERTAIN_TEXT and mode.get_status_text() == OnlineTradeTestMode.UNCERTAIN_TEXT, "Network loss: no success shown (%s)" % hub.get_feedback_text())
-	_check(hub.get_money_label_text() == "金錢：10300" and hub.get_market_row_texts(REP)["held"] == "持有 0", "Network loss: money / goods unchanged")
+	for text in [OnlineTradeTestMode.HUB_UNCERTAIN_TEXT, OnlineTradeTestMode.UNCERTAIN_TEXT]:
+		_check(text.contains("可能已成功或未成功") and not text.contains("未有更改") and not text.contains("未生效"), "Network loss text says the trade MAY have happened, never that nothing changed (%s)" % text)
+	_check(OnlineTradeTestMode.UNCERTAIN_TEXT.contains("上次伺服器確認"), "Network loss text says the screen shows the last server-confirmed values")
+	_check(hub.get_money_label_text() == "金錢：10300" and hub.get_market_row_texts(REP)["held"] == "持有 0", "Network loss: the screen keeps the last server-confirmed values")
 	_check(mode.get_pending_text() == "未確定交易：1 單" and not mode.get_panel_button("RetryPending").disabled, "Network loss: the order is shown as pending, retry offered")
 	var lost_key: String = client.sent[-1]["payload"]["idempotency_key"]
 	# E: the retry resends the SAME key; the server's replay applies it once.
@@ -173,10 +176,55 @@ func _verify_player_flow() -> void:
 	await mode.reclaim_session()
 	_check(_enabled(hub, REP, "buy") and not mode.get_panel_button("Reclaim").visible and mode.get_status_text() == OnlineTradeTestMode.SESSION_TEXT, "Take-back: trading available again")
 
-	# Leaving signs out and closes the market.
+	# Other actions while an order is in flight do nothing.
+	var g_held := client.answer(_trade("applied", "", 84, 84, _view(10090, 2, 7)))
+	hub.get_market_button(REP, "buy").pressed.emit()
+	await process_frame
+	var rpcs_in_flight := client.sent.size()
+	_check((await mode.refresh())["reason"] == "busy" and (await mode.begin_session())["reason"] == "busy" and client.sent.size() == rpcs_in_flight, "In flight: refresh / session begin are refused locally, nothing sent")
+	mode.switch_city("A")  # the market is on B since the sell above
+	_check(mode.city == "B" and hub.get_city_label_text() == "【B 城】", "In flight: the city cannot be switched")
+	_check(mode.get_panel_button("Refresh").disabled and mode.get_panel_button("CityA").disabled and mode.get_panel_button("RetryPending").disabled, "In flight: refresh / city / retry buttons are locked")
+
+	# Sign-out while that order is in flight: the old answer never reaches the new view.
+	# The test holds the old adapter so the old request really completes (the
+	# controller drops it on sign-out; without a holder Godot would discard the
+	# waiting call, hiding the case under test).
+	var old_adapters := [mode.adapter]
 	hub.get_node("Center/Content/LeaveButton").pressed.emit()
 	await process_frame
-	_check(not hub.is_open() and mode._login_box.visible and not client.is_signed_in(), "Leaving signs out and closes the online market")
+	_check(not hub.is_open() and mode._login_box.visible and not client.is_signed_in() and not mode.is_busy(), "Leaving (even mid-order) signs out and closes the online market")
+	await mode.sign_in("second-" + mode._email_edit.text, mode._password_edit.text)
+	_release_next(client, _begin(_view(5000, 0, 1)))
+	await mode.begin_session()
+	_check(hub.is_open() and hub.get_money_label_text() == "金錢：5000", "Second account: own session and server values")
+	var g_new := client.answer(_trade("applied", "", 84, 84, _view(4916, 1, 2)))
+	hub.get_market_button(REP, "buy").pressed.emit()
+	await process_frame
+	var parked_before := client.get_pending_commands().size()
+	client.release(g_held)  # the FIRST account's order answers now
+	for i in 5:
+		await process_frame
+	_check(client.sent.filter(func(x): return x["id"] == OnlineProgressClient.RPC_TRADE).size() >= 2 and client.gates[g_held]["released"], "The old order's answer was delivered (%d parked before)" % parked_before)
+	_check(mode.is_busy() and not _enabled(hub, REP, "buy"), "Old answer after sign-out does not unlock the new order (no double submit)")
+	_check(hub.get_feedback_text() == OnlineTradeTestMode.HUB_BUSY_TEXT and mode.get_status_text() == OnlineTradeTestMode.BUSY_TEXT, "Old answer after sign-out shows nothing on the new view (%s)" % hub.get_feedback_text())
+	_check(hub.get_money_label_text() == "金錢：5000" and hub.get_market_row_texts(REP)["held"] == "持有 0" and mode.get_pending_text() == "未確定交易：0 單", "Old answer after sign-out changes no value on the new view")
+	client.release(g_new)
+	await _until_idle(mode)
+	_check(hub.get_money_label_text() == "金錢：4916" and hub.get_market_row_texts(REP)["held"] == "持有 1" and hub.get_feedback_text() == "已買入 1 件測試商品一，支付 84", "The new account's own order is confirmed normally")
+
+	# Sign-out while a refresh is in flight: same rule.
+	var g_read := client.answer({"status": OnlineProgressClient.OK, "reason": "", "data": {"progress": _view(1, 99, 9)}})
+	mode.get_panel_button("Refresh").pressed.emit()
+	await process_frame
+	_check(mode.is_busy(), "Refresh in flight")
+	old_adapters.append(mode.adapter)
+	mode.sign_out()
+	client.release(g_read)
+	for i in 5:
+		await process_frame
+	_check(not hub.is_open() and mode.get_status_text() == "" and not mode.is_busy(), "Refresh answer after sign-out leaves the signed-out view untouched")
+	old_adapters.clear()
 	mode.queue_free()
 	await process_frame
 

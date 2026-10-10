@@ -10,10 +10,13 @@ extends Node
 ##
 ## Only the server decides: buy / sell go to Nakama; money, goods and prices
 ## shown come only from server-confirmed progress (the adapter's mirror). An
-## uncertain answer never shows success and changes nothing; one order at a
-## time (buttons locked while it is in flight, so a double tap cannot submit
-## twice); a superseded gameplay session is told and can take the character
-## back (session policy A).
+## uncertain answer never shows success, and never claims the trade did NOT
+## happen either: the server may have applied it before the answer was lost,
+## so the screen keeps the last confirmed values and the player retries /
+## verifies with the same order. One request at a time (buttons locked while
+## it is in flight, so a double tap cannot submit twice); an answer arriving
+## after sign-out is dropped by this view; a superseded gameplay session is
+## told and can take the character back (session policy A).
 ##
 ## Local test accounts only (127.0.0.1). Run: nakama/scripts/run_online_trade_ui.sh
 ## or open the scene in the editor and press F6, with the local server up.
@@ -33,7 +36,7 @@ const SIGNED_OUT_TEXT := "未登入（只限本機測試帳號）"
 const SIGNED_IN_TEXT := "已登入測試帳號：%s"
 const SESSION_TEXT := "遊戲 Session：已開始"
 const BUSY_TEXT := "交易處理中…（等待伺服器確認）"
-const UNCERTAIN_TEXT := "網絡中斷：未能確認交易結果，金錢及貨物未有更改。請按「重試未確定交易」。"
+const UNCERTAIN_TEXT := "網絡中斷：未能確認交易結果。畫面仍顯示上次伺服器確認的數值；交易可能已成功或未成功，請按「重試未確定」以原指令重試／核實。"
 const SUPERSEDED_TEXT := "此帳號已在另一裝置開始遊戲，本裝置已停止操作。可按「重新接管」取回。"
 const RATE_LIMITED_TEXT := "操作太頻密，交易未生效，請稍後再試。"
 const OUT_OF_SCOPE_TEXT := "Online TEST 只開放「%s」交易。"
@@ -45,7 +48,7 @@ const STALE_TEXT := "已登出或切換帳號：舊請求的結果不會套用�
 ## Short lines for the market's own feedback row (the full text is in the
 ## online panel's status line).
 const HUB_BUSY_TEXT := "處理中…等待伺服器確認"
-const HUB_UNCERTAIN_TEXT := "未能確認結果：未有更改，請重試"
+const HUB_UNCERTAIN_TEXT := "結果未確認（可能已成功或未成功），請重試核實"
 const HUB_SUPERSEDED_TEXT := "已被其他裝置接管，交易未送出"
 const HUB_RATE_LIMITED_TEXT := "操作太頻密，交易未生效"
 const HUB_REJECTED_TEXT := "伺服器拒絕：%s"
@@ -62,6 +65,10 @@ var hub: CityHub
 var city := "A"
 var _busy := false
 var _session_started := false
+## Raised on sign-out: an awaited request that started under an older value
+## finishes without touching this view (its answer belongs to a signed-out
+## account / old screen).
+var _view_epoch := 0
 
 var _panel: CanvasLayer
 var _panel_box: PanelContainer
@@ -97,8 +104,13 @@ func _ready() -> void:
 # --- Player actions (also driven directly by tests) ------------------------------
 
 func sign_in(email: String, password: String) -> Dictionary:
+	if _busy:
+		return _busy_result()
+	var epoch := _begin_request()
 	_set_status("登入中…")
 	var result := await client.sign_in_email_test(email, password, true)
+	if not _end_request(epoch):
+		return result
 	if result["status"] == OnlineProgressClient.OK:
 		_account_label.text = SIGNED_IN_TEXT % email
 		_login_box.visible = false
@@ -111,8 +123,13 @@ func sign_in(email: String, password: String) -> Dictionary:
 
 
 func begin_session() -> Dictionary:
+	if _busy:
+		return _busy_result()
+	var epoch := _begin_request()
 	_set_status("開始遊戲 Session…")
 	var result := await adapter.begin()
+	if not _end_request(epoch):
+		return result
 	if result["status"] == OnlineProgressClient.OK:
 		_session_started = true
 		_open_hub(city)
@@ -126,7 +143,12 @@ func begin_session() -> Dictionary:
 
 
 func refresh() -> Dictionary:
+	if _busy:
+		return _busy_result()
+	var epoch := _begin_request()
 	var result := await adapter.refresh()
+	if not _end_request(epoch):
+		return result
 	if result["status"] == OnlineProgressClient.OK:
 		_set_status("已由伺服器重新讀取進度")
 	elif result["reason"] == OnlineProgressClient.SUPERSEDED_REASON:
@@ -140,10 +162,10 @@ func refresh() -> Dictionary:
 func retry_pending() -> Array:
 	if _busy:
 		return []
-	_busy = true
-	_update_buttons()
+	var epoch := _begin_request()
 	var results := await adapter.recover()
-	_busy = false
+	if not _end_request(epoch):
+		return results
 	var confirmed := results.filter(func(r): return r["online_status"] == OnlineProgressClient.OK).size()
 	if adapter.pending_count() > 0:
 		_set_status(STILL_PENDING_TEXT % adapter.pending_count())
@@ -171,6 +193,7 @@ func sign_out() -> void:
 	adapter = OnlineTradeAdapter.new(client)  # a new account gets a new mirror
 	_session_started = false
 	_busy = false
+	_view_epoch += 1  # answers to requests made before this never reach the view
 	hub.close()
 	_show_signed_out()
 
@@ -207,8 +230,7 @@ func _trade(action: String, good_id: String, quantity: int) -> void:
 	if good_id != REP:
 		hub.show_feedback_text(OUT_OF_SCOPE_TEXT % GoodsCatalog.get_good(REP)["display_name"])
 		return
-	_busy = true
-	_update_buttons()
+	var epoch := _begin_request()
 	_set_status(BUSY_TEXT)
 	hub.show_feedback_text(HUB_BUSY_TEXT)
 	var result: Dictionary
@@ -216,9 +238,31 @@ func _trade(action: String, good_id: String, quantity: int) -> void:
 		result = await adapter.buy(city, quantity)
 	else:
 		result = await adapter.sell(city, quantity)
-	_busy = false
+	if not _end_request(epoch):
+		return  # signed out meanwhile: the old answer is not shown on the new view
 	_show_result(action, quantity, result)
 	_render()
+
+
+## Locks the view for one awaited request; returns the view epoch it began in.
+func _begin_request() -> int:
+	_busy = true
+	_update_buttons()
+	return _view_epoch
+
+
+## Unlocks after an awaited request. False (and nothing touched) when the
+## player signed out meanwhile: the answer belongs to the old view, and a
+## request started on the new view may hold the lock now.
+func _end_request(epoch: int) -> bool:
+	if epoch != _view_epoch:
+		return false
+	_busy = false
+	return true
+
+
+static func _busy_result() -> Dictionary:
+	return {"status": OnlineProgressClient.REJECTED, "reason": "busy"}
 
 
 func _show_result(action: String, quantity: int, result: Dictionary) -> void:
@@ -285,9 +329,10 @@ func _update_buttons() -> void:
 			var button := hub.get_market_button(good_id, action)
 			if button != null:
 				button.disabled = not (can_trade and good_id == REP)
+	_buttons["SignIn"].disabled = _busy
 	_buttons["Begin"].disabled = not client.is_signed_in() or _busy
 	_buttons["Begin"].visible = not _session_started
-	_buttons["Refresh"].disabled = not _session_started or superseded
+	_buttons["Refresh"].disabled = not _session_started or superseded or _busy
 	_buttons["RetryPending"].disabled = _busy or adapter.pending_count() == 0 or not _session_started or superseded
 	_buttons["Reclaim"].visible = superseded
 	_buttons["Reclaim"].disabled = _busy
