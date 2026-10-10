@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/online_trade_test_mode.gd" id="1_online"]
+[ext_resource type="PackedScene" path="res://scenes/city_hub.tscn" id="2_hub"]
+
+[node name="OnlineTradeTestMode" type="Node"]
+script = ExtResource("1_online")
+
+[node name="CityHub" parent="." instance=ExtResource("2_hub")]
