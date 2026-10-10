@@ -220,8 +220,81 @@ review fix, with identical counts except the UI test (51 → 65 checks).
   disabled in this mode.
 - There is no Godot CI. The Godot results above are local runs, and CI PASS
   covers Node/npm only.
-- **Mac hands-on acceptance: PENDING.** It is recorded separately; CI PASS is
-  not gameplay acceptance.
+- **Mac hands-on acceptance: PASS** (2026-10-10, see the section below).
+  Automated tests and CI were not counted towards it.
+
+## Mac hands-on acceptance (Charlie, 2026-10-10): PASS
+
+| Item | Record |
+|---|---|
+| Source | PR #136 head `bcecdb9ceaa727d227cb5dc7cd675d1290962ecc`; the local worktree equals origin, the tree is clean, `main` = `335c584b2b815080ac2254f906b9c7ae6d6693dd` (untouched); Draft, not merged |
+| Mac | macOS 27.0.1, Apple A18 Pro (OpenGL 4.1 Metal, Compatibility renderer); Godot 4.7.2.stable.official.ed1daf0bf; Docker Desktop; Nakama 3.25.0 + PostgreSQL 16 (local, compose project `myrial-vs01-wp01`) |
+| Launch | `nakama/scripts/run_online_trade_ui.sh` (approved launcher), started by Claude. Charlie only operated the window. |
+| Isolated `user://` | yes: HOME = a fresh temporary folder. Afterwards it held only `logs/` and caches, no save file. |
+| Nakama | healthy (`/healthcheck`); 0 error-level log lines during the session |
+| Accounts | disposable local accounts only (`@myrial.test`) |
+| Godot log | 0 `ERROR` / `SCRIPT ERROR` lines (only macOS "window move" warnings) |
+
+**What happened, recorded truthfully:**
+
+1. **First hands-on round (exploratory)**, account `player-2c46…@myrial.test`,
+   20:51–20:52 local time. The player traded at **A only**:
+   - Buy 1 and Buy 10 repeatedly until the stock ran out
+     (`insufficient_market_stock`) and the money ran out
+     (`insufficient_money`).
+   - Then Sell 10 and Sell 1 until the goods ran out (`insufficient_cargo`).
+
+   Every receipt was server-confirmed and arithmetically consistent, and every
+   rule rejection was shown. **The scripted steps (Buy 10 from 10000 at A,
+   Sell 10 at B, refresh) were NOT in the server record.** A first draft
+   report claimed PASS; Claude did NOT record it as PASS and asked for the
+   scripted steps.
+2. **Scripted acceptance round**, with a fresh account
+   `charlie2@myrial.test` that Charlie typed in (the pre-filled fields had
+   been cleared). The steps were sign-in, session begin at A 10000, Buy 10,
+   B 城, Sell 10, then 重新讀取. Charlie reported every step matched.
+
+**Server record verification** (Nakama storage, read-only queries; receipts
+of `charlie2@myrial.test`):
+
+| UTC | Action | City | Qty | Status | Total | Money before → after | Held after | Expected |
+|---|---|---|---|---|---|---|---|---|
+| 13:04:24 | buy `test_good_01` | A | 10 | applied | 840 | 10000 → **9160** | **10** | 9160 / 10 ✔ |
+| 13:04:42 | sell `test_good_01` | B | 10 | applied | 1140 | 9160 → **10300** | **0** | 10300 / 0 ✔ |
+
+- Final server progress: money **10300**, backpack empty, revision 3.
+  Exactly two trades, no duplicates.
+- Refresh: progress reads continued after the sell (last at 13:04:57; the
+  read rate-limit record shows several 重新讀取 presses). Charlie reported
+  that the numbers stayed at 10300 / 0, which equals the stored server
+  progress.
+
+**Difficulties observed:**
+
+- On the first round, Charlie explored freely instead of following the
+  steps.
+- Charlie cleared the pre-filled login fields, then needed an email and
+  password to type. Claude supplied disposable local values.
+
+No functional error, wrong value or blocked step was observed. UI art and
+layout are outside the WP01-C acceptance scope (Charlie's note).
+
+**Cleanup:**
+
+- The window was closed (SIGTERM; exit 143 from the launcher is that close).
+- `docker compose --profile multinode stop` was used. No `down -v`, and the
+  volume `myrial-vs01-wp01_pgdata` is kept.
+
+**Development Save:**
+
+| | SHA-256 | mtime | size |
+|---|---|---|---|
+| Before hands-on | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 |
+| During (checked twice) | same | same | same |
+| After cleanup | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 |
+
+**Result: Mac hands-on acceptance PASS**, for the scripted A buy / B sell /
+refresh flow, verified against the server record.
 
 ## Rollback
 
