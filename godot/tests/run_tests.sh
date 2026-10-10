@@ -14,6 +14,20 @@
 # On a completely fresh cache the import step may print font "Cannot open
 # file ... .fontdata" errors before it imports the font; these are expected
 # once and do not affect the run.
+#
+# Pass rule (WP01-B-T01): Godot 4.7.2 exits 0 when a --script fails to parse,
+# and a script error inside an awaited coroutine does not stop the test, so
+# the exit code alone is not proof. A script PASSES only if ALL hold:
+#   1. it exits 0;
+#   2. it prints its own success line: a line containing "verification passed"
+#      that is not itself a failure line (every verify_*.gd prints exactly one);
+#   3. no line contains "SCRIPT ERROR" or "Parse Error";
+#   4. no line reports a test failure: a line starting with "FAILED:" or, from
+#      push_error, "ERROR: FAILED:". Reason codes such as ERR_SAVE_FAILED
+#      inside other lines are not failure reports.
+# Anything else is FAIL, with the reason in brackets. Exit codes: 0 all pass,
+# 1 any failure, 2 import problem (unchanged).
+# Self-test of these rules: godot/tests/runner_selftest.sh.
 
 GODOT="${GODOT:-godot}"
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -37,10 +51,20 @@ for name in "$@"; do
 	output="$("$GODOT" --headless --path "$PROJECT" --script "res://tests/$name.gd" 2>&1)"
 	status=$?
 	summary="$(printf '%s\n' "$output" | grep -E 'passed|FAILED|SCRIPT ERROR|Parse Error' | head -3 | tr '\n' ' ')"
-	if [ "$status" -eq 0 ]; then
+	reason=""
+	if [ "$status" -ne 0 ]; then
+		reason="exit $status"
+	elif printf '%s\n' "$output" | grep -qE 'SCRIPT ERROR|Parse Error'; then
+		reason="exit 0; script or parse error"
+	elif printf '%s\n' "$output" | grep -qE '^(ERROR: )?FAILED:'; then
+		reason="exit 0; test reported FAILED"
+	elif ! printf '%s\n' "$output" | grep -vE '^(ERROR: )?FAILED:' | grep -q 'verification passed'; then
+		reason="exit 0; no success line"
+	fi
+	if [ -z "$reason" ]; then
 		echo "PASS $name | $summary"
 	else
-		echo "FAIL $name (exit $status) | $summary"
+		echo "FAIL $name ($reason) | $summary"
 		failed=$((failed + 1))
 	fi
 done
