@@ -98,6 +98,14 @@ func _scenario_concurrent_trades() -> void:
 		keys[r["idempotency_key"]] = true
 		spent += int(r["total_value"])
 	_check(keys.size() == 12, "S2 each order had its own idempotency key")
+	# PR #133 review: check BEFORE any refresh, which would hide a rollback.
+	# Answers arrive in any order; the mirror must sit at the newest receipt.
+	var newest: Dictionary = {}
+	for r in results:
+		if newest.is_empty() or int(r["receipt"]["progress_revision"]) > int(newest["progress_revision"]):
+			newest = r["receipt"]
+	_check(a.get_confirmed_revision() == int(newest["progress_revision"]), "S2 without refresh: mirror is at the newest receipt's revision %d (got %d)" % [int(newest["progress_revision"]), a.get_confirmed_revision()])
+	_check(a.get_wallet().get_balance() == int(newest["money_after"]) and a.get_inventory().get_quantity(REP) == int(newest["carried_after"]), "S2 without refresh: mirror money / goods equal the newest receipt (%d / %d)" % [int(newest["money_after"]), int(newest["carried_after"])])
 	await a.refresh()
 	_check(a.get_inventory().get_quantity(REP) == 12 and a.get_wallet().get_balance() == 10000 - spent, "S2 server state = sum of the 12 receipts (none lost, none doubled)")
 	await _assert_mirror_equals_server(a, "S2")

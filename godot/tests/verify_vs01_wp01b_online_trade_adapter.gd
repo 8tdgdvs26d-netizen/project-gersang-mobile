@@ -30,6 +30,38 @@ class ScriptedClient extends OnlineProgressClient:
 		return answers.pop_front()
 
 
+## Test double whose answers are held until the test releases them, so
+## responses can complete in any order (PR #133 review: reversed completion).
+class GatedClient extends OnlineProgressClient:
+	var gates: Array = []
+
+	func is_signed_in() -> bool:
+		return true
+
+	func queue(answer: Dictionary) -> void:
+		gates.append({"answer": answer, "released": false, "taken": false})
+
+	func release(index: int) -> void:
+		gates[index]["released"] = true
+
+	func _rpc(_id: String, _payload: Dictionary) -> Dictionary:
+		var gate: Dictionary = {}
+		for g in gates:
+			if not g["taken"]:
+				g["taken"] = true
+				gate = g
+				break
+		while not gate["released"]:
+			await Engine.get_main_loop().process_frame
+		return gate["answer"]
+
+
+static func _view_q(money: int, carried: int, revision: int, buy_price: int) -> Dictionary:
+	var v := _view(money, carried, revision)
+	v["quotes"]["A"][REP]["buy_price"] = buy_price
+	return v
+
+
 static func _view(money: int, carried: int, revision: int) -> Dictionary:
 	var backpack := {}
 	if carried > 0:
@@ -53,6 +85,8 @@ func _initialize() -> void:
 	await _verify_scope_guard()
 	await _verify_superseded_keeps_mirror()
 	await _verify_inconsistent_view_is_flagged()
+	await _verify_reversed_responses_never_roll_back()
+	await _verify_equal_revision_tie_break()
 	_check(_dev_save_fingerprint() == dev_before, "Development Save (%s) is untouched" % SaveStore.DEFAULT_PATH)
 	await process_frame
 	if _failures == 0:
@@ -150,6 +184,72 @@ func _verify_inconsistent_view_is_flagged() -> void:
 	await adapter.begin()
 	_check(not adapter.is_mirror_consistent(), "A server view the domain types cannot hold (500 > capacity 100) is flagged, not repaired")
 	client.queue_free()
+
+
+## PR #133 review: trade B (revision 3) answers before trade A (revision 2).
+## Money, goods and quotes must stay at revision 3.
+func _verify_reversed_responses_never_roll_back() -> void:
+	var client := GatedClient.new()
+	root.add_child(client)
+	var adapter := OnlineTradeAdapter.new(client)
+	client.queue({"status": OnlineProgressClient.OK, "reason": "", "data": {"gameplay_session_id": "00000000-0000-0000-0000-0000000000b5", "progress": _view_q(10000, 0, 1, 84)}})
+	client.release(0)
+	await adapter.begin()
+	client.queue(_receipt_answer("applied", "", 84, 84, _view_q(9916, 1, 2, 85)))  # trade A -> revision 2
+	client.queue(_receipt_answer("applied", "", 85, 85, _view_q(9831, 2, 3, 86)))  # trade B -> revision 3
+	var done := []
+	var revisions := []
+	adapter.confirmed_state_changed.connect(func(r): revisions.append(r))
+	_start_buy(adapter, done)  # A issued first
+	_start_buy(adapter, done)  # B issued second
+	await process_frame
+	client.release(2)          # B answers FIRST
+	while done.size() < 1:
+		await process_frame
+	_check(adapter.get_confirmed_revision() == 3 and adapter.get_wallet().get_balance() == 9831, "Reversed order: after B (rev 3) the mirror is at rev 3")
+	client.release(1)          # A answers LAST, with the OLDER revision 2
+	while done.size() < 2:
+		await process_frame
+	_check(done.all(func(r): return r["success"]), "Both reversed-order trades report success")
+	_check(adapter.get_confirmed_revision() == 3, "Reversed order: an older revision never replaces a newer one (rev %d)" % adapter.get_confirmed_revision())
+	_check(adapter.get_wallet().get_balance() == 9831 and adapter.get_inventory().get_quantity(REP) == 2, "Reversed order: money and goods stay at revision 3 (money %d, goods %d)" % [adapter.get_wallet().get_balance(), adapter.get_inventory().get_quantity(REP)])
+	_check(adapter.get_quote("A")["buy_price"] == 86, "Reversed order: the stale revision-2 quote does not replace the revision-3 quote (%s)" % str(adapter.get_quote("A")))
+	_check(revisions == [3], "confirmed_state_changed fired only for the newer revision: %s" % str(revisions))
+	client.queue_free()
+
+
+## Same revision (no state change in between): money and goods are equal by
+## definition; only time-dependent quotes can differ. The answer to the LATER
+## issued request wins, whatever order the answers arrive in.
+func _verify_equal_revision_tie_break() -> void:
+	var client := GatedClient.new()
+	root.add_child(client)
+	var adapter := OnlineTradeAdapter.new(client)
+	client.queue({"status": OnlineProgressClient.OK, "reason": "", "data": {"gameplay_session_id": "00000000-0000-0000-0000-0000000000b6", "progress": _view_q(10000, 0, 1, 84)}})
+	client.release(0)
+	await adapter.begin()
+	client.queue({"status": OnlineProgressClient.OK, "reason": "", "data": {"progress": _view_q(10000, 0, 1, 90)}})  # earlier read
+	client.queue({"status": OnlineProgressClient.OK, "reason": "", "data": {"progress": _view_q(10000, 0, 1, 88)}})  # later read
+	var done := []
+	_start_refresh(adapter, done)
+	_start_refresh(adapter, done)
+	await process_frame
+	client.release(2)  # the later-issued read answers first ...
+	while done.size() < 1:
+		await process_frame
+	client.release(1)  # ... the earlier-issued read answers last
+	while done.size() < 2:
+		await process_frame
+	_check(adapter.get_confirmed_revision() == 1 and adapter.get_quote("A")["buy_price"] == 88, "Equal revision: the later-issued read's quote wins (%s)" % str(adapter.get_quote("A")))
+	client.queue_free()
+
+
+func _start_buy(adapter: OnlineTradeAdapter, done: Array) -> void:
+	done.append(await adapter.buy("A", 1))
+
+
+func _start_refresh(adapter: OnlineTradeAdapter, done: Array) -> void:
+	done.append(await adapter.refresh())
 
 
 func _new_client() -> ScriptedClient:

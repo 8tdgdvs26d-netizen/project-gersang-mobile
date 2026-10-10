@@ -14,6 +14,14 @@ extends RefCounted
 ## "total_value", "reason", "unit_price") so a later, separately approved UI
 ## WP can show them; the online-only fields say how sure the outcome is.
 ##
+## Monotonic confirmed view (PR #133 review): concurrent answers can arrive
+## in any order, and the shared client keeps whichever answer came LAST. The
+## adapter therefore takes the progress view from EACH answer itself and
+## accepts it only if its server revision is newer than the one it holds, or,
+## at the same revision (same money and goods by definition), if it answers a
+## LATER-issued request (fresher time-dependent quotes). Money, goods and
+## quotes never go back to an older server-confirmed revision.
+##
 ## WP01-B limits:
 ## - Not wired into the main scene script, scenes, buttons or saves.
 ## - Pending commands live in the client's memory only. An app kill loses
@@ -30,8 +38,13 @@ signal confirmed_state_changed(revision: int)
 var _client: OnlineProgressClient
 var _wallet: Wallet
 var _inventory: CharacterInventory
-var _revision := -1
 var _mirror_consistent := true
+## The accepted server-confirmed view, its revision and the issue number of
+## the request that brought it ({} / -1 / -1 before the first confirmation).
+var _view := {}
+var _revision := -1
+var _view_seq := -1
+var _issued := 0
 
 
 func _init(client: OnlineProgressClient) -> void:
@@ -74,7 +87,7 @@ func is_mirror_consistent() -> bool:
 
 ## The server's current quote for the representative good in a city, or {}.
 func get_quote(city_id: String) -> Dictionary:
-	var quotes: Variant = _client.get_confirmed_progress().get("quotes", {})
+	var quotes: Variant = _view.get("quotes", {})
 	if typeof(quotes) != TYPE_DICTIONARY or typeof(quotes.get(city_id)) != TYPE_DICTIONARY:
 		return {}
 	var quote: Variant = quotes[city_id].get(REPRESENTATIVE_GOOD_ID)
@@ -82,14 +95,16 @@ func get_quote(city_id: String) -> Dictionary:
 
 
 func begin() -> Dictionary:
+	var seq := _next_seq()
 	var result := await _client.begin_gameplay_session()
-	_rebuild_mirror()
+	_offer(result, seq)
 	return result
 
 
 func refresh() -> Dictionary:
+	var seq := _next_seq()
 	var result := await _client.refresh_progress()
-	_rebuild_mirror()
+	_offer(result, seq)
 	return result
 
 
@@ -109,10 +124,15 @@ func trade_good(action: String, city_id: String, good_id: String, quantity: int)
 
 ## Resends every pending command with its original idempotency key.
 func recover() -> Array:
+	# The client resends pending commands one after another, in order, so
+	# they get consecutive issue numbers reserved now.
+	var first := _issued
+	_issued += pending_count()
 	var results := []
-	for raw in await _client.recover_pending():
-		results.append(_to_trade_result(raw))
-	_rebuild_mirror()
+	var raws := await _client.recover_pending()
+	for i in range(raws.size()):
+		_offer(raws[i], first + i)
+		results.append(_to_trade_result(raws[i]))
 	return results
 
 
@@ -125,14 +145,14 @@ func _trade(action: String, city_id: String, good_id: String, quantity: int) -> 
 		var refused := {"success": false, "total_value": 0, "reason": OUT_OF_SCOPE_REASON, "unit_price": 0,
 			"online_status": OnlineProgressClient.REJECTED, "pending": false, "replayed": false, "idempotency_key": ""}
 		return refused
+	var seq := _next_seq()
 	var raw: Dictionary
 	if action == "buy":
 		raw = await _client.buy(city_id, good_id, quantity)
 	else:
 		raw = await _client.sell(city_id, good_id, quantity)
-	var result := _to_trade_result(raw)
-	_rebuild_mirror()
-	return result
+	_offer(raw, seq)
+	return _to_trade_result(raw)
 
 
 ## Client outcome -> TradeService-shaped result. "success" is true ONLY for a
@@ -154,25 +174,48 @@ func _to_trade_result(raw: Dictionary) -> Dictionary:
 	}
 
 
-## Rebuilds the mirror from the client's server-confirmed view only.
+func _next_seq() -> int:
+	_issued += 1
+	return _issued - 1
+
+
+## Offers the progress view carried by ONE answer. Accepted only if newer
+## (higher revision, or same revision from a later-issued request).
+func _offer(raw: Dictionary, seq: int) -> void:
+	if raw.get("status") != OnlineProgressClient.OK or typeof(raw.get("data")) != TYPE_DICTIONARY:
+		return
+	var view: Variant = raw["data"].get("progress")
+	if typeof(view) != TYPE_DICTIONARY or (view as Dictionary).is_empty():
+		return
+	var revision := int(view.get("revision", -1))
+	if revision < _revision or (revision == _revision and seq < _view_seq):
+		return  # older than what is already shown: never go back
+	var newer_revision := revision > _revision
+	_view = (view as Dictionary).duplicate(true)
+	_revision = revision
+	_view_seq = seq
+	_rebuild_mirror()
+	if newer_revision:
+		confirmed_state_changed.emit(revision)
+
+
+## Rebuilds the mirror from the accepted server-confirmed view only.
 func _rebuild_mirror() -> void:
-	var view := _client.get_confirmed_progress()
-	if view.is_empty():
+	if _view.is_empty():
 		_wallet = null
 		_inventory = null
 		_mirror_consistent = true
-		_revision = -1
 		return
 	var wallet := Wallet.new()
 	var inventory := CharacterInventory.new("online_mirror", CharacterStats.new())
 	var consistent := true
-	var money := int(view.get("money", 0))
+	var money := int(_view.get("money", 0))
 	var delta := money - wallet.get_balance()
 	if delta < 0:
 		consistent = wallet.spend(-delta) and consistent
 	elif delta > 0:
 		consistent = wallet.add(delta) and consistent
-	var backpack: Variant = view.get("backpack", {})
+	var backpack: Variant = _view.get("backpack", {})
 	if typeof(backpack) == TYPE_DICTIONARY:
 		for good_id in backpack:
 			consistent = inventory.add(good_id, int(backpack[good_id])) and consistent
@@ -181,7 +224,3 @@ func _rebuild_mirror() -> void:
 	_wallet = wallet
 	_inventory = inventory
 	_mirror_consistent = consistent
-	var revision := int(view.get("revision", -1))
-	if revision != _revision:
-		_revision = revision
-		confirmed_state_changed.emit(revision)
