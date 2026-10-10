@@ -50,6 +50,7 @@ func _initialize() -> void:
 	await _scenario_server_restart()
 	await _scenario_app_kill_limitation()
 	await _scenario_rate_limit()
+	await _scenario_account_switch_on_one_client()
 	var dev_after := _dev_save_fingerprint()
 	print("Development Save fingerprint after: %s" % dev_after)
 	_check(dev_after == dev_before, "Development Save is untouched")
@@ -106,6 +107,9 @@ func _scenario_concurrent_trades() -> void:
 			newest = r["receipt"]
 	_check(a.get_confirmed_revision() == int(newest["progress_revision"]), "S2 without refresh: mirror is at the newest receipt's revision %d (got %d)" % [int(newest["progress_revision"]), a.get_confirmed_revision()])
 	_check(a.get_wallet().get_balance() == int(newest["money_after"]) and a.get_inventory().get_quantity(REP) == int(newest["carried_after"]), "S2 without refresh: mirror money / goods equal the newest receipt (%d / %d)" % [int(newest["money_after"]), int(newest["carried_after"])])
+	# WP01-B-S01: the SHARED client's own cache is monotonic too.
+	var shared := a.get_client().get_confirmed_progress()
+	_check(int(shared.get("revision", -1)) == int(newest["progress_revision"]) and int(shared.get("money", -1)) == int(newest["money_after"]), "S2 without refresh: the shared client cache is at the newest receipt's revision too (got rev %s)" % str(shared.get("revision")))
 	await a.refresh()
 	_check(a.get_inventory().get_quantity(REP) == 12 and a.get_wallet().get_balance() == 10000 - spent, "S2 server state = sum of the 12 receipts (none lost, none doubled)")
 	await _assert_mirror_equals_server(a, "S2")
@@ -283,6 +287,44 @@ func _scenario_rate_limit() -> void:
 	_check(a.get_inventory().get_quantity(REP) == applied, "S8 server state = accepted orders only")
 	await _assert_mirror_equals_server(a, "S8")
 	await _free(acc)
+
+
+## WP01-B-S01: one client, two accounts. Account 1's uncertain order stays
+## with account 1; account 2 never sees, resends or mixes it in.
+func _scenario_account_switch_on_one_client() -> void:
+	print("== S9 account switch on one client (S01)")
+	var first := await _new_account("s9a")
+	var client: OnlineProgressClient = first["client"]
+	var a: OnlineTradeAdapter = first["adapter"]
+	await a.begin()
+	_check((await a.buy("A", 10))["success"], "S9 account 1 trades")
+	client.configure(_host, _proxy_port)
+	var lost := await a.buy("A", 1)
+	client.configure(_host, _api_port)
+	_check(lost["pending"], "S9 account 1 has an order with a lost answer")
+	var account1_user := client.get_user_id()
+	client.sign_out_local()
+	_check(client.get_confirmed_progress().is_empty() and client.get_pending_commands().is_empty(), "S9 after sign-out: no cache, no pending order exposed")
+	_account_seq += 1
+	var email2 := "wp01b-s9b-%s-%d@myrial.test" % [_run_id, _account_seq]
+	_check((await client.sign_in_email_test(email2, "localtest-%s" % _run_id, true))["status"] == OnlineProgressClient.OK and client.get_user_id() != account1_user, "S9 account 2 signs in on the same client")
+	var b := OnlineTradeAdapter.new(client)
+	await b.begin()
+	_check(client.get_pending_commands().is_empty(), "S9 account 2 does not see account 1's pending order")
+	var stats_before := int(_proxy_stats().get("trade_requests", 0))
+	_check((await client.recover_pending()).is_empty(), "S9 account 2's recovery resends nothing of account 1")
+	_check(b.get_wallet().get_balance() == 10000 and b.get_inventory().get_quantity(REP) == 0, "S9 account 2 starts from its own server state (10000 / 0)")
+	_check(int(client.get_confirmed_progress().get("money", -1)) == 10000, "S9 the shared cache holds account 2's data only")
+	_check(int(_proxy_stats().get("trade_requests", 0)) == stats_before, "S9 nothing of account 1 was sent")
+	client.sign_out_local()
+	_check((await client.sign_in_email_test(first["email"], "localtest-%s" % _run_id, false))["status"] == OnlineProgressClient.OK, "S9 account 1 signs back in")
+	_check(client.get_pending_commands().has(lost["idempotency_key"]), "S9 account 1's pending order is back")
+	var a2 := OnlineTradeAdapter.new(client)
+	await a2.begin()
+	var recovered := await a2.recover()
+	_check(recovered.size() == 1 and recovered[0]["replayed"] and a2.get_inventory().get_quantity(REP) == 11, "S9 account 1 recovers its order once (replayed; 10 + 1 = 11)")
+	await _assert_mirror_equals_server(a2, "S9")
+	await _free(first)
 
 
 # --- Helpers ---------------------------------------------------------------------
