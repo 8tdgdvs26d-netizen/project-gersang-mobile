@@ -3,18 +3,20 @@
 - Repository: `8tdgdvs26d-netizen/project-gersang-mobile`
 - Branch: `claude/vs01-wp01b-online-trade` (own worktree, not rebased, no force push)
 - Base `main`: `1321ca3590e7e019d450571583932439b31b72ef` (CP-008)
-- **Code under test:** `dd4e7e6d863044b1b7dde592147969478a1819a4`. This is the
-  PR #133 review-round-1 fix, on top of `9bb30a4`. The commit after it changes
-  only this document.
+- **Code under test:** `dd4e7e6d863044b1b7dde592147969478a1819a4` (adapter, PR #133
+  review round 1) and `f0e122453968a19a92ca458f7bd2ae876e4ffd86` (wrapper
+  exit-code fix, see its section). The commit after `f0e1224` changes only this
+  document.
 - Approval: Charlie approved the WP01-B Blueprint and the bounded
   implementation on 2026-10-10 (Blueprint and Current Status addenda).
 - Mac: Godot 4.7.2.stable, Node 24.21.0, Docker Desktop, Nakama 3.25.0,
   PostgreSQL 16 (local only). Recorded 2026-10-10.
 
-## What changed (8 files vs `main`: 7 code / test / tool files + this document; no gameplay, UI, save, scene or server code)
+## What changed (9 files vs `main`: 8 code / test / tool files + this document; no gameplay, UI, save, scene or server code)
 
-The earlier "7 files" count left out this document. GitHub's PR diff counts
-8. The proxy is one file under `nakama/tests/live/tools/`.
+The earlier "7 files" count left out this document. GitHub's PR diff counted
+8 before `f0e1224` added the wrapper test (9 now). The proxy is one file under
+`nakama/tests/live/tools/`.
 
 | File | Change |
 |---|---|
@@ -25,7 +27,8 @@ The earlier "7 files" count left out this document. GitHub's PR diff counts
 | `nakama/tests/live/tools/lossy_proxy.mjs` | **New** local test proxy. It forwards everything, but drops the server's answer to trade RPCs AFTER the server decided ("response lost after commit"). |
 | `godot/tests/verify_vs01_wp01_online_contract.gd` | The WP01 isolation check treats the adapter as part of the online layer (it still forbids any GAMEPLAY script from using the online layer). |
 | `nakama/scripts/run_live_tests.sh` | Starts the proxy, runs the WP01-B harness, and requires each Godot run's own "passed" line. |
-| `nakama/scripts/run_godot_regression_isolated.sh` | Strict re-check (see the finding below). `godot/tests/run_tests.sh` is unchanged. |
+| `nakama/scripts/run_godot_regression_isolated.sh` | Strict re-check (see the finding below), and since `f0e1224` it keeps the runner's own exit code (see the wrapper section). `godot/tests/run_tests.sh` is unchanged in this PR. |
+| `nakama/scripts/test_run_godot_regression_isolated.sh` | **New** (`f0e1224`): automated test of the wrapper's exit code and strict check. |
 
 Not changed: `main.gd`, scenes, buttons, `save_store.gd` / Save v14, the
 Nakama server module, pricing, rules, `OnlineProgressClient`. There is no
@@ -112,6 +115,59 @@ disk persistence needs a separate Charlie decision).
 in-process recovery is proven: lost answer, network loss, session takeover
 and server restart while the app keeps running.
 
+## Wrapper exit-code fix (`f0e1224`, Charlie-approved bounded correction)
+
+**Root cause:** the wrapper ran `run_tests.sh … | tee "$OUT"` and then read
+`STATUS=$?`. In POSIX `sh` (no `pipefail`), that is **tee's** exit code. A
+failing runner therefore gave wrapper exit 0. Only false PASS lines were
+caught, by the strict check. This was found during T01 (PR #134).
+
+**Fix:** the runner's exit code is written to a file inside the pipeline and
+read back. A missing or non-numeric code counts as a failure. Unchanged: the
+strict PASS-line check, the shown runner output (`tee`) and the isolated
+`HOME`.
+
+**Automated test:** `nakama/scripts/test_run_godot_regression_isolated.sh`
+copies the wrapper into a throw-away repository layout:
+- 6 stub-runner cases: pass; fail; fail with success words; a parse-error
+  PASS line; a PASS line without its message; import failure exit 2;
+- with `GODOT` set, 4 real-runner cases on fixture tests: pass; ordinary
+  failure; failure that still prints its success line; parse error.
+
+It also checks that the runner's lines are still shown.
+
+| Case | Want | Previous wrapper (`20a3391`) | Fixed wrapper (`f0e1224`) |
+|---|---|---|---|
+| stub: runner PASS | 0 | 0 | **0** |
+| stub: runner FAIL | ≠ 0 | **0** (masked) | **1** |
+| stub: runner FAIL with success words printed | ≠ 0 | **0** (masked) | **1** |
+| stub: parse-error line reported as PASS | ≠ 0 | 1 | **1** |
+| stub: PASS line without its passed message | ≠ 0 | 1 | **1** |
+| stub: runner import failure (exit 2) | 2 | **0** (masked) | **2** |
+| Godot: normal passing fixture | 0 | 0 | **0** |
+| Godot: ordinary failing fixture (`FAILED:` + exit 1) | ≠ 0 | **0** (masked) | **1** |
+| Godot: failing fixture that still prints its success line | ≠ 0 | **0** (masked) | **1** |
+| Godot: parse error | ≠ 0 | 1 | **1** |
+
+Previous wrapper: 5 of 10 wrong. Fixed: 10 / 10.
+
+**Results on `f0e1224`:**
+
+| Test | Command | Result |
+|---|---|---|
+| Relevant: wrapper test, real Godot | `GODOT=… sh nakama/scripts/test_run_godot_regression_isolated.sh` | **PASS 10 / 10** |
+| Targeted stress: the same test 10 times | loop | **10 / 10 runs, 100 / 100 cases** |
+| Targeted stress: stub-only (no Godot) 20 times | `sh nakama/scripts/test_run_godot_regression_isolated.sh` | **20 / 20 runs** |
+| Godot full normal regression through the FIXED wrapper | `GODOT=… sh nakama/scripts/run_godot_regression_isolated.sh` | **PASS 67 / 67**, FAIL 0, 0 script errors, strict check passed, **wrapper exit 0** |
+
+Not re-run for `f0e1224`, because nothing they test changed (only the
+wrapper and its new test changed): the Node / npm suite, the Nakama server
+unit tests, the live stress / SDK probe / WP01-B harness (their latest results
+are from `dd4e7e6` above). `run_live_tests.sh` does not use this wrapper.
+
+**Earlier results stay valid:** every PASS / FAIL count in this document was
+read from the runner's PASS / FAIL lines, never from this wrapper's exit code.
+
 ## Finding: Godot exits 0 when a test script fails to parse
 
 Reproduced on Godot 4.7.2: `--script` with a parse error exits **0**.
@@ -137,6 +193,8 @@ fails to compile would be listed as PASS. A run showed
 | After the `9bb30a4` runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
 | Before the `dd4e7e6` runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
 | After the `dd4e7e6` runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
+| Before the `f0e1224` runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
+| After the `f0e1224` runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
 
 Every Godot run used a temporary `HOME`. The tests print their `user://`
 folder; for example, the WP01-B harness during development printed
@@ -162,9 +220,12 @@ real HOME, through `env`, to find its own config.
 1. App kill after commit: the player cannot be told the outcome of the killed
    order, and re-issuing it makes a second trade (possible unintended double
    purchase). Needs the separate pending-persistence decision.
-2. The Godot regression runner (`run_tests.sh`) can report a parse-failed
-   script as PASS. Mitigated only in the WP01 wrapper; the runner fix is
-   pending approval.
+2. The Godot regression runner (`run_tests.sh`) on this branch can still
+   report a parse-failed script as PASS. It is mitigated only in the WP01
+   wrapper here; the runner fix is in PR #134 (T01), which is separate and
+   not merged. With `f0e1224`, this wrapper and the T01 runner are
+   compatible: a failing runner now gives a non-zero wrapper exit, so T01's
+   FAIL lines can no longer be masked.
 3. The SDK retries a failed request automatically (3 extra attempts, very
    short backoff). This is safe because the key is the same and the server
    replays it, but it multiplies requests during outages and counts toward the
@@ -185,7 +246,10 @@ real HOME, through `env`, to find its own config.
 9. At the same revision, the tie-break uses local request issue order. That
    is an approximation of server time for time-dependent quotes only; money
    and goods cannot differ at the same revision.
-10. Risks carried from WP01 / CP-008 still apply (SDK v3.4.0 age, Nakama
+10. The wrapper's exit-code capture uses a temporary status file (POSIX sh
+    has no `pipefail`). If that file cannot be written or read, the run
+    counts as failed (fail closed).
+11. Risks carried from WP01 / CP-008 still apply (SDK v3.4.0 age, Nakama
    error-text dependency, single-database multi-node proof, v8 Development
    Save would be upgraded if the game ran on the normal user data folder).
 
@@ -194,6 +258,8 @@ real HOME, through `env`, to find its own config.
 - **Before merge:** close the PR. `main` (`1321ca3`) is unaffected.
 - **After a merge (only with Charlie's approval):** `git revert` the merge
   commit, or the individual commits:
+  - `f0e1224` wrapper exit-code fix + its test (reverting it brings back
+    exit 0 for failing runs. Not recommended.)
   - `dd4e7e6` monotonic view fix (reverting it brings back the review
     finding: the mirror and quotes could roll back under concurrent answers.
     Not recommended.)
