@@ -5,8 +5,9 @@
 - Base `main`: `6ed1f5a725c050e917443e71678442e4dd7a1157` (PR #134 T01 and
   PR #133 WP01-B merged; its tree equals the tree validated before the PR #133
   merge)
-- **Code under test:** `50188e48cb09103af8edc1f98fd69e9fe7ab2470`. The commit
-  after it adds only this document.
+- **Code under test:** `17e745145d814e3b5911e1aeb365af239403ab6f`. This is the
+  PR #135 review-round-1 fix, on top of `50188e4`. The commit after it changes
+  only this document.
 - Approval: Charlie approved the S01 Blueprint and the bounded implementation
   on 2026-10-10 (Blueprint addendum).
 - Mac: Godot 4.7.2.stable, Node 24.21.0, Docker Desktop, Nakama 3.25.0,
@@ -38,13 +39,15 @@
   later-issued request is the fresher read. This is a client ordering rule,
   identical to `OnlineTradeAdapter` (reviewed in PR #133); no server rule was
   added.
-- **Account epoch:** `+1` on `sign_out_local()` and on signing in a
-  DIFFERENT account. An answer to a request sent under an older epoch never
+- **Account epoch:** `+1` on `sign_out_local()`, on signing in a DIFFERENT
+  account, and (since `17e7451`, PR #135 review) on the SAME account
+  signing in again. An answer to a request sent under an older epoch never
   touches the cache, the session id, the superseded flag or the current
   account's pending list. It is returned as `uncertain`, with reason
   `answer_after_sign_out_or_account_change` and `stale: true` (no `data`, so
   no consumer can read the old view). The same account signing in again
-  keeps its cache and pending list, as before.
+  keeps its cache and pending list (idempotency keys), but its earlier
+  in-flight requests no longer change the state when they answer.
 - **Pending commands per account:** the current account's list stays in
   `_pending` (same API: `get_pending_commands`, `import_pending_commands`,
   `recover_pending`). Other accounts' lists are parked by user id and come
@@ -88,7 +91,44 @@ Mutation check: removing each fix point in turn makes the test fail:
 - newest-begin session guard: 1 (F2 was added because this one first went
   undetected).
 
-## Results on `50188e4`
+## PR #135 review round 1: same-account sign-in boundary (`17e7451`)
+
+**Finding (GPT):** `_accept_session()` reset the gameplay session id when the
+SAME account signed in again, but kept the account epoch. A begin / refresh /
+trade sent before that re-sign-in could therefore still change the cache,
+the superseded flag or the session id when it answered afterwards.
+
+**Reproduced (case I, deterministic; on `c02affc` 6 checks fail):**
+- **I1:** a trade answer from before the re-sign-in moved the cache to
+  revision 3 and resolved the order as if fresh, so it was no longer pending.
+- **I3:** a begin answer from before the re-sign-in installed its session id.
+- **I4:** recovery by key therefore had nothing to recover.
+- **I2** (a late superseded answer) was already blocked by the
+  sent-session guard.
+
+**Fix:** the account epoch also advances when the same account signs in
+again. The cache and the pending orders (idempotency keys) are kept. Late
+answers are reported as `uncertain` (stale); the account begins a new session
+and recovers its orders by key. Policy A unchanged.
+
+**Proof:**
+- Case I passes (9 checks: I1–I4, including a new begin after the re-sign-in
+  and recovery once by the original key).
+- Removing the fix brings back the 6 failures.
+
+## Results on `17e7451` (round 1)
+
+| # | Suite | Command | Result |
+|---|---|---|---|
+| 1 | Relevant: S01 offline / WP01 contract / WP01-B adapter | in the regression | **PASS 39 / 39**, **134 / 134**, **51 / 51** |
+| 2 | Godot full normal regression (isolated `user://`) | `GODOT=… sh nakama/scripts/run_godot_regression_isolated.sh` | **PASS 68 / 68**, FAIL 0, 0 script errors, strict check passed, wrapper exit 0 |
+| 3 | Node / npm suite | `npm test` | **PASS 508 / 508** |
+| 4 | Nakama server unit tests | `cd nakama && npm ci && npm test` | **PASS 43 / 43** |
+| 5 | WP01 Godot SDK probe | `nakama/scripts/run_live_tests.sh` | **PASS 47 / 47** |
+| 6 | WP01-B online trade harness (incl. S2 shared cache, S9 account switch) | same | **PASS 103 / 103** |
+| 7 | Full live stress | same | **PASS 14 / 14** |
+
+## Results on `50188e4` (first delivery)
 
 | # | Suite | Command | Result |
 |---|---|---|---|
@@ -128,8 +168,10 @@ above are local Mac tests.
 
 | | SHA-256 | mtime | size | version |
 |---|---|---|---|---|
-| Before (preflight and before the final runs) | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
-| After all runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
+| Before (preflight and before the `50188e4` runs) | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
+| After the `50188e4` runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
+| Before the `17e7451` runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
+| After the `17e7451` runs | `59fcf77a88a98b966166485ce4078c036a6ade747db4c07f7a41b635663531f7` | 1790568901 | 2052 | 8 |
 
 Every Godot run used a temporary `HOME` (isolated `user://`). Only Docker
 got the real HOME. Test accounts are disposable local email accounts.
@@ -149,7 +191,8 @@ got the real HOME. Test accounts are disposable local email accounts.
    revision.
 4. **The account boundary is the Nakama user id.** The same account signing
    in again (for example a token refresh) keeps its cache and pending list
-   by design.
+   by design. Since `17e7451`, its requests that were in flight at that
+   moment come back as `uncertain` (stale) and are recovered by key.
 5. Risks from WP01 / WP01-B / T01 still apply:
    - device / Apple sign-in / UI PENDING;
    - no Godot CI;
@@ -159,6 +202,7 @@ got the real HOME. Test accounts are disposable local email accounts.
 
 - Before merge: close the PR; `main` is unaffected.
 - After a merge (only with Charlie's approval): `git revert` the merge
-  commit, or `50188e4`. That restores the previous shared-client behaviour
+  commit, or `17e7451` and then `50188e4`. Reverting only `17e7451` brings
+  back the same-account re-sign-in finding. That restores the previous shared-client behaviour
   (and its rollback / contamination cases). No data, save or server contract
   is involved.
