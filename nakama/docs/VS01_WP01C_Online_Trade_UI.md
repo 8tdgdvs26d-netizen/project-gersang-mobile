@@ -3,9 +3,9 @@
 - Repository: `8tdgdvs26d-netizen/project-gersang-mobile`
 - Branch: `claude/vs01-wp01c-online-trade-ui` (own worktree, from `main`)
 - Base `main`: `335c584b2b815080ac2254f906b9c7ae6d6693dd` (PR #135 S01 merged)
-- **Code under test:** `2e66638830b57191dab5b201edecf700872762ff`, on top of
-  `1855bea35e49047c660eb7cfc3ccb2bb9f4739cd`. The commit after it changes
-  only this document.
+- **Code under test:** `979016069befa8d12d97e493a403e9941ada97ea`. This is the
+  PR #136 review-round-1 fix, on top of `2e66638` and `1855bea`. The commit
+  after it changes only this document.
 - Approval: Charlie approved the WP01-C Blueprint and the bounded
   implementation on 2026-10-10.
 - Mac: Godot 4.7.2.stable, Node 24.21.0, Docker Desktop, Nakama 3.25.0,
@@ -61,14 +61,61 @@ architecture is not altered.
   rule rejection by the server (e.g. 「金錢不足」) is shown with the hub's
   existing text. 「重新讀取」 performs a fresh server read.
 - **F. Not-confirmed states:**
-  - Lost answer → 「未能確認結果：未有更改，請重試」. The screen keeps the last
-    confirmed values and 「未確定交易：N 單」 is shown. 「重試未確定」 resends with
+  - Lost answer → 「結果未確認（可能已成功或未成功），請重試核實」. The full
+    status line explains that the screen still shows the last
+    server-confirmed values and that the trade may or may not have
+    happened. 「未確定交易：N 單」 is shown. 「重試未確定」 resends with
     the SAME idempotency key.
   - Superseded → 「已被其他裝置接管，交易未送出」. Trading is locked and
     「重新接管」 is offered.
   - Rate limited, stale and rejected states each have their own text.
   - No double submit: while an order is in flight every trade button is
     disabled, and a second tap is ignored.
+
+## PR #136 review round 1 (fix `979016069befa8d12d97e493a403e9941ada97ea`)
+
+1. **Uncertain ≠ not applied.** The earlier wording (「金錢及貨物未有更改」 /
+   「未有更改」) could tell the player that a trade did not happen, when the
+   server may have committed it before the answer was lost (the live test does
+   exactly this). The new texts are:
+   - status line: 「網絡中斷：未能確認交易結果。畫面仍顯示上次伺服器確認的數值；交易可能已成功或未成功，請按「重試未確定」以原指令重試／核實。」
+   - market row: 「結果未確認（可能已成功或未成功），請重試核實」
+
+   Neither implies a rollback or that server balances are unchanged. The UI
+   test asserts both texts.
+2. **Actions during an in-flight request / sign-out.** Before the fix:
+   - Refresh, session begin, sign-in and city switch could overlap an awaited
+     trade.
+   - `sign_out()` cleared `_busy`. A continuation of the old trade could then
+     unlock a newer order and write its old result onto the new view. In the
+     shipped code the continuation usually never resumed, because the
+     replaced adapter (RefCounted) was freed, but that protection was
+     accidental.
+
+   **Fix, in `online_trade_test_mode.gd` only:**
+   - Every awaited action (sign-in, begin / reclaim, refresh, retry, trade)
+     takes the same one-request lock.
+   - Refresh, Begin, Sign-in, Retry and the city buttons are disabled while a
+     request is in flight, and the functions refuse locally (`busy`), sending
+     nothing.
+   - Sign-out (also through 「離開城市」) stays available, and raises a view
+     epoch. A request started under an older epoch finishes without touching
+     the view and without releasing the lock.
+
+   `OnlineProgressClient` and `OnlineTradeAdapter` are unchanged, so S01
+   semantics are preserved; the client still marks such answers stale.
+
+   **Deterministic test** (`verify_vs01_wp01c_online_trade_ui`, now 65
+   checks):
+   - With an order in flight, refresh, begin and city switch are refused and
+     their buttons are locked.
+   - Leave mid-order, then sign in with a second account and begin, then start
+     a new order. The FIRST account's order then answers. The test holds the
+     old adapter so this answer really arrives.
+   - Result: the new order stays locked (no double submit). The new view shows
+     no old feedback, status or values. The new order then confirms normally.
+   - The same is checked for a refresh answered after sign-out.
+   - On the previous controller, 10 of these checks FAIL; on the fix all pass.
 
 ## Changed files
 
@@ -77,7 +124,7 @@ architecture is not altered.
 | `godot/scripts/online_trade_test_mode.gd` | new: controller (sign-in, session, trade, refresh, retry, reclaim, city switch, sign-out; status panel) |
 | `godot/scenes/online_trade_test_mode.tscn` | new: controller + an instance of the existing `city_hub.tscn` |
 | `godot/scripts/city_hub.gd` | +`show_feedback_text(text)` (additive, 7 lines) |
-| `godot/tests/verify_vs01_wp01c_online_trade_ui.gd` | new: offline UI integration test (51 checks; part of the Godot regression) |
+| `godot/tests/verify_vs01_wp01c_online_trade_ui.gd` | new: offline UI integration test (65 checks; part of the Godot regression) |
 | `godot/tests/live_vs01_wp01c_online_trade_ui.gd` | new: live UI run against the local server (23 checks) |
 | `godot/tests/verify_vs01_wp01_online_contract.gd` | the isolation exemption list includes `online_trade_test_mode.gd` (an online-layer file) |
 | `nakama/scripts/run_live_tests.sh` | runs the live UI test (strict marker check) |
@@ -123,6 +170,9 @@ Captured on the final code with the real scene against the local server
 
 ## Test results (all with isolated `user://` and disposable local accounts)
 
+Re-run in full on `979016069befa8d12d97e493a403e9941ada97ea` after the PR #136
+review fix, with identical counts except the UI test (51 → 65 checks).
+
 | Suite | Result |
 |---|---|
 | Node/npm (root, Node/npm CI scope, NOT Godot CI) | 508/508 |
@@ -133,7 +183,7 @@ Captured on the final code with the real scene against the local server
 | **WP01-C live UI** (real scene, market buttons, local server) | **23/23** |
 | Lossy proxy | 24 answers dropped, all resolved by retry with the same key |
 | **Godot full regression** (isolated wrapper) | **69/69 PASS**, FAIL 0, 0 script / parse errors, wrapper exit 0 |
-| ↳ `verify_vs01_wp01c_online_trade_ui` (UI integration) | 51 checks |
+| ↳ `verify_vs01_wp01c_online_trade_ui` (UI integration) | 65 checks |
 | ↳ `verify_s11_p00_core_loop_integration` (offline core loop) | 1854 checks |
 | ↳ `verify_m2_09` (TimeSource rule) | 518 checks |
 
@@ -144,7 +194,7 @@ Captured on the final code with the real scene against the local server
 | A | Buy OK | live UI: Buy 10 at A → 9160 / 10 from the receipt |
 | B | Sell OK | live UI: Sell 10 at B → 10300 / 0 |
 | C | Refresh consistent | live UI: after a fresh read the screen equals the server progress |
-| D | Network loss: no false success | live UI via the lossy proxy: 「未能確認結果」, values unchanged, 1 pending |
+| D | Network loss: no false success | live UI via the lossy proxy: 「結果未確認（可能已成功或未成功）」; the screen keeps the last confirmed values; 1 pending. The server HAD committed, as the retry proves |
 | E | Idempotency | live UI: retry returns the original receipt (replayed); goods +1 once; a second retry changes nothing; a fresh read confirms |
 | F | Takeover blocks the old session | live UI: second client begins → the old device is blocked and shown 「已被其他裝置接管」; reclaim → trading works |
 | G | Offline core loop unaffected | Godot full regression 69/69, including the core loop (1854 checks); `main.gd` and the save are untouched |
