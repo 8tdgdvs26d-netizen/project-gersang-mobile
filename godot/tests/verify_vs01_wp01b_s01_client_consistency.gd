@@ -16,6 +16,8 @@ extends SceneTree
 ##   F taking the character back: late answers of the old session never undo it
 ##   G network loss and retry with the same idempotency key
 ##   H pending recovery running concurrently with new trades
+##   I the SAME account signs in again while requests are in flight
+##     (PR #135 review): their late answers must not change the state
 
 const GOOD := "test_good_01"
 
@@ -65,6 +67,7 @@ func _initialize() -> void:
 	await _case_f_reclaim_not_undone_by_old_session()
 	await _case_g_network_loss_and_retry()
 	await _case_h_recovery_concurrent_with_trades()
+	await _case_i_same_account_reauth()
 	_check(_dev_save_fingerprint() == dev_before, "Development Save (%s) is untouched" % SaveStore.DEFAULT_PATH)
 	await process_frame
 	if _failures == 0:
@@ -254,6 +257,49 @@ func _case_h_recovery_concurrent_with_trades() -> void:
 	var p := c.get_confirmed_progress()
 	_check(int(p["revision"]) == 4 and int(p["money"]) == 9745 and int(p["backpack"][GOOD]) == 3, "H: the cache ends at the newest revision (%s)" % _short(p))
 	_check(c.get_pending_commands().is_empty(), "H: both recovered orders resolved, nothing pending")
+	c.queue_free()
+
+
+## PR #135 review: same-account re-authentication (for example a new token)
+## is an auth boundary too. Requests sent before it may answer after it; those
+## answers must not change the cache, the superseded flag or the session id.
+## The account's own pending orders (idempotency keys) are kept.
+func _case_i_same_account_reauth() -> void:
+	var c := await _signed_in_client("i1", 10000, 1)
+	var prompts := [0]
+	c.gameplay_session_superseded.connect(func(): prompts[0] += 1)
+	var g_trade := c.queue(_trade_ok(9160, 10, 2, 89))       # I1 trade in flight
+	var g_refresh := c.queue({"status": OnlineProgressClient.REJECTED, "reason": "gameplay_session_superseded", "grpc_status": 10})  # I2
+	var g_begin := c.queue(_begin_ok(9160, 10, 3, 89))       # I3 begin in flight
+	var traded := []
+	var refreshed := []
+	var begun := []
+	_start_buy(c, traded)
+	_start_refresh(c, refreshed)
+	_start_begin(c, begun)
+	await process_frame
+	var key: String = c.get_pending_commands().keys()[0]
+	c._accept_session(NakamaSession.new(_token("i1"), false))  # SAME account signs in again
+	_check(c.get_gameplay_session_id() == "", "I: re-sign-in clears the gameplay session (unchanged behaviour)")
+	await _release_and_wait(c, g_trade, traded, 1)
+	await _release_and_wait(c, g_refresh, refreshed, 1)
+	await _release_and_wait(c, g_begin, begun, 1)
+	var p := c.get_confirmed_progress()
+	_check(int(p.get("revision", -1)) == 1 and int(p.get("money", -1)) == 10000, "I1: a trade answer from before the re-sign-in does not change the cache (%s)" % _short(p))
+	_check(traded[0]["status"] == OnlineProgressClient.UNCERTAIN and traded[0].get("stale", false), "I1: it is reported as uncertain (stale), not as a fresh result")
+	_check(c.get_pending_commands().has(key), "I1: the account keeps that order pending (same idempotency key)")
+	_check(not c.is_gameplay_session_superseded() and prompts[0] == 0, "I2: a superseded answer from before the re-sign-in does not mark the client")
+	_check(c.get_gameplay_session_id() == "", "I3: a begin answer from before the re-sign-in does not install its session id (%s)" % c.get_gameplay_session_id())
+	# I4: the account begins a new session and recovers its order by key.
+	c.queue(_begin_ok(9160, 10, 4, 89))
+	c.release(c.gates.size() - 1)
+	await c.begin_gameplay_session()
+	_check(c.get_gameplay_session_id() == "00000000-0000-0000-0000-000000000004" and int(c.get_confirmed_progress()["revision"]) == 4, "I4: a new begin after the re-sign-in works normally")
+	c.queue(_trade_ok(9160, 10, 4, 89, true))
+	c.release(c.gates.size() - 1)
+	var recovered := await c.recover_pending()
+	_check(recovered.size() == 1 and recovered[0]["status"] == OnlineProgressClient.OK and recovered[0]["replayed"] and c.get_pending_commands().is_empty(), "I4: the pending order is recovered once with its original key")
+	_check(_sent_trade_keys(c).count(key) == 2, "I4: the recovery reused the same idempotency key")
 	c.queue_free()
 
 

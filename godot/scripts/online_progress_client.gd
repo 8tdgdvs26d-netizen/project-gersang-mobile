@@ -22,9 +22,10 @@ extends Node
 ## - a view is accepted only if its server revision is newer than the cached
 ##   one, or, at the same revision (same money and goods by definition; only
 ##   time-dependent quotes can differ), if it answers a LATER-issued request;
-## - an answer to a request sent before a sign-out or an account switch (an
-##   older "account epoch") never touches the current state; it is reported
-##   as uncertain and its command stays pending for its own account;
+## - an answer to a request sent before a sign-out, an account switch or a
+##   sign-in of the same account again (an older "account epoch") never
+##   touches the current state; it is reported as uncertain and its command
+##   stays pending for its own account;
 ## - pending commands belong to the account that sent them; another account
 ##   never sees or resends them;
 ## - a "superseded" answer counts only for the gameplay session it was sent
@@ -373,6 +374,12 @@ func _accept_session(session: NakamaSession) -> Dictionary:
 		_pending_by_user.erase(session.user_id)
 		_reset_confirmed()
 		_superseded = false
+		_auth_epoch += 1
+	else:
+		# The SAME account signed in again (for example a new token). Its cache
+		# and pending orders (idempotency keys) stay, but it is still an auth
+		# boundary (PR #135 review): requests sent before it must not change
+		# the cache, the superseded flag or the session id when they answer.
 		_auth_epoch += 1
 	_session = session
 	_gameplay_session_id = ""
