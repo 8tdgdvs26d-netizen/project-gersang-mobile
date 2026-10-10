@@ -9,4 +9,20 @@ set -eu
 REPO_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 ISOLATED_HOME="$(mktemp -d)"
 echo "Isolated HOME (user:// root): $ISOLATED_HOME"
-HOME="$ISOLATED_HOME" GODOT="${GODOT:-godot}" sh "$REPO_DIR/godot/tests/run_tests.sh" "$@"
+OUT="$(mktemp)"
+set +e
+HOME="$ISOLATED_HOME" GODOT="${GODOT:-godot}" sh "$REPO_DIR/godot/tests/run_tests.sh" "$@" | tee "$OUT"
+STATUS=$?
+set -e
+# Strict re-check (WP01-B finding): Godot 4.7.2 exits 0 when a --script fails
+# to PARSE, so godot/tests/run_tests.sh alone would report such a script as
+# PASS. Every PASS line must carry its script's own "passed" message and no
+# parse / script error.
+FALSE_PASS="$( { grep '^PASS ' "$OUT" | grep -v 'passed' ; grep '^PASS ' "$OUT" | grep -E 'Parse Error|SCRIPT ERROR' ; } || true )"
+if [ -n "$FALSE_PASS" ]; then
+	echo "STRICT CHECK FAILED: PASS line(s) without a passed message or with errors:" >&2
+	printf '%s\n' "$FALSE_PASS" >&2
+	exit 1
+fi
+echo "Strict check: every PASS line carries its passed message and no parse / script error ($(grep -c '^PASS ' "$OUT") scripts)"
+exit "$STATUS"
