@@ -39,7 +39,7 @@ Run 1 is the standalone file; run 2 is inside the complete `run_live_tests.sh`.
 | FS-4 | 50 **claim ⟷ abandon** races (50 accounts) | PASS / PASS: 22 claimed + 28 abandoned / 28 + 22 | one terminal outcome per ticket; abandoned → no EXP; claimed → abandon gets `ticket_already_claimed` |
 | FS-5 | **5-minute abandon / begin bot** | PASS / PASS: 30 limiter-accepted in 300 s; **max 6 in any 58 s window**; 889 + 174 throttled | Hero EXP **0** (no free reroll, MC-2 Q1+F3) |
 | FS-6 | **Trade v1 + Online EXP** written concurrently (10 accounts × (1 claim + 10 trades)) | PASS / PASS: 10 claims, 100 trades applied | per account: 10 trade receipts, backpack 10, money = 10000 − Σ receipts; Hero revision 1 |
-| FS-7 | **Server restart** with claims in flight (6) | PASS / PASS: during the restart 6 × no answer; after it, 6 × applied | 1 receipt, Hero revision 1 each. In both runs the requests had not committed before the restart; the commit-then-lost-reply path is FS-8 / E2 lossy proxy. |
+| FS-7 | **Server restart** with claims in flight (6) | PASS / PASS: during the restart 6 × no answer; after it, 6 × applied | 1 receipt, Hero revision 1 each. In both runs the requests had not committed before the restart (nor was their arrival proven); **the commit boundary is closed by RW-1..3, section 6**. |
 | FS-8 | **Lost replies** (client aborts after send) | PASS / PASS: retries 6 applied + 4 replayed / 10 applied | exactly once each |
 | FS-9 | **Session takeover** racing claims (20 accounts) | PASS / PASS: 12 + 8 / 13 + 7 (applied / superseded) | superseded → no write; after reclaim the same key settles once |
 | FS-10 | **DB load** per settled claim (evidence) | 5 inserts, 3 updates, 4.0 / 5.1 scans | (first-time objects included) |
@@ -48,7 +48,7 @@ Run 1 is the standalone file; run 2 is inside the complete `run_live_tests.sh`.
 
 | Scenario | Evidence | Result |
 |---|---|---|
-| Restart during a claim | FS-7 (×2), `z_restart` (Trade) | PASS |
+| Restart during a claim | FS-7 (×2), `z_restart` (Trade); **RW-1..3 (×2): restart before and after the settlement commit, section 6** | PASS |
 | Network loss / lost confirmation | FS-8 (×2); E2 live and stress through the lossy proxy (claim replies dropped after commit: 39 in the full run) | PASS: the original receipt, EXP once |
 | Session takeover and recovery | FS-9 (×2); E2 live takeover → reclaim | PASS |
 | **Ticket deadline races** (real 15 min) | `e3z_wp01e_expiry.test.mjs`, run v1 (6 accounts, node 1) and **v2 (8 accounts, node 2)**: intent accounts settle once before or after the deadline; no-intent accounts settle once if a request precedes the deadline (later ones replay); **account 6 (no intent, only +50 / +300 ms) → `ticket_expired` ×2, ticket EXPIRED, no EXP**; account 7 (intent, only after) → applied + replayed | PASS ×2 |
@@ -97,13 +97,37 @@ Run 1 is the standalone file; run 2 is inside the complete `run_live_tests.sh`.
 | Steps | `nakama/docs/VS01_WP01E_Mac_Acceptance_Instructions.md` |
 | Status | **PREPARED, NOT PERFORMED.** No automated result is presented as Mac acceptance. |
 
+## 6. E3 corrective: the restart window of a claim (RW-1..3)
+
+GPT E3 review: FS-7 restarted the server right after sending, so it did not
+prove that a request had reached the server, nor what happens when the restart
+falls on either side of the settlement commit. New test
+`nakama/tests/live/e3r_wp01e_restart_window.test.mjs` (disposable project
+`myrial-vs01-wp01e`, test-only; no production code changed). Each case uses its
+own fresh account, waits the 10 s minimum age, then:
+
+| Case | Boundary control and observation | Restart | Before the resend | Same key resent | Final DB |
+|---|---|---|---|---|---|
+| **RW-1** | A psql session holds the ticket row (`SELECT … FOR UPDATE`). The claim enters the server, opens the settlement transaction and blocks: **observed** in `pg_stat_activity` as one `active` backend waiting on `Lock`, blocked by the psql pid, running `WITH upd AS (UPDATE storage …`. Uncommitted writes are invisible (0 receipts). | **SIGKILL** (`docker compose kill`) while the transaction is open | client: no answer (socket closed). Lock released → the open transaction is rolled back: ticket OPEN, 0 receipts, no Hero, 0 claim markers, 0 idle-in-transaction backends | applied, replayed | ticket CLAIMED; 1 receipt (+100); Hero revision 1, Lv 2, 0 EXP; 1 marker |
+| **RW-2** | same as RW-1 | **SIGTERM** (`docker compose restart`, graceful shutdown) while the transaction is open | same as RW-1 | applied, replayed | same as RW-1 |
+| **RW-3** | The claim goes through an in-test proxy that waits for the server's full answer (**observed**: HTTP 200, `replayed:false`, `exp_awarded 100`) and drops it. The **commit is observed** in PostgreSQL: CLAIMED, 1 receipt, Hero revision 1, Lv 2. | **SIGKILL** after the commit | client: no answer. DB after the restart **identical** to before it (committed EXP not lost) | replayed (node 1), replayed (node 2); the replay returns the original receipt (same `exp_awarded` 100, `server_time_ms`) | unchanged: 1 receipt, Hero revision 1, EXP not added again |
+
+Runs: run 1 = RW-1 and RW-2 PASS, RW-3 failed **in the test harness** (the
+proxy's copy of the reply was gzip-encoded and could not be parsed; the DB
+checks before the failure already held). Fixed in the test only (gunzip), then
+**run 2 and run 3: 3/3 PASS each**. Raw logs, the Nakama server log of the
+restarts and the Development Save record are in the evidence package.
+
+The test restarts node 1 and is run on its own (like the expiry race); it is
+not part of `run_live_tests.sh`.
+
 ## Risk Register
 
 | # | Risk | Likelihood / impact | Status / mitigation | Evidence |
 |---|---|---|---|---|
 | R1 | Fabricated victory within the M1 bounds | possible / bounded (≤ 200 EXP per ticket, paced by S3 + R-3) | **Accepted** for isolated TEST (S2). Not production anti-cheat. | Design; FS-5 pacing |
 | R2 | Duplicate EXP | — | **Mitigated:** W1–W7 in one transaction; 0/14 mutants survive; concurrency stress | FS-1/2/4/6/7/8/9, mutations, E2 stress |
-| R3 | Lost confirmed EXP (lost reply / restart / takeover) | — | **Mitigated:** the receipt replay precedes ticket checks; the same key resolves once | FS-7/8/9, E2 live, expiry race |
+| R3 | Lost confirmed EXP (lost reply / restart / takeover) | — | **Mitigated:** the receipt replay precedes ticket checks; the same key resolves once | FS-7/8/9, RW-1..3, E2 live, expiry race |
 | R4 | A legitimate result lost on app kill before the server recorded it | possible / one battle's EXP | **Accepted (S6 RAM-only):** told to the player; explicit abandon; MC-1 C protects anything already recorded | E2 live app-kill |
 | R5 | Unconfirmed result shown as earned | — | **Mitigated:** no EXP preview; only server views shown | E2 deterministic + mutation M3 |
 | R6 | Trade v1 interference from the ACK-1 identical-value guard | — | **Mitigated:** value and md5 version unchanged (real PostgreSQL); trades retry or succeed; `update_time` touched (unused) | E1 ACK-1, FS-6, Trade live suites |
