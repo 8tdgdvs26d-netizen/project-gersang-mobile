@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import { createContext, runInContext } from "node:vm";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 
 const BUILD = fileURLToPath(new URL("../../build/index.js", import.meta.url));
 
@@ -33,8 +33,19 @@ export const DB_FAULT = "ERROR: wp01 injected storage fault (SQLSTATE P0001)";
 // writes; `beforeWrite` / `beforeRateWrite` run a competing writer first.
 // `faultNextWrites` / `faultNextRateWrites` inject NON-conflict database
 // errors. `writeCalls` counts write attempts per API.
+// Nakama v3.25.0 versions: md5 of the value as the JS runtime serializes it
+// (Go json.Marshal of a map: keys sorted at every level), so an unchanged
+// rewrite keeps its version. Opt-in (`{ md5: true }`) for WP01-E tests; the
+// WP01 tests keep the counter versions they were written against.
+export function stableJson(v) {
+  if (v === null || typeof v !== "object") return JSON.stringify(v);
+  if (Array.isArray(v)) return "[" + v.map(stableJson).join(",") + "]";
+  return "{" + Object.keys(v).sort().map((k) => JSON.stringify(k) + ":" + stableJson(v[k])).join(",") + "}";
+}
+
 export class FakeNakama {
-  constructor() {
+  constructor(opts = {}) {
+    this.md5 = !!opts.md5;
     this.objects = new Map();
     this.cache = new Map();
     this.versionCounter = 0;
@@ -65,7 +76,8 @@ export class FakeNakama {
     this.versionCounter += 1;
     this.objects.set(this.id(w), {
       collection: w.collection, key: w.key, userId: w.userId,
-      value: JSON.parse(JSON.stringify(w.value)), version: `v${this.versionCounter}`,
+      value: JSON.parse(JSON.stringify(w.value)),
+      version: this.md5 ? createHash("md5").update(stableJson(w.value)).digest("hex") : `v${this.versionCounter}`,
       permissionRead: w.permissionRead ?? 1, permissionWrite: w.permissionWrite ?? 1,
     });
   }
@@ -83,7 +95,7 @@ export class FakeNakama {
     return { storageWriteAcks: [], walletUpdateAcks: [] };
   }
   _maybeInterfere(writes, prefix) {
-    if (writes.some((w) => w.collection === "vs01_wp01_rate_limits")) {
+    if (writes.some((w) => w.collection === "vs01_wp01_rate_limits" || w.collection === "vs01_wp01e_rate_limits")) {
       this.rateWrites += 1;
       if (this.beforeRateWrite) { const f = this.beforeRateWrite; this.beforeRateWrite = null; f(this); }
       if (this.faultNextRateWrites > 0) { this.faultNextRateWrites -= 1; throw new Error(prefix + DB_FAULT); }
