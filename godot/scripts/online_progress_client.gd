@@ -222,6 +222,28 @@ func recover_pending() -> Array:
 	return outcomes
 
 
+## VS-01 WP01-E (isolated Online TEST): one command under the ACTIVE gameplay
+## session, with the same policy A, account-epoch and ambiguity handling as a
+## trade. The caller (OnlineCombatAdapter) owns its own pending command and
+## its key; nothing here is retried or filed as pending.
+func gameplay_rpc(id: String, payload: Dictionary) -> Dictionary:
+	if _gameplay_session_id.is_empty():
+		return _outcome(NO_GAMEPLAY_SESSION, "no_gameplay_session")
+	if _superseded:
+		return _outcome(REJECTED, SUPERSEDED_REASON)
+	var epoch := _auth_epoch
+	var sent_session := _gameplay_session_id
+	var body := payload.duplicate(true)
+	body["gameplay_session_id"] = sent_session
+	var result := await _rpc(id, body)
+	if epoch != _auth_epoch:
+		return _stale(result)
+	_note_superseded(result, sent_session)
+	if result["status"] == REJECTED and result.get("grpc_status", 0) in AMBIGUOUS_GRPC_CODES:
+		result["status"] = UNCERTAIN
+	return result
+
+
 ## D4: always refused by the server until combat validation is approved.
 func claim_combat_reward(claim: Dictionary) -> Dictionary:
 	return await _rpc(RPC_COMBAT_REWARD_CLAIM, claim)

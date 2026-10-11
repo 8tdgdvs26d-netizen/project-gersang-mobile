@@ -70,4 +70,10 @@ run_godot_strict "VS-01 WP01-B live online trade harness passed" --script res://
 echo "== Godot live UI, WP01-C Online TEST mode (market buttons, lossy proxy, takeover, isolated user://)"
 run_godot_strict "VS-01 WP01-C live online trade UI passed" --script res://tests/live_vs01_wp01c_online_trade_ui.gd -- \
 	127.0.0.1 17350 "$PROXY_PORT"
+echo "== Godot live, WP01-E Online Combat TEST mode (server EXP, lost claim reply, takeover, app kill / abandon, isolated user://)"
+run_godot_strict "VS-01 WP01-E live online combat passed" --script res://tests/live_vs01_wp01e_online_combat.gd -- \
+	127.0.0.1 17350 "$PROXY_PORT"
+echo "== Godot live stress, WP01-E combat client (repeated lost replies, double tap, EXP ledger)"
+run_godot_strict "VS-01 WP01-E live combat stress passed" --script res://tests/live_vs01_wp01e_combat_stress.gd -- \
+	127.0.0.1 17350 "$PROXY_PORT"
 echo "Lossy proxy counters: $(curl -sf "http://127.0.0.1:$PROXY_PORT/__lossy_proxy/stats")"

@@ -76,11 +76,13 @@ func _verify_rules_parity() -> void:
 func _verify_isolation() -> void:
 	var dir := DirAccess.open("res://scripts")
 	for file in dir.get_files():
-		# The online layer itself: the WP01 client, the WP01-B adapter and the
-		# WP01-C Online TEST mode (a separate scene, not the normal game).
-		if file.ends_with(".gd") and not file in ["online_progress_client.gd", "online_trade_adapter.gd", "online_trade_test_mode.gd"]:
+		# The online layer itself: the WP01 client, the WP01-B adapter, the
+		# WP01-C Online TEST mode and the WP01-E combat adapter / TEST mode
+		# (separate scenes, not the normal game).
+		if file.ends_with(".gd") and not file in ["online_progress_client.gd", "online_trade_adapter.gd", "online_trade_test_mode.gd",
+				"online_combat_adapter.gd", "online_combat_test_mode.gd"]:
 			var source := FileAccess.get_file_as_string("res://scripts/" + file)
-			_check(not source.contains("OnlineProgressClient") and not source.contains("OnlineTradeAdapter") and not source.contains("Nakama"),
+			_check(not source.contains("OnlineProgressClient") and not source.contains("OnlineTradeAdapter") and not source.contains("OnlineCombatAdapter") and not source.contains("Nakama"),
 				"WP01 / WP01-B do not wire the online layer into gameplay yet (%s)" % file)
 	var project := FileAccess.get_file_as_string("res://project.godot")
 	_check(not project.contains("heroiclabs"), "Nakama SDK is not an autoload")
