@@ -63,7 +63,7 @@ All objects are server-only (`permissionRead 0 / permissionWrite 0`), carry `con
 
 | Suite | Result |
 |---|---|
-| Nakama unit (`npm test` in `nakama/`) | **77/77** = 43 existing + 7 WP01-E parity + 27 WP01-E command tests (one test was split while fixing two wrong test expectations; see "Findings while testing") |
+| Nakama unit (`npm test` in `nakama/`) | **77/77** at `1e18853` (87/87 after the corrective, see below) = 43 existing + 7 WP01-E parity + 27 WP01-E command tests (one test was split while fixing two wrong test expectations; see "Findings while testing") |
 | Nakama live, **all** suites (`node --test --test-concurrency=1 tests/live/*.test.mjs`, two nodes) | **19/19** = 14 existing trade / limiter / fault / restart / multinode / DB-load + 5 E1 |
 | Node/npm (repository root, Node/npm CI scope; **not Godot CI**) | **508/508** |
 | Godot Full Normal Regression (`run_godot_regression_isolated.sh`, strict) | **70/70 PASS**, FAIL 0, SCRIPT_ERROR 0, wrapper exit 0 (69 existing + `verify_vs01_wp01e_combat_vectors` 22 checks; core loop 1854 checks) |
@@ -111,6 +111,77 @@ update_time (µs) 1791691027640783 -> 1791691027728497 -> 1791691038115798
 
 1. With two different keys racing on one ticket, the loser re-reads after its lost race and sees the ticket settled, so it answers `ticket_already_claimed`. The test had expected `claim_locked`, which only applies while the ticket is still open.
 2. Claims against an already-settled ticket are refused **before** the limiter (one read, no write), so they cannot count against the 12/60 claim quota. The quota test now uses `too_early` requests, which are charged.
+
+## E1 corrective — throttled-claim intent durability (GPT review, 2026-10-11)
+
+### Finding (confirmed)
+
+In `rpcEncounterClaim`, when the claim limiter refused a request, the code
+called `recordIntent()` and **ignored its result**, then answered
+`rate_limited`. If that intent write lost a version race, the MC-1 Option C
+intent was not persisted. Examples of a lost race: a trade, or another write
+to the Trade v1 object or the ticket, landing between the read and the write.
+A legitimate claim sent before the deadline could therefore be lost at
+expiry. The `too_early` path already re-read on a lost race (`continue`).
+
+### Reproduction BEFORE the fix
+
+New test file: `nakama/tests/unit/wp01e_intent_recovery.test.mjs`, 10 tests,
+run against the E1 code `1e18853`. Result: **5 failed / 5 passed.**
+
+The key failure is *"REPRO: throttled claim whose intent write loses a version race (a trade lands) still persists the intent and is decided after the deadline"*:
+
+```
+AssertionError: the intent must be recorded despite the lost race
+```
+
+The other failures were:
+
+- repeated races not retried;
+- endless races answered `rate_limited` instead of failing safely;
+- takeover during the intent write not re-checked;
+- a different key's concurrent intent not detected (`claim_locked`).
+
+### Fix (minimal; E1 scope; no contract, schema or limit change)
+
+`nakama/src/wp01e.ts`, `rpcEncounterClaim` step 5 (+16 / −5 lines):
+
+- A `RESOURCE_EXHAUSTED` refusal from the claim limiter is kept, not thrown at once.
+- The claim answers `rate_limited` **only after `recordIntent()` confirmed the write**, or when no intent is due (an intent already exists, or the deadline has passed).
+- A lost race (`false`) → `continue`: a fresh combined read re-checks policy A, the receipt, the ticket state, the intent lock and expiry.
+  - The fixed `now0` keeps the deadline decision stable.
+  - The limiter is **not** charged again (no extra quota, no relaxation).
+- Endless races end as `conflict_retry_exhausted` (transient, nothing written), **never** as a `rate_limited` that implies a recorded intent.
+- Storage faults still fail fast as `storage_unavailable` (UNCERTAIN).
+- Other limiter errors are re-thrown unchanged.
+
+### After the fix
+
+| Suite | Result |
+|---|---|
+| `wp01e_intent_recovery.test.mjs` | **10/10** (incl. the 5 previously failing) |
+| Nakama unit, all | **87/87** (77 + 10) |
+| Nakama live, all, two nodes | **21/21** (19 + 2 new targeted stress tests in `tests/live/e1c_intent_recovery.test.mjs`) |
+
+The new live tests ran on real PostgreSQL. In both, the claim quota was first exhausted so the claims were refused by the limiter:
+
+- **Same key racing trades:** 20 parallel throttled same-key claims racing 10 trades → exactly 1 durable intent (RECORDED, `first_seen_at_ms` < deadline). After the window, the same key settles once (Hero revision 1); 5 replays; all 10 trades applied.
+- **Different keys:** 15 parallel throttled claims, each with a different key → exactly 1 intent, 14 × `claim_locked`, no EXP.
+
+| Regression | Result |
+|---|---|
+| Node/npm (root, **not Godot CI**) | 508/508 |
+| Godot Full Normal Regression | **70/70**, SCRIPT_ERROR 0, wrapper exit 0 |
+| Development Save v8 | `59fcf77a…5531f7` (mtime 1790568901, size 2052) before (04:30Z) and after (04:44Z) |
+
+### Corrective test coverage
+
+- **Last moment:** throttled at `expires − 1` with a lost race.
+- **Limits:** a throttled request never reaches a decision; the quota is unchanged.
+- **Concurrency:** repeated / endless races; the same key recording concurrently; a different key recording first → `claim_locked`.
+- **Takeover:** a race during the intent write → `gameplay_session_superseded`, no intent.
+- **Storage fault:** while recording → `storage_unavailable`, nothing recorded; the retry records.
+- **After the deadline:** a throttled claim gets an explicit `ticket_expired` with no intent.
 
 ## Risks / open items
 

@@ -360,6 +360,8 @@ function rpcEncounterClaim(ctx: nkruntime.Context, logger: nkruntime.Logger, nk:
   const hash = eClaimHash(ticketId, claim.outcome, claim.kills, claim.hero_alive);
   const now0 = Date.now();
   let charged = false;
+  // The limiter's refusal, kept while its MC-1 intent is being made durable.
+  let throttled: any = null;
   for (let attempt = 0; attempt < E_MAX_ATTEMPTS; attempt++) {
     const snap = eRead(nk, userId, [[E_RECEIPT_COLLECTION, key], [E_TICKET_COLLECTION, ticketId], [E_INTENT_COLLECTION, ticketId],
       [E_STATE_COLLECTION, E_STATE_KEY], [E_HERO_COLLECTION, E_HERO_KEY],
@@ -397,6 +399,8 @@ function rpcEncounterClaim(ctx: nkruntime.Context, logger: nkruntime.Logger, nk:
     }
     // MC-1 Option C: record the claim before any transient refusal, while the
     // deadline has not passed (never for a superseded session: guarded).
+    // True once the intent is durable (or none is due); false on a lost race:
+    // the caller re-reads and re-checks everything before trying again.
     const recordIntent = (): boolean => {
       if (intent !== null || now0 >= t.expires_at_ms) return true;
       const value = {
@@ -410,15 +414,22 @@ function rpcEncounterClaim(ctx: nkruntime.Context, logger: nkruntime.Logger, nk:
         eSessionGuard(userId, current),
       ]);
     };
-    // 5. Rate limit (R-3), then the minimum claim age (R-1).
-    if (!charged) {
+    // 5. Rate limit (R-3), then the minimum claim age (R-1). A throttled
+    // claim is answered rate_limited only after its intent is confirmed
+    // written: a lost race re-reads (policy A and ticket state re-checked);
+    // endless races end as conflict_retry_exhausted, never as a false refusal.
+    if (!charged && throttled === null) {
       try {
         eCharge(ctx, logger, nk, userId, "encounter_claim", eGet(snap, E_RATE_COLLECTION, "encounter_claim"), now0);
+        charged = true;
       } catch (e) {
-        recordIntent();
-        throw e;
+        if (!(e && (e as any).code === nkruntime.Codes.RESOURCE_EXHAUSTED)) throw e;
+        throttled = e;
       }
-      charged = true;
+    }
+    if (throttled !== null) {
+      if (!recordIntent()) continue;
+      throw throttled;
     }
     if (now0 < t.issued_at_ms + E_MIN_CLAIM_AGE_MS) {
       if (!recordIntent()) continue;
