@@ -147,6 +147,13 @@ not part of `run_live_tests.sh`.
   - The rehearsal above **actually reverted only `2e4abe1`, `7e40186` and `1e18853`** (tree = `main` `4300681`, unit 43/43). It ran before `d62ce8f`, `d613ce9` and `a12e771` existed.
   - **No new rollback rehearsal has been run for the six commits.** That reverting all six restores `main` is an expectation (the last three add or change only tests, scripts and docs), not a rehearsed result.
   - The original rehearsal record above is kept unchanged.
+- **Scope note (documentation-only, second 2026-10-13 correction; the text above is kept):** "the branch now has six" means the six WP01-E commits **up to and including `a12e771`**. It is not the branch total at any later time. Commit groups, by SHA:
+  1. the six WP01-E commits ending at `a12e7715b20c5fd51f1601119bbdb0e150ecf913` (listed above);
+  2. `ab454ede40f4e8bbe6d53fc62d266e11116ff575`: documentation-only correction of the Mac acceptance record and of this section;
+  3. the documentation-only commit that adds this note (a commit cannot record its own SHA; see the Git log).
+  - **Rollback scope** is defined by SHAs, not by a count: every commit in the range from `main` `43006811111dc3d603c2aa3c339a1a37ca1fd65b` (exclusive) to the WP01-E branch head being reverted (inclusive).
+  - The rehearsal evidence is unchanged: only `2e4abe1`, `7e40186` and `1e18853` were actually reverted; the tree then equalled `main` `4300681`; Nakama unit 43/43.
+  - **No new rollback rehearsal has been run on the full WP01-E commit chain** (`4300681..` the branch head). No new test result is claimed.
 - **Data:** WP01-E writes only to the new `vs01_wp01e_*` collections. They become inert when the RPCs are unregistered.
   - Trade v1 data is never changed; the guard rewrites it with an identical value.
   - The Development Save is never read or written.
