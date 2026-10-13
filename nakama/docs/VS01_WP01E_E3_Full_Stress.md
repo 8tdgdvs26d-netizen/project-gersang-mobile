@@ -143,6 +143,10 @@ not part of `run_live_tests.sh`.
 
 - **Rehearsal** (temporary detached worktree, no branch created; removed afterwards): `git revert` of `2e4abe1`, `7e40186` and `1e18853` → **tree identical to `main` `4300681`**, and the Nakama unit tests on the reverted tree pass **43/43**.
 - After the E3 commit, the rollback is the same `git revert` of the four WP01-E commits (the E3 commit adds only tests, scripts and docs).
+- **Clarification (documentation-only, 2026-10-13):** the branch now has **six** WP01-E commits on `main` `4300681`: `1e18853` (E1), `7e40186` (E1 corrective), `2e4abe1` (E2), `d62ce8f` (E3), `d613ce9` (E3 corrective, FS-7 restart window: test + docs) and `a12e771` (Mac acceptance record: docs only).
+  - The rehearsal above **actually reverted only `2e4abe1`, `7e40186` and `1e18853`** (tree = `main` `4300681`, unit 43/43). It ran before `d62ce8f`, `d613ce9` and `a12e771` existed.
+  - **No new rollback rehearsal has been run for the six commits.** That reverting all six restores `main` is an expectation (the last three add or change only tests, scripts and docs), not a rehearsed result.
+  - The original rehearsal record above is kept unchanged.
 - **Data:** WP01-E writes only to the new `vs01_wp01e_*` collections. They become inert when the RPCs are unregistered.
   - Trade v1 data is never changed; the guard rewrites it with an identical value.
   - The Development Save is never read or written.
