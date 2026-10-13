@@ -5,6 +5,8 @@
 //   vs01_progress_get        read the server-confirmed progress (current gameplay session only)
 //   vs01_trade               one buy / sell order, atomic and idempotent (D3)
 //   vs01_combat_reward_claim always rejected until combat validation is approved (D4)
+// VS-01 WP01-E isolated Online TEST (src/wp01e.ts): vs01e_encounter_begin,
+// vs01e_encounter_claim, vs01e_encounter_abandon, vs01e_progression_get.
 
 const RECEIPT_COLLECTION = "vs01_wp01_receipts";
 // Optimistic-concurrency retries per command. Each lost race means another
@@ -190,6 +192,10 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkrunt
   initializer.registerRpc("vs01_progress_get", rpcProgressGet);
   initializer.registerRpc("vs01_trade", rpcTrade);
   initializer.registerRpc("vs01_combat_reward_claim", rpcCombatRewardClaim);
+  initializer.registerRpc("vs01e_encounter_begin", rpcEncounterBegin);
+  initializer.registerRpc("vs01e_encounter_claim", rpcEncounterClaim);
+  initializer.registerRpc("vs01e_encounter_abandon", rpcEncounterAbandon);
+  initializer.registerRpc("vs01e_progression_get", rpcProgressionGet);
 
   // D1: Sign in with Apple is the formal method; email only for local tests.
   initializer.registerBeforeAuthenticateEmail(guardEmailTestAuthOnly);

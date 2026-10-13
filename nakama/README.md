@@ -17,6 +17,18 @@ accepted, not device-accepted, not wired into gameplay.
 | `vs01_trade` | One buy / sell order: `{gameplay_session_id, idempotency_key, action, city_id, good_id, quantity}`. Nothing else is accepted (no price, money or stock from the client). |
 | `vs01_combat_reward_claim` | Always refused (`combat_reward_requires_server_validation`) until combat validation is approved in a later WP (D4). |
 
+**VS-01 WP01-E (isolated Online TEST only, `src/wp01e.ts`, `src/wp01e_rules.ts`):**
+
+| RPC | What it does |
+|---|---|
+| `vs01e_encounter_begin` | Issues one server ticket for 1–3 Prototype groups (server enemy count); one unresolved ticket per account |
+| `vs01e_encounter_claim` | Settles a ticket once: server-computed Hero EXP / Level (bounded M1 claim, **not proof of victory**); MC-1 Option C claim intents; receipts and replay |
+| `vs01e_encounter_abandon` | Explicit, confirmed abandon (MC-2 Q1+F3); a settled claim is never revoked |
+| `vs01e_progression_get` | Hero Level / EXP, the unresolved ticket and group cooldowns |
+
+Schema v1, rules and evidence: `docs/VS01_WP01E_E1_Server.md`. Golden vectors:
+`tests/fixtures/wp01e_vectors.json` (generated from GDScript by `scripts/generate_wp01e_vectors.gd`).
+
 ### Rules (D3: existing Prototype rules, not a new economy)
 
 `src/rules.ts` ports the existing GDScript rules unchanged: `MarketRules`

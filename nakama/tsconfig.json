@@ -17,6 +17,8 @@
     "src/progress.ts",
     "src/trade.ts",
     "src/guards.ts",
+    "src/wp01e_rules.ts",
+    "src/wp01e.ts",
     "src/main.ts"
   ]
 }
