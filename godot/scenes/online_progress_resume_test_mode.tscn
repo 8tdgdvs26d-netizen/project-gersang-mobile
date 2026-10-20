@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/online_progress_resume_test_mode.gd" id="1_mode"]
+
+[node name="OnlineProgressResumeTestMode" type="Node"]
+script = ExtResource("1_mode")
