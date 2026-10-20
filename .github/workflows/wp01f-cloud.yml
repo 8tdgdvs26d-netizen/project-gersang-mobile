@@ -20,7 +20,8 @@ jobs:
       GODOT_ARCHIVE: "Godot_v4.7.2-stable_linux.x86_64.zip"
       GODOT_SHA256: "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4"
       WP01F_RUN_ID: "wp01f_${{ github.run_id }}_${{ github.run_attempt }}"
-      WP01F_EVIDENCE_DIR: "${{ runner.temp }}/wp01f-evidence"
+      # WP01F_EVIDENCE_DIR is set by the first run step from $RUNNER_TEMP:
+      # jobs.<job_id>.env does not allow the runner context.
 
     steps:
       - name: Checkout triggering WP01-F execution branch read-only
@@ -32,6 +33,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          test -n "${RUNNER_TEMP:-}"
+          WP01F_EVIDENCE_DIR="$RUNNER_TEMP/wp01f-evidence"
+          echo "WP01F_EVIDENCE_DIR=$WP01F_EVIDENCE_DIR" >> "$GITHUB_ENV"
           mkdir -p "$WP01F_EVIDENCE_DIR"
           {
             echo "source_sha=$(git rev-parse HEAD)"
@@ -95,7 +99,8 @@ jobs:
           node nakama/scripts/run_wp01f_bounded.mjs             --run-id "$WP01F_RUN_ID"             --evidence-dir "$WP01F_EVIDENCE_DIR"             --godot "$GODOT"             2>&1 | tee "$WP01F_EVIDENCE_DIR/wp01f-console.log"
 
       - name: Leftover inventory (nothing is deleted; the runner is discarded)
-        if: always()
+        # Never with an empty evidence path (it would point at "/").
+        if: always() && env.WP01F_EVIDENCE_DIR != ''
         shell: bash
         run: |
           set +e
@@ -112,10 +117,11 @@ jobs:
           exit 0
 
       - name: Upload all WP01-F logs and evidence
-        if: always()
+        # Never with an empty evidence path (it would upload "/").
+        if: always() && env.WP01F_EVIDENCE_DIR != ''
         uses: actions/upload-artifact@v4
         with:
           name: wp01f-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/wp01f-evidence/
+          path: ${{ env.WP01F_EVIDENCE_DIR }}/
           if-no-files-found: error
           retention-days: 14
