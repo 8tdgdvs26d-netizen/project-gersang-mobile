@@ -11,10 +11,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: wp01f-cloud-${{ github.run_id }}-${{ github.run_attempt }}
-  cancel-in-progress: false
-
 jobs:
   wp01f-cloud-acceptance:
     runs-on: ubuntu-latest
@@ -27,7 +23,7 @@ jobs:
       WP01F_EVIDENCE_DIR: "${{ runner.temp }}/wp01f-evidence"
 
     steps:
-      - name: Checkout review branch read-only
+      - name: Checkout triggering WP01-F execution branch read-only
         uses: actions/checkout@v4
         with:
           persist-credentials: false
