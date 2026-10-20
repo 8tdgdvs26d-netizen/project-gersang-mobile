@@ -1,18 +1,12 @@
 name: WP01-F cloud acceptance (manual, review-gated)
 
-# WP01-F only. This workflow has no push or pull_request trigger and must not
-# be run until Charlie and GPT have reviewed the workflow and the implementation.
+# WP01-F only. The review branch does not match this trigger. After Charlie
+# and GPT approve the workflow and implementation, creating/updating the exact
+# execution branch below is the explicit first-run action. No main trigger.
 on:
-  workflow_dispatch:
-    inputs:
-      review_gate:
-        description: "First run requires Charlie + GPT review"
-        required: true
-        type: choice
-        default: NOT_APPROVED
-        options:
-          - NOT_APPROVED
-          - APPROVED_AFTER_CHARLIE_GPT_REVIEW
+  push:
+    branches:
+      - wp01-f-cloud-execution
 
 permissions:
   contents: read
@@ -23,7 +17,6 @@ concurrency:
 
 jobs:
   wp01f-cloud-acceptance:
-    if: ${{ inputs.review_gate == 'APPROVED_AFTER_CHARLIE_GPT_REVIEW' }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
