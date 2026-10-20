@@ -1,0 +1,132 @@
+name: WP01-F cloud acceptance (manual, review-gated)
+
+# WP01-F only. This workflow has no push or pull_request trigger and must not
+# be run until Charlie and GPT have reviewed the workflow and the implementation.
+on:
+  workflow_dispatch:
+    inputs:
+      review_gate:
+        description: "First run requires Charlie + GPT review"
+        required: true
+        type: choice
+        default: NOT_APPROVED
+        options:
+          - NOT_APPROVED
+          - APPROVED_AFTER_CHARLIE_GPT_REVIEW
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wp01f-cloud-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  wp01f-cloud-acceptance:
+    if: ${{ inputs.review_gate == 'APPROVED_AFTER_CHARLIE_GPT_REVIEW' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GODOT_VERSION: "4.7.2"
+      GODOT_ARCHIVE: "Godot_v4.7.2-stable_linux.x86_64.zip"
+      GODOT_SHA256: "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4"
+      WP01F_RUN_ID: "wp01f_${{ github.run_id }}_${{ github.run_attempt }}"
+      WP01F_EVIDENCE_DIR: "${{ runner.temp }}/wp01f-evidence"
+
+    steps:
+      - name: Checkout review branch read-only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Create bounded evidence directory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$WP01F_EVIDENCE_DIR"
+          {
+            echo "source_sha=$(git rev-parse HEAD)"
+            echo "source_ref=$GITHUB_REF"
+            echo "run_id=$WP01F_RUN_ID"
+            echo "runner_os=$RUNNER_OS"
+            uname -a
+          } | tee "$WP01F_EVIDENCE_DIR/environment.txt"
+
+      - name: Verify Docker and Docker Compose availability
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          {
+            docker version
+            docker compose version
+          } 2>&1 | tee "$WP01F_EVIDENCE_DIR/docker-version.log"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            nakama/package-lock.json
+
+      - name: Download and verify official Godot 4.7.2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          archive_path="$RUNNER_TEMP/$GODOT_ARCHIVE"
+          sums_path="$RUNNER_TEMP/SHA512-SUMS.txt"
+          verify_path="$RUNNER_TEMP/godot.sha512"
+
+          curl --fail --location --retry 3 --output "$archive_path"             "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/$GODOT_ARCHIVE"
+          curl --fail --location --retry 3 --output "$sums_path"             "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/SHA512-SUMS.txt"
+
+          echo "$GODOT_SHA256  $archive_path" | sha256sum --check -
+          grep -F " $GODOT_ARCHIVE" "$sums_path" > "$verify_path"
+          test "$(wc -l < "$verify_path")" -eq 1
+          (
+            cd "$RUNNER_TEMP"
+            sha512sum --check "$(basename "$verify_path")"
+          )
+
+          unzip -q "$archive_path" -d "$RUNNER_TEMP/godot"
+          godot_bin="$(find "$RUNNER_TEMP/godot" -maxdepth 2 -type f -name 'Godot*' -perm -u+x -print -quit)"
+          test -n "$godot_bin"
+          version="$("$godot_bin" --version)"
+          printf '%s\n' "$version" | tee "$WP01F_EVIDENCE_DIR/godot-version.txt"
+          case "$version" in
+            4.7.2*) ;;
+            *) echo "Unexpected Godot version: $version" >&2; exit 1 ;;
+          esac
+          echo "GODOT=$godot_bin" >> "$GITHUB_ENV"
+
+      - name: Run WP01-F bounded acceptance
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f nakama/scripts/run_wp01f_bounded.mjs
+          node nakama/scripts/run_wp01f_bounded.mjs             --run-id "$WP01F_RUN_ID"             --evidence-dir "$WP01F_EVIDENCE_DIR"             --godot "$GODOT"             2>&1 | tee "$WP01F_EVIDENCE_DIR/wp01f-console.log"
+
+      - name: Best-effort bounded cleanup
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -f nakama/scripts/run_wp01f_bounded.mjs ]; then
+            node nakama/scripts/run_wp01f_bounded.mjs               --run-id "$WP01F_RUN_ID"               --evidence-dir "$WP01F_EVIDENCE_DIR"               --cleanup-only               2>&1 | tee "$WP01F_EVIDENCE_DIR/cleanup.log"
+            cleanup_status=${PIPESTATUS[0]}
+          else
+            echo "Bounded launcher absent; no WP01-F resources were started by this workflow."               | tee "$WP01F_EVIDENCE_DIR/cleanup.log"
+            cleanup_status=0
+          fi
+          echo "cleanup_exit=$cleanup_status" | tee -a "$WP01F_EVIDENCE_DIR/cleanup.log"
+          exit 0
+
+      - name: Upload all WP01-F logs and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp01f-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/wp01f-evidence/
+          if-no-files-found: error
+          retention-days: 14
