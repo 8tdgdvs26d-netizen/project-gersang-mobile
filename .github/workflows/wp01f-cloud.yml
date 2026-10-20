@@ -1,4 +1,4 @@
-name: WP01-F cloud acceptance (manual, review-gated)
+name: WP01-F cloud acceptance (dedicated branch, review-gated)
 
 # WP01-F only. The review branch does not match this trigger. After Charlie
 # and GPT approve the workflow and implementation, creating/updating the exact
