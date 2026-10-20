@@ -8,7 +8,8 @@ extends SceneTree
 ## the last confirmed values and never say "confirmed"; a late answer after a
 ## sign-out or an account switch never reaches the screen; an older revision
 ## never replaces a newer one; takeover (policy A) and reclaim; the same
-## account signing in again reads from the server. Part of the normal Godot
+## account signing in again reads from the server; a sign-out while the
+## sign-in is in flight undoes a late success. Part of the normal Godot
 ## regression; the live run is tests/live_vs01_wp01f_online_progress_resume.gd.
 
 const SCENE := "res://scenes/online_progress_resume_test_mode.tscn"
@@ -26,11 +27,22 @@ class GatedClient extends OnlineProgressClient:
 	var answers: Array = []
 	var sent: Array = []
 	var held: Array = []
+	## When true, the next sign-in waits until release_sign_in().
+	var hold_sign_in := false
+	var _sign_in_released := false
+
+	func release_sign_in() -> void:
+		_sign_in_released = true
 
 	func is_signed_in() -> bool:
 		return _session != null
 
 	func sign_in_email_test(email: String, _password: String, _create: bool = true) -> Dictionary:
+		if hold_sign_in:
+			hold_sign_in = false
+			while not _sign_in_released:
+				await Engine.get_main_loop().process_frame
+			_sign_in_released = false
 		var header := Marshalls.utf8_to_base64(JSON.stringify({"alg": "none"})).trim_suffix("=").trim_suffix("=")
 		var body := Marshalls.utf8_to_base64(JSON.stringify({"uid": "ui-" + email, "usn": email, "exp": 4102444800})).trim_suffix("=").trim_suffix("=")
 		return _accept_session(NakamaSession.new("%s.%s.x" % [header, body], false))
@@ -69,6 +81,7 @@ func _initialize() -> void:
 	await _verify_revision_never_goes_back()
 	await _verify_takeover_and_reclaim()
 	await _verify_same_account_again()
+	await _verify_sign_out_during_sign_in()
 	_check(_dev_save_fingerprint() == dev_before, "Development Save (%s) is untouched" % SaveStore.DEFAULT_PATH)
 	_check(not FileAccess.file_exists(SaveStore.DEFAULT_PATH), "The Resume TEST mode created no local save file")
 	await process_frame
@@ -237,6 +250,28 @@ func _verify_same_account_again() -> void:
 	await _free(mode)
 
 
+func _verify_sign_out_during_sign_in() -> void:
+	print("== R8 sign-out while the sign-in is still in flight")
+	var c := GatedClient.new()
+	var mode := await _new_mode(c)
+	c.hold_sign_in = true
+	var out := []
+	_start_sign_in(mode, "r8@myrial.test", out)
+	await process_frame
+	_check(mode.is_busy(), "A sign-in is in flight")
+	mode.sign_out()
+	_check((await mode.sign_in("r8-other@myrial.test", "x", false))["reason"] == "busy", "A second sign-in waits for the first one's answer (no overlap)")
+	c.release_sign_in()
+	while out.is_empty():
+		await process_frame
+	await process_frame
+	_check(out[0].get("stale", false) and out[0].get("original_status") == OK, "The late sign-in answer is reported as stale")
+	_check(not c.is_signed_in() and mode.get_account_text() == Mode.SIGNED_OUT_TEXT, "The late success is undone: still signed out")
+	_check(c.sent.is_empty() and mode.get_trade_text() == Mode.TRADE_UNKNOWN_TEXT, "Nothing was read or shown for the late sign-in")
+	_check((await mode.sign_in("r8@myrial.test", "x", false))["status"] == OK, "A new sign-in works afterwards")
+	await _free(mode)
+
+
 # --- Helpers ---------------------------------------------------------------------
 
 func _new_mode(client: GatedClient) -> OnlineProgressResumeTestMode:
@@ -250,6 +285,10 @@ func _new_mode(client: GatedClient) -> OnlineProgressResumeTestMode:
 func _free(mode: Node) -> void:
 	mode.queue_free()
 	await process_frame
+
+
+func _start_sign_in(mode: OnlineProgressResumeTestMode, email: String, out: Array) -> void:
+	out.append(await mode.sign_in(email, "x", false))
 
 
 func _start_refresh(mode: OnlineProgressResumeTestMode, out: Array) -> void:

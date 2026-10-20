@@ -3,10 +3,10 @@
 // runner (.github/workflows/wp01f-cloud.yml). Refuses to run anywhere else.
 //
 //   node nakama/scripts/run_wp01f_bounded.mjs --run-id <wp01f_...> --evidence-dir <abs> --godot <abs>
-//   node nakama/scripts/run_wp01f_bounded.mjs --run-id <wp01f_...> --evidence-dir <abs> --cleanup-only
+//   node nakama/scripts/run_wp01f_bounded.mjs --run-id <wp01f_...> --evidence-dir <abs> --inventory-only
 //
 // What it does, in order, and it STOPS at the first failure (later steps are
-// recorded as NOT RUN, then the cleanup below runs):
+// recorded as NOT RUN, then the leftover inventory below runs):
 //   1. creates one run-owned work root (isolated HOME / XDG / TMPDIR for Godot)
 //      and records it, with a sentinel, BEFORE anything else starts;
 //   2. Full Normal Regression: root Node tests, Nakama build + unit tests,
@@ -24,13 +24,11 @@
 // a timed-out group is stopped (TERM, then KILL). Right after each child ends,
 // its group is checked for survivors.
 //
-// Cleanup (also run alone by --cleanup-only) touches ONLY what this run
-// recorded: the Compose project of this run (down -v) and the recorded work
-// root, after re-checking its canonical path, device / inode, sentinel, name
-// and parent, and that the tree holds no symbolic link or mount crossing. If
-// any check fails the data is KEPT and the reason recorded. No glob, no
-// unresolved path, nothing outside the recorded root. Cleanup is best effort
-// on a disposable runner: it is evidence, never a Gate X / FS-08 PASS.
+// Nothing is deleted. After the run (and alone with --inventory-only) the
+// launcher only LISTS what this run left: its Compose project's containers /
+// volumes and its recorded work root. Everything stays on the disposable
+// runner, which GitHub discards after the job. This is evidence only, never
+// a Gate X / FS-08 PASS.
 //
 // Secrets: the two disposable account passwords are random per run, passed
 // to Godot only through its environment and redacted from every log.
@@ -80,10 +78,10 @@ const KILL_GRACE_MS = 5000;
 // --- Arguments and environment ------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { runId: "", evidenceDir: "", godot: "", cleanupOnly: false };
+  const out = { runId: "", evidenceDir: "", godot: "", inventoryOnly: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--cleanup-only") out.cleanupOnly = true;
+    if (a === "--inventory-only") out.inventoryOnly = true;
     else if (a === "--run-id") out.runId = argv[++i] ?? "";
     else if (a === "--evidence-dir") out.evidenceDir = argv[++i] ?? "";
     else if (a === "--godot") out.godot = argv[++i] ?? "";
@@ -91,7 +89,7 @@ function parseArgs(argv) {
   }
   if (!RUN_ID_RE.test(out.runId)) throw new Error("--run-id must match " + RUN_ID_RE);
   if (!path.isAbsolute(out.evidenceDir)) throw new Error("--evidence-dir must be an absolute path");
-  if (!out.cleanupOnly && !path.isAbsolute(out.godot)) throw new Error("--godot must be an absolute path");
+  if (!out.inventoryOnly && !path.isAbsolute(out.godot)) throw new Error("--godot must be an absolute path");
   return out;
 }
 
@@ -250,7 +248,7 @@ function results(output) {
   return out;
 }
 
-// --- Run state, work root and cleanup ------------------------------------------
+// --- Run state, work root and inventory ------------------------------------------
 
 function statePath(evidenceDir) {
   return path.join(evidenceDir, STATE_FILE);
@@ -311,83 +309,45 @@ function rootProblem(state) {
   return "";
 }
 
-// Walks the tree WITHOUT following links. Any symbolic link, other special
-// entry outside regular files / directories, or a different device is a reason to keep it.
-function treeProblem(root, dev) {
-  const stack = [root];
-  let entries = 0;
-  while (stack.length > 0) {
-    const dir = stack.pop();
-    for (const name of fs.readdirSync(dir)) {
-      const p = path.join(dir, name);
-      const st = fs.lstatSync(p);
-      entries += 1;
-      if (st.isSymbolicLink()) return { problem: `symbolic link inside root: ${p}`, entries };
-      if (st.dev !== dev) return { problem: `different device (mount) inside root: ${p}`, entries };
-      if (st.isDirectory()) stack.push(p);
-      else if (!st.isFile()) return { problem: `special file inside root: ${p}`, entries };
-    }
-  }
-  return { problem: "", entries };
-}
-
-async function cleanup(ev, runId) {
-  const report = { compose: "not started", root: "not created", kept_reason: "" };
+// No destructive cleanup (corrective C1, GPT pre-execution review B01 / B02):
+// the runner is a disposable GitHub-hosted VM, so this launcher deletes
+// NOTHING. It only records what this run left behind (its Compose project's
+// containers / volumes and its work root) as evidence; the VM is discarded
+// after the job. A leftover is reported as PRESERVED, never as cleaned, and
+// this is never a Gate X / FS-08 PASS.
+async function inventory(ev, runId) {
+  const report = { mode: "inventory only: nothing deleted, the disposable runner is discarded after the job",
+    compose: "not started", root: "not created", note: "" };
   const state = readState(ev.dir);
   if (state === null) {
-    report.root = "no run state: this launcher created nothing to clean";
-    ev.log("cleanup: " + report.root);
+    report.root = "no run state: this launcher created nothing";
+    ev.log("leftover inventory: " + report.root);
     return report;
   }
   if (state.run_id !== runId) {
-    report.kept_reason = "run state belongs to another run id";
-    ev.log("cleanup: STOP, " + report.kept_reason);
+    report.note = "run state belongs to another run id: not inspected";
+    ev.log("leftover inventory: " + report.note);
     return report;
   }
-  if (state.cleaned) {
-    ev.log("cleanup: already done by the main run");
-    return state.cleanup_report ?? { compose: "done earlier", root: "done earlier", kept_reason: "" };
-  }
-  // 1. This run's Compose project only.
   if (state.compose_started) {
     const project = state.compose_project;
     if (project !== composeProject(runId) || !PROJECT_RE.test(project)) {
-      report.compose = "KEPT: recorded project name is not this run's";
+      report.compose = "recorded project name is not this run's: not inspected";
     } else {
-      const down = await runBounded(ev, "cleanup-compose-down", "docker",
-        ["compose", "-p", project, "-f", COMPOSE_FILE, "down", "-v", "--remove-orphans", "--timeout", "10"],
-        { cwd: NAKAMA_DIR, timeoutMs: TIMEOUT_MS.composeDown });
-      const ps = await runBounded(ev, "cleanup-compose-check-containers", "docker",
-        ["ps", "-a", "-q", "--filter", `label=com.docker.compose.project=${project}`], { timeoutMs: TIMEOUT_MS.short });
-      const vols = await runBounded(ev, "cleanup-compose-check-volumes", "docker",
-        ["volume", "ls", "-q", "--filter", `label=com.docker.compose.project=${project}`], { timeoutMs: TIMEOUT_MS.short });
-      const left = ps.output.trim() + vols.output.trim();
-      report.compose = down.rec.exit_code === 0 && ps.rec.exit_code === 0 && vols.rec.exit_code === 0 && left === ""
-        ? `removed project ${project} (containers and volume verified gone)`
-        : `INCOMPLETE for project ${project} (down exit ${down.rec.exit_code}; remaining: ${left === "" ? "none listed" : "see logs"})`;
+      const ps = await runBounded(ev, "inventory-compose-containers", "docker",
+        ["ps", "-a", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Names}} {{.Status}}"], { timeoutMs: TIMEOUT_MS.short });
+      const vols = await runBounded(ev, "inventory-compose-volumes", "docker",
+        ["volume", "ls", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Name}}"], { timeoutMs: TIMEOUT_MS.short });
+      const lines = (o) => o.output.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+      report.compose = ps.rec.exit_code === 0 && vols.rec.exit_code === 0
+        ? `PRESERVED: project ${project}, ${lines(ps).length} container(s), ${lines(vols).length} volume(s) (listed in the inventory logs)`
+        : `UNKNOWN: docker listing failed for project ${project} (see logs)`;
     }
   }
-  // 2. The recorded work root only, after every check.
   const problem = rootProblem(state);
-  if (problem === "absent") {
-    report.root = "already absent";
-  } else if (problem !== "") {
-    report.root = "KEPT";
-    report.kept_reason = problem;
-  } else {
-    const tree = treeProblem(state.root, state.root_dev);
-    if (tree.problem !== "") {
-      report.root = "KEPT";
-      report.kept_reason = tree.problem;
-    } else {
-      fs.rmSync(state.root, { recursive: true, force: false });
-      report.root = fs.existsSync(state.root) ? "INCOMPLETE: root still present" : `removed (${tree.entries} entries, no links, one device)`;
-    }
-  }
-  state.cleaned = report.root !== "KEPT" && !report.compose.startsWith("INCOMPLETE") && !report.compose.startsWith("KEPT");
-  state.cleanup_report = report;
-  writeState(ev, state);
-  ev.log(`cleanup: compose=${report.compose}; root=${report.root}${report.kept_reason ? "; kept because " + report.kept_reason : ""}`);
+  report.root = problem === "" ? `PRESERVED: ${state.root} (identity and sentinel still match)`
+    : problem === "absent" ? "absent" : `PRESERVED, identity check: ${problem}`;
+  ev.log(`leftover inventory: compose=${report.compose}; root=${report.root}`);
   return report;
 }
 
@@ -432,16 +392,47 @@ function godotEnv(state, extra = {}) {
   };
 }
 
+// True only if `p` is (or will be created) inside `root`, proven by the
+// canonical path of `p` itself or, if it does not exist yet, of its nearest
+// existing ancestor (missing components cannot be links). Any failure to
+// resolve is FALSE (fail closed; corrective C2, review H04).
 function inside(root, p) {
   if (typeof p !== "string" || !path.isAbsolute(p)) return false;
+  const within = (q) => q === root || q.startsWith(root + path.sep);
   const resolved = path.resolve(p);
-  if (!(resolved === root || resolved.startsWith(root + path.sep))) return false;
-  try {
-    const real = fs.realpathSync(resolved);
-    return real === root || real.startsWith(root + path.sep);
-  } catch {
-    return true; // not created (yet): the lexical containment above is what Godot will use
+  if (!within(resolved)) return false;
+  let probe = resolved;
+  for (;;) {
+    try {
+      fs.lstatSync(probe);
+      break;
+    } catch (e) {
+      if (e.code !== "ENOENT") return false;
+      const parent = path.dirname(probe);
+      if (parent === probe) return false;
+      probe = parent;
+    }
   }
+  try {
+    return within(fs.realpathSync(probe));
+  } catch {
+    return false;
+  }
+}
+
+// The isolated folders Godot will use must be real directories inside the
+// run root BEFORE the first Godot process (the import) starts.
+function isolationProblem(state) {
+  const env = godotEnv(state);
+  for (const key of ["HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "TMPDIR"]) {
+    try {
+      requireRealDir(env[key], key);
+    } catch (e) {
+      return String(e.message ?? e);
+    }
+    if (!inside(state.root, env[key])) return `${key} is not inside the run root`;
+  }
+  return "";
 }
 
 async function acceptance(ev, args, runnerTemp) {
@@ -488,6 +479,11 @@ async function acceptance(ev, args, runnerTemp) {
   record(unit.rec, basic(unit), { ci_kind: "Nakama server unit (Node), not Godot" });
 
   recheck("before Godot import");
+  // Godot's import must run before the probe (the probe script needs the
+  // class cache the import writes), so isolation is proven here first.
+  const iso = isolationProblem(state);
+  if (iso !== "") throw new Stop(`isolation check before the Godot import: ${iso}`);
+  ev.log("isolation check before the Godot import: HOME / XDG_* / TMPDIR are real directories inside the run root");
   const imp = await runBounded(ev, "godot-import", godot, ["--headless", "--path", GODOT_DIR, "--import"],
     { cwd: REPO, env: godotEnv(state), timeoutMs: TIMEOUT_MS.godotImport });
   const cache = path.join(GODOT_DIR, ".godot", "global_script_class_cache.cfg");
@@ -521,7 +517,7 @@ async function acceptance(ev, args, runnerTemp) {
   // 3. One disposable Compose project for this run.
   if (await respondsNow()) throw new Stop(`something already answers on ${HOST}:${API_PORT}; refusing to share a server`);
   const project = state.compose_project;
-  state.compose_started = true; // recorded BEFORE up, so cleanup also covers a half-started project
+  state.compose_started = true; // recorded BEFORE up, so the inventory also covers a half-started project
   writeState(ev, state);
   const up = await runBounded(ev, "compose-up", "docker", ["compose", "-p", project, "-f", COMPOSE_FILE, "up", "-d", "postgres", "nakama"],
     { cwd: NAKAMA_DIR, timeoutMs: TIMEOUT_MS.composeUp });
@@ -617,13 +613,13 @@ async function main() {
     return 3;
   }
   const ev = new Evidence(evidenceDir, args.runId);
-  if (args.cleanupOnly) {
+  if (args.inventoryOnly) {
     try {
-      const report = await cleanup(ev, args.runId);
-      ev.file("cleanup-only.json", JSON.stringify(report, null, 2) + "\n");
+      const report = await inventory(ev, args.runId);
+      ev.file("leftover-inventory.json", JSON.stringify(report, null, 2) + "\n");
       return 0;
     } catch (e) {
-      ev.log(`cleanup error (data kept): ${e}`);
+      ev.log(`leftover inventory error (nothing deleted): ${e}`);
       return 4;
     }
   }
@@ -641,10 +637,10 @@ async function main() {
   ev.summary.finished_at = new Date().toISOString();
   ev.save();
   try {
-    ev.summary.cleanup = await cleanup(ev, args.runId);
+    ev.summary.leftovers = await inventory(ev, args.runId);
   } catch (e) {
-    ev.summary.cleanup = { error: String(e), kept_reason: "cleanup error: data kept" };
-    ev.log(`cleanup error (data kept): ${e}`);
+    ev.summary.leftovers = { error: String(e), note: "inventory error; nothing deleted" };
+    ev.log(`leftover inventory error (nothing deleted): ${e}`);
   }
   ev.summary.scope_note = "WP01-F Targeted Stress only. Not Full Stress; not a Gate X / FS-08 process-cleanup PASS.";
   ev.save();

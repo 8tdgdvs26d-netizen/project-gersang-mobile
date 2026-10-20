@@ -55,9 +55,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            nakama/package-lock.json
+          cache-dependency-path: nakama/package-lock.json
 
       - name: Download and verify official Godot 4.7.2
         shell: bash
@@ -96,19 +94,21 @@ jobs:
           test -f nakama/scripts/run_wp01f_bounded.mjs
           node nakama/scripts/run_wp01f_bounded.mjs             --run-id "$WP01F_RUN_ID"             --evidence-dir "$WP01F_EVIDENCE_DIR"             --godot "$GODOT"             2>&1 | tee "$WP01F_EVIDENCE_DIR/wp01f-console.log"
 
-      - name: Best-effort bounded cleanup
+      - name: Leftover inventory (nothing is deleted; the runner is discarded)
         if: always()
         shell: bash
         run: |
           set +e
           if [ -f nakama/scripts/run_wp01f_bounded.mjs ]; then
-            node nakama/scripts/run_wp01f_bounded.mjs               --run-id "$WP01F_RUN_ID"               --evidence-dir "$WP01F_EVIDENCE_DIR"               --cleanup-only               2>&1 | tee "$WP01F_EVIDENCE_DIR/cleanup.log"
-            cleanup_status=${PIPESTATUS[0]}
+            node nakama/scripts/run_wp01f_bounded.mjs --run-id "$WP01F_RUN_ID" --evidence-dir "$WP01F_EVIDENCE_DIR" --inventory-only 2>&1 | tee "$WP01F_EVIDENCE_DIR/leftover-inventory.log"
+            inventory_status=${PIPESTATUS[0]}
           else
-            echo "Bounded launcher absent; no WP01-F resources were started by this workflow."               | tee "$WP01F_EVIDENCE_DIR/cleanup.log"
-            cleanup_status=0
+            echo "Bounded launcher absent; no WP01-F resources were started by this workflow." | tee "$WP01F_EVIDENCE_DIR/leftover-inventory.log"
+            inventory_status=0
           fi
-          echo "cleanup_exit=$cleanup_status" | tee -a "$WP01F_EVIDENCE_DIR/cleanup.log"
+          echo "inventory_exit=$inventory_status" | tee -a "$WP01F_EVIDENCE_DIR/leftover-inventory.log"
+          # Evidence only: deletes nothing, so it never changes the job result.
+          # The acceptance step above already failed the job if any test failed.
           exit 0
 
       - name: Upload all WP01-F logs and evidence

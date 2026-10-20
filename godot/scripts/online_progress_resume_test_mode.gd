@@ -47,6 +47,9 @@ var client: OnlineProgressClient
 var trade_adapter: OnlineTradeAdapter
 var combat_adapter: OnlineCombatAdapter
 var _busy := false
+## A sign-in whose answer has not arrived. Not cleared by sign_out(): a new
+## sign-in waits until the old one answered, so the two can never overlap.
+var _signing_in := false
 ## Raised on every sign-out / account change: answers to requests started
 ## before it never reach the view.
 var _view_epoch := 0
@@ -82,13 +85,23 @@ func _ready() -> void:
 
 ## `create` is false when the account must already exist (a read-back run).
 func sign_in(email: String, password: String, create: bool = true) -> Dictionary:
-	if _busy:
+	if _busy or _signing_in:
 		return _busy_result()
 	var previous_user := client.get_user_id()
 	var epoch := _begin_request()
+	_signing_in = true
 	var result := await client.sign_in_email_test(email, password, create)
+	_signing_in = false
 	if not _end_request(epoch):
-		return result
+		# Signed out while this sign-in was in flight: the player chose to be
+		# signed out, so a late success is undone and never shown.
+		if result["status"] == OnlineProgressClient.OK and client.is_signed_in():
+			client.sign_out_local()
+			_new_adapters()
+			_show_signed_out()
+		var late := _stale_result()
+		late["original_status"] = result["status"]
+		return late
 	if result["status"] == OnlineProgressClient.OK:
 		if client.get_user_id() != previous_user:
 			# Another account (or the first one): nothing of the previous view.
