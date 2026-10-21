@@ -121,7 +121,14 @@ func begin_session() -> Dictionary:
 	if _busy:
 		return _busy_result()
 	var epoch := _begin_request()
-	var trade := await trade_adapter.begin()
+	# C5: hold THIS request's adapters for its whole life. sign_out() replaces
+	# the members, and Godot drops a waiting call of a RefCounted that nothing
+	# references any more, so the old request would never finish (see
+	# verify_vs01_wp01c_online_trade_ui.gd). Held here, it completes, and the
+	# _view_epoch checks below still discard its answer.
+	var trade_adapter_for_request := trade_adapter
+	var combat_adapter_for_request := combat_adapter
+	var trade := await trade_adapter_for_request.begin()
 	if epoch != _view_epoch:
 		return _stale_result()
 	if trade["status"] != OnlineProgressClient.OK:
@@ -129,7 +136,7 @@ func begin_session() -> Dictionary:
 		_status = BEGIN_FAILED_TEXT % trade["reason"]
 		_render()
 		return {"status": trade["status"], "trade": trade, "hero": {}}
-	var hero := await combat_adapter.refresh()
+	var hero := await combat_adapter_for_request.refresh()
 	if not _end_request(epoch):
 		return _stale_result()
 	_status = _status_for(trade, hero)
@@ -146,12 +153,15 @@ func refresh_all() -> Dictionary:
 	if _busy:
 		return _busy_result()
 	var epoch := _begin_request()
-	var trade := await trade_adapter.refresh()
+	# C5: hold this request's adapters for its whole life (see begin_session).
+	var trade_adapter_for_request := trade_adapter
+	var combat_adapter_for_request := combat_adapter
+	var trade := await trade_adapter_for_request.refresh()
 	if epoch != _view_epoch:
 		return _stale_result()
 	var hero := {}
 	if trade.get("reason", "") != OnlineProgressClient.SUPERSEDED_REASON:
-		hero = await combat_adapter.refresh()
+		hero = await combat_adapter_for_request.refresh()
 	if not _end_request(epoch):
 		return _stale_result()
 	_status = _status_for(trade, hero)

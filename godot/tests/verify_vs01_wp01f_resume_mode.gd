@@ -18,6 +18,10 @@ const UNCERTAIN := OnlineProgressClient.UNCERTAIN
 const REJECTED := OnlineProgressClient.REJECTED
 const REP := OnlineTradeAdapter.REPRESENTATIVE_GOOD_ID
 const Mode := preload("res://scripts/online_progress_resume_test_mode.gd")
+## C5: upper bound for every wait in this test, in frames (no clock). Each
+## wait is for in-process work that finishes within a few frames; a wait that
+## reaches the bound is reported as an explicit FAILED line, never a PASS.
+const WAIT_FRAMES := 600
 
 var _checks := 0
 var _failures := 0
@@ -30,6 +34,8 @@ class GatedClient extends OnlineProgressClient:
 	## When true, the next sign-in waits until release_sign_in().
 	var hold_sign_in := false
 	var _sign_in_released := false
+	## C5: how many holds gave up at WAIT_FRAMES (each scenario checks it is 0).
+	var hold_timeouts := 0
 
 	func release_sign_in() -> void:
 		_sign_in_released = true
@@ -40,8 +46,13 @@ class GatedClient extends OnlineProgressClient:
 	func sign_in_email_test(email: String, _password: String, _create: bool = true) -> Dictionary:
 		if hold_sign_in:
 			hold_sign_in = false
-			while not _sign_in_released:
+			var frames := 0
+			while not _sign_in_released and frames < WAIT_FRAMES:
 				await Engine.get_main_loop().process_frame
+				frames += 1
+			if not _sign_in_released:
+				hold_timeouts += 1
+				return {"status": UNCERTAIN, "reason": "gated_sign_in_hold_timed_out"}
 			_sign_in_released = false
 		var header := Marshalls.utf8_to_base64(JSON.stringify({"alg": "none"})).trim_suffix("=").trim_suffix("=")
 		var body := Marshalls.utf8_to_base64(JSON.stringify({"uid": "ui-" + email, "usn": email, "exp": 4102444800})).trim_suffix("=").trim_suffix("=")
@@ -63,8 +74,13 @@ class GatedClient extends OnlineProgressClient:
 			return {"status": UNCERTAIN, "reason": "no scripted answer"}
 		var a: Dictionary = answers.pop_front()
 		if a.has("__hold"):
-			while held.is_empty():
+			var frames := 0
+			while held.is_empty() and frames < WAIT_FRAMES:
 				await Engine.get_main_loop().process_frame
+				frames += 1
+			if held.is_empty():
+				hold_timeouts += 1
+				return {"status": UNCERTAIN, "reason": "gated_rpc_hold_timed_out"}
 			return held.pop_front()
 		return a
 
@@ -163,12 +179,13 @@ func _verify_late_answer_after_sign_out() -> void:
 	mode.sign_out()
 	_check(not mode.is_busy() and mode.get_trade_text() == Mode.TRADE_UNKNOWN_TEXT and mode.get_hero_text() == Mode.HERO_UNKNOWN_TEXT, "Sign-out clears the screen even while a read is in flight")
 	c.release_held(_progress_answer(999999, 99, 50))
-	while out.is_empty():
-		await process_frame
+	_check(await _wait_for(out, "R3 the late refresh_all() answer"), "R3 the late answer arrived within %d frames" % WAIT_FRAMES)
 	await process_frame
-	_check(out[0].get("stale", false), "The late answer is reported as stale")
+	var late: Dictionary = out[0] if not out.is_empty() else {}
+	_check(late.get("stale", false), "The late answer is reported as stale")
 	_check(mode.get_trade_text() == Mode.TRADE_UNKNOWN_TEXT and mode.get_snapshot().keys() == ["user_id"], "The late answer did not reach the screen or the snapshot")
 	_check(mode.get_account_text() == Mode.SIGNED_OUT_TEXT, "Still signed out")
+	_check(c.hold_timeouts == 0, "R3 the held answer was released by the test, not given up at %d frames" % WAIT_FRAMES)
 	await _free(mode)
 
 
@@ -262,13 +279,14 @@ func _verify_sign_out_during_sign_in() -> void:
 	mode.sign_out()
 	_check((await mode.sign_in("r8-other@myrial.test", "x", false))["reason"] == "busy", "A second sign-in waits for the first one's answer (no overlap)")
 	c.release_sign_in()
-	while out.is_empty():
-		await process_frame
+	_check(await _wait_for(out, "R8 the late sign_in() answer"), "R8 the late sign-in answer arrived within %d frames" % WAIT_FRAMES)
 	await process_frame
-	_check(out[0].get("stale", false) and out[0].get("original_status") == OK, "The late sign-in answer is reported as stale")
+	var late: Dictionary = out[0] if not out.is_empty() else {}
+	_check(late.get("stale", false) and late.get("original_status") == OK, "The late sign-in answer is reported as stale")
 	_check(not c.is_signed_in() and mode.get_account_text() == Mode.SIGNED_OUT_TEXT, "The late success is undone: still signed out")
 	_check(c.sent.is_empty() and mode.get_trade_text() == Mode.TRADE_UNKNOWN_TEXT, "Nothing was read or shown for the late sign-in")
 	_check((await mode.sign_in("r8@myrial.test", "x", false))["status"] == OK, "A new sign-in works afterwards")
+	_check(c.hold_timeouts == 0, "R8 the held sign-in was released by the test, not given up at %d frames" % WAIT_FRAMES)
 	await _free(mode)
 
 
@@ -285,6 +303,20 @@ func _new_mode(client: GatedClient) -> OnlineProgressResumeTestMode:
 func _free(mode: Node) -> void:
 	mode.queue_free()
 	await process_frame
+
+
+## C5: waits until `out` holds a result, at most WAIT_FRAMES frames. False
+## (with the reason printed) if it never came; the caller turns that into a
+## FAILED check and reads `out` only when it is not empty.
+func _wait_for(out: Array, what: String) -> bool:
+	var frames := 0
+	while out.is_empty() and frames < WAIT_FRAMES:
+		await process_frame
+		frames += 1
+	if out.is_empty():
+		print("   wait gave up after %d frames: %s never completed" % [WAIT_FRAMES, what])
+		return false
+	return true
 
 
 func _start_sign_in(mode: OnlineProgressResumeTestMode, email: String, out: Array) -> void:
