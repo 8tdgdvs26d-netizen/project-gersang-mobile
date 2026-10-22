@@ -1,8 +1,7 @@
 name: WP01-F cloud acceptance (dedicated branch, review-gated)
 
-# WP01-F only. The review branch does not match this trigger. After Charlie
-# and GPT approve the workflow and implementation, creating/updating the exact
-# execution branch below is the explicit first-run action. No main trigger.
+# WP01-F only. The review branch does not match this trigger. Updating the
+# execution branch remains a separate Charlie Approval 2 action.
 on:
   push:
     branches:
@@ -20,39 +19,12 @@ jobs:
       GODOT_ARCHIVE: "Godot_v4.7.2-stable_linux.x86_64.zip"
       GODOT_SHA256: "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4"
       WP01F_RUN_ID: "wp01f_${{ github.run_id }}_${{ github.run_attempt }}"
-      # WP01F_EVIDENCE_DIR is set by the first run step from $RUNNER_TEMP:
-      # jobs.<job_id>.env does not allow the runner context.
 
     steps:
       - name: Checkout triggering WP01-F execution branch read-only
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-
-      - name: Create bounded evidence directory
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          test -n "${RUNNER_TEMP:-}"
-          WP01F_EVIDENCE_DIR="$RUNNER_TEMP/wp01f-evidence"
-          echo "WP01F_EVIDENCE_DIR=$WP01F_EVIDENCE_DIR" >> "$GITHUB_ENV"
-          mkdir -p "$WP01F_EVIDENCE_DIR"
-          {
-            echo "source_sha=$(git rev-parse HEAD)"
-            echo "source_ref=$GITHUB_REF"
-            echo "run_id=$WP01F_RUN_ID"
-            echo "runner_os=$RUNNER_OS"
-            uname -a
-          } | tee "$WP01F_EVIDENCE_DIR/environment.txt"
-
-      - name: Verify Docker and Docker Compose availability
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          {
-            docker version
-            docker compose version
-          } 2>&1 | tee "$WP01F_EVIDENCE_DIR/docker-version.log"
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
@@ -61,6 +33,45 @@ jobs:
           cache: npm
           cache-dependency-path: nakama/package-lock.json
 
+      - name: Create bounded evidence directory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${RUNNER_TEMP:-}"
+          evidence_dir="$RUNNER_TEMP/wp01f-evidence"
+          test ! -e "$evidence_dir" && test ! -L "$evidence_dir"
+          mkdir -m 700 "$evidence_dir"
+          test ! -L "$evidence_dir" && test -d "$evidence_dir"
+          test "$(realpath "$evidence_dir")" = "$(realpath "$RUNNER_TEMP")/wp01f-evidence"
+          test "$(stat -c '%u' "$evidence_dir")" = "$(id -u)"
+          evidence_id="$(stat -c '%d:%i' "$evidence_dir")"
+          {
+            echo "source_sha=$(git rev-parse HEAD)"
+            echo "source_ref=$GITHUB_REF"
+            echo "run_id=$WP01F_RUN_ID"
+            echo "runner_os=$RUNNER_OS"
+            uname -a
+          } | node nakama/scripts/run_wp01f_bounded.mjs \
+            --run-id "$WP01F_RUN_ID" \
+            --evidence-dir "$evidence_dir" \
+            --evidence-id "$evidence_id" \
+            --write-evidence environment.txt
+          echo "WP01F_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
+          echo "WP01F_EVIDENCE_ID=$evidence_id" >> "$GITHUB_ENV"
+
+      - name: Verify Docker and Docker Compose availability
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          {
+            docker version
+            docker compose version
+          } 2>&1 | node nakama/scripts/run_wp01f_bounded.mjs \
+            --run-id "$WP01F_RUN_ID" \
+            --evidence-dir "$WP01F_EVIDENCE_DIR" \
+            --evidence-id "$WP01F_EVIDENCE_ID" \
+            --write-evidence docker-version.log
+
       - name: Download and verify official Godot 4.7.2
         shell: bash
         run: |
@@ -68,60 +79,133 @@ jobs:
           archive_path="$RUNNER_TEMP/$GODOT_ARCHIVE"
           sums_path="$RUNNER_TEMP/SHA512-SUMS.txt"
           verify_path="$RUNNER_TEMP/godot.sha512"
-
-          curl --fail --location --retry 3 --output "$archive_path"             "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/$GODOT_ARCHIVE"
-          curl --fail --location --retry 3 --output "$sums_path"             "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/SHA512-SUMS.txt"
-
+          curl --fail --location --retry 3 --output "$archive_path" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/$GODOT_ARCHIVE"
+          curl --fail --location --retry 3 --output "$sums_path" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/SHA512-SUMS.txt"
           echo "$GODOT_SHA256  $archive_path" | sha256sum --check -
           grep -F " $GODOT_ARCHIVE" "$sums_path" > "$verify_path"
           test "$(wc -l < "$verify_path")" -eq 1
-          (
-            cd "$RUNNER_TEMP"
-            sha512sum --check "$(basename "$verify_path")"
-          )
-
+          (cd "$RUNNER_TEMP" && sha512sum --check "$(basename "$verify_path")")
           unzip -q "$archive_path" -d "$RUNNER_TEMP/godot"
           godot_bin="$(find "$RUNNER_TEMP/godot" -maxdepth 2 -type f -name 'Godot*' -perm -u+x -print -quit)"
           test -n "$godot_bin"
           version="$("$godot_bin" --version)"
-          printf '%s\n' "$version" | tee "$WP01F_EVIDENCE_DIR/godot-version.txt"
+          printf '%s\n' "$version" | node nakama/scripts/run_wp01f_bounded.mjs \
+            --run-id "$WP01F_RUN_ID" \
+            --evidence-dir "$WP01F_EVIDENCE_DIR" \
+            --evidence-id "$WP01F_EVIDENCE_ID" \
+            --write-evidence godot-version.txt
           case "$version" in
             4.7.2*) ;;
             *) echo "Unexpected Godot version: $version" >&2; exit 1 ;;
           esac
           echo "GODOT=$godot_bin" >> "$GITHUB_ENV"
 
-      - name: Run WP01-F bounded acceptance
+      - name: Run WP01-F bounded core acceptance
+        id: acceptance
         shell: bash
         run: |
           set -Eeuo pipefail
           test -f nakama/scripts/run_wp01f_bounded.mjs
-          node nakama/scripts/run_wp01f_bounded.mjs             --run-id "$WP01F_RUN_ID"             --evidence-dir "$WP01F_EVIDENCE_DIR"             --godot "$GODOT"             2>&1 | tee "$WP01F_EVIDENCE_DIR/wp01f-console.log"
+          node nakama/scripts/run_wp01f_bounded.mjs \
+            --run-id "$WP01F_RUN_ID" \
+            --evidence-dir "$WP01F_EVIDENCE_DIR" \
+            --evidence-id "$WP01F_EVIDENCE_ID" \
+            --godot "$GODOT" \
+            --scope core \
+            2>&1 | node nakama/scripts/run_wp01f_bounded.mjs \
+              --run-id "$WP01F_RUN_ID" \
+              --evidence-dir "$WP01F_EVIDENCE_DIR" \
+              --evidence-id "$WP01F_EVIDENCE_ID" \
+              --write-evidence wp01f-console.log
 
-      - name: Leftover inventory (nothing is deleted; the runner is discarded)
-        # Never with an empty evidence path (it would point at "/").
+      - name: Leftover inventory (nothing is deleted)
+        id: inventory
+        if: always() && env.WP01F_EVIDENCE_DIR != ''
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ ! -f nakama/scripts/run_wp01f_bounded.mjs ]; then
+            echo "Bounded launcher absent; inventory cannot be completed." >&2
+            exit 1
+          fi
+          node nakama/scripts/run_wp01f_bounded.mjs \
+            --run-id "$WP01F_RUN_ID" \
+            --evidence-dir "$WP01F_EVIDENCE_DIR" \
+            --evidence-id "$WP01F_EVIDENCE_ID" \
+            --inventory-only \
+            2>&1 | node nakama/scripts/run_wp01f_bounded.mjs \
+              --run-id "$WP01F_RUN_ID" \
+              --evidence-dir "$WP01F_EVIDENCE_DIR" \
+              --evidence-id "$WP01F_EVIDENCE_ID" \
+              --write-evidence leftover-inventory.log
+
+      - name: Finalize evidence and manifest
+        id: finalize
+        if: always() && env.WP01F_EVIDENCE_DIR != ''
+        shell: bash
+        env:
+          WP01F_ACCEPTANCE_OUTCOME: ${{ steps.acceptance.outcome }}
+          WP01F_INVENTORY_OUTCOME: ${{ steps.inventory.outcome }}
+        run: |
+          set -Eeuo pipefail
+          node nakama/scripts/run_wp01f_bounded.mjs \
+            --run-id "$WP01F_RUN_ID" \
+            --evidence-dir "$WP01F_EVIDENCE_DIR" \
+            --evidence-id "$WP01F_EVIDENCE_ID" \
+            --finalize --scope core
+
+      - name: Verify final manifest
+        id: verify
         if: always() && env.WP01F_EVIDENCE_DIR != ''
         shell: bash
         run: |
           set +e
-          if [ -f nakama/scripts/run_wp01f_bounded.mjs ]; then
-            node nakama/scripts/run_wp01f_bounded.mjs --run-id "$WP01F_RUN_ID" --evidence-dir "$WP01F_EVIDENCE_DIR" --inventory-only 2>&1 | tee "$WP01F_EVIDENCE_DIR/leftover-inventory.log"
-            inventory_status=${PIPESTATUS[0]}
+          node nakama/scripts/run_wp01f_bounded.mjs \
+            --run-id "$WP01F_RUN_ID" \
+            --evidence-dir "$WP01F_EVIDENCE_DIR" \
+            --evidence-id "$WP01F_EVIDENCE_ID" \
+            --verify-manifest
+          verify_status=$?
+          echo "verify_exit=$verify_status" >> "$GITHUB_OUTPUT"
+          if [ "$verify_status" -eq 0 ]; then
+            echo "upload_safe=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Bounded launcher absent; no WP01-F resources were started by this workflow." | tee "$WP01F_EVIDENCE_DIR/leftover-inventory.log"
-            inventory_status=0
+            echo "upload_safe=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "inventory_exit=$inventory_status" | tee -a "$WP01F_EVIDENCE_DIR/leftover-inventory.log"
-          # Evidence only: deletes nothing, so it never changes the job result.
-          # The acceptance step above already failed the job if any test failed.
-          exit 0
+          exit "$verify_status"
 
-      - name: Upload all WP01-F logs and evidence
-        # Never with an empty evidence path (it would upload "/").
-        if: always() && env.WP01F_EVIDENCE_DIR != ''
+      - name: Upload verified WP01-F evidence
+        id: upload
+        if: always() && env.WP01F_EVIDENCE_DIR != '' && steps.verify.outputs.upload_safe == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: wp01f-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.WP01F_EVIDENCE_DIR }}/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Final job gate
+        if: always()
+        shell: bash
+        env:
+          ACCEPTANCE_OUTCOME: ${{ steps.acceptance.outcome }}
+          INVENTORY_OUTCOME: ${{ steps.inventory.outcome }}
+          FINALIZE_OUTCOME: ${{ steps.finalize.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          VERIFY_EXIT: ${{ steps.verify.outputs.verify_exit }}
+          UPLOAD_SAFE: ${{ steps.verify.outputs.upload_safe }}
+        run: |
+          set -Eeuo pipefail
+          printf 'acceptance=%s\ninventory=%s\nfinalize=%s\nverify=%s\nupload=%s\nverify_exit=%s\nupload_safe=%s\n' \
+            "$ACCEPTANCE_OUTCOME" "$INVENTORY_OUTCOME" "$FINALIZE_OUTCOME" \
+            "$VERIFY_OUTCOME" "$UPLOAD_OUTCOME" "$VERIFY_EXIT" "$UPLOAD_SAFE"
+          test "$ACCEPTANCE_OUTCOME" = success
+          test "$INVENTORY_OUTCOME" = success
+          test "$FINALIZE_OUTCOME" = success
+          test "$VERIFY_OUTCOME" = success
+          test "$UPLOAD_OUTCOME" = success
+          test "$VERIFY_EXIT" = 0
+          test "$UPLOAD_SAFE" = true

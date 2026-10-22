@@ -1,7 +1,7 @@
 # VS-01 WP01-F — Online Progress Resume Mini Slice: Implementation and Evidence Record
 
 - **Repository / branch:** `8tdgdvs26d-netizen/project-gersang-mobile`, branch `wp01-f-cloud-workflow-review`.
-- **Base `main`:** `39a2a1fcd330d9c9a7b89f0d564627bbea5e54f0` (verified 2026-10-20). The branch adds the approved workflow (`5229e35`), this WP's six new files (`6a11724`) and the corrective patch below. **No file that exists on `main` is changed.**
+- **Base `main`:** `39a2a1fcd330d9c9a7b89f0d564627bbea5e54f0` (reverified 2026-10-22). The branch adds the approved workflow (`5229e35`), this WP's six new files (`6a11724`) and the corrective history below. Commit `4262ac3` also changed one file already on `main`, `godot/tests/verify_vs01_wp01_online_contract.gd`, by adding one allowlist line; the earlier “no existing main file changed” statement was incorrect.
 - **Authorization:** Charlie, 2026-10-20 HKT: WP01-F v0.1 Blueprint and its minimal engineering scope (three clarifications; Stress Level **TARGETED**; Gate X / FS-08 not part of this WP); disposable GitHub-hosted runner only, never the Mac `myrialtest` account; workflow approved after GPT and Claude review.
 - **Not authorized here:** first run (creating / updating `wp01-f-cloud-execution`), PR, Merge, deployment.
 - **Player value:** after closing and opening the app again, the same account gets its money, goods and Hero Level / EXP back from the server, so progress lives on the server and not on the phone.
@@ -11,11 +11,12 @@
 | Status | Value |
 |---|---|
 | Designed | Blueprint v0.1 approved (Charlie) |
-| Implemented | yes, on the review branch (this record) |
-| Automated Tests Passed | **PENDING**: no test has run (first run not authorized) |
-| CI Passed | **PENDING** |
+| Implemented | WP01-F original Core feature at `e2bb532`; v0.2 Core-only launcher/workflow amendment implemented locally, pending GPT Diff Review |
+| Automated Tests Passed | Historical third run contains Core PASS evidence; new v0.2 Core acceptance **NOT RUN** |
+| CI Passed | Runs `39462337861`, `39546294113`, `39570895448` are permanently **FAIL**; no v0.2 PASS claim |
 | GPT Accepted | **PENDING** (pre-execution review) |
-| Mac / iPhone / iPad Accepted, Playtested, Player Value Verified | **PENDING**, not part of this run |
+| Mac Accepted | **DEFERRED** to before VS-01 System Gate (Charlie approved); not PASS |
+| iPhone / iPad Accepted, Playtested, Player Value Verified | **PENDING**, not part of this run |
 | VS-01 System Gate | OPEN |
 
 ## Files (whitelist: exactly the six approved new files)
@@ -29,7 +30,7 @@
 | `nakama/scripts/run_wp01f_bounded.mjs` | bounded launcher called by `.github/workflows/wp01f-cloud.yml` |
 | `nakama/docs/VS01_WP01F_Online_Progress_Resume.md` | this record |
 
-No new RPC, schema, collection, workflow, Save change or migration. `main.gd`, the normal UI and every existing file are untouched.
+No new RPC, schema, collection, Save change or migration. The branch adds the separately approved WP01-F workflow and contains the one existing test-allowlist change at `4262ac3` disclosed above; `main.gd` and the normal UI are untouched.
 
 ## The two revisions (clarification 1)
 
@@ -44,7 +45,9 @@ The screen shows each value with its own revision and never merges them.
 
 The launcher runs `seed`, then `readback`, as **separate Godot processes**, one after the other. A phase starts only after the previous process ended and its process group was checked for survivors. Each phase prints a random nonce and its process id; the launcher (not Godot) compares results across processes. The read-back process starts with an empty memory cache, signs in **without creating** the account (`create = false`) and gets every value from Nakama. Credentials come from the environment, never from `user://`, v14 or any local Save.
 
-## Test plan (no test has run yet)
+## v0.2 test plan
+
+Every non-inventory acceptance invocation must state `--scope core` or `--scope full`; missing, empty, duplicate, or unknown scope fails before any test or write. The approved workflow states `--scope core`. `summary.json` records the scope, complete planned stages and transferred cases before `git-head`.
 
 **Order (STOP at the first failure; later steps are NOT RUN):**
 
@@ -55,7 +58,7 @@ The launcher runs `seed`, then `readback`, as **separate Godot processes**, one 
    - Godot `--import`, then a user-data-folder probe: Godot's own `OS.get_user_data_dir()` and `ProjectSettings.globalize_path("user://")` must be inside the run root, and Godot must be 4.7.2.
    - Every `godot/tests/verify_*.gd` (71 existing + 1 new) as **its own Godot process with its own timeout**, using the `run_tests.sh` pass rules (exit 0, own success line, no parse / script error, no `FAILED:`).
 3. One Docker Compose project named after the run (`-p wp01f_<run id>`, its own PostgreSQL volume), only `postgres` + `nakama`.
-4. Live phases:
+4. Live Core phases:
 
 | Step | Process | Checks |
 |---|---|---|
@@ -63,7 +66,6 @@ The launcher runs `seed`, then `readback`, as **separate Godot processes**, one 
 | readback | Godot #2 (fresh) | empty memory before sign-in; same account; both contracts confirmed; then sign-out + sign-in again in the same process |
 | restart | docker | `compose restart nakama`, wait healthy |
 | readback | Godot #3 (fresh) | same checks after the server restart |
-| stress | Godot #4 | second disposable account; targeted cases below |
 
 5. Cross-process comparison by the launcher:
 
@@ -78,9 +80,11 @@ The launcher runs `seed`, then `readback`, as **separate Godot processes**, one 
 | C07 | re-login in the same process: values equal, Trade revision + 1 |
 | C08 | after the Nakama restart: values and Hero revision equal, Trade revision + 1 |
 
-6. `git status --porcelain` must be empty after the run (no tracked change, no new unignored file).
+6. C01-C08 run immediately after restart readback and before any stress phase. Any comparison failure stops the run.
+7. In `core`, T1-T4 are each recorded `NOT RUN / TRANSFERRED TO WP01-G`; the stress phase and second account are not started. In `full`, the targeted stress phase remains available for later separately approved WP01-G use.
+8. Acceptance audit runs after PASS or ordinary FAIL: `git status --porcelain` must be empty and every process group created by this run must report no survivor. Audit sends no signal and deletes nothing.
 
-**Targeted Stress (Stress Level TARGETED; not Full Stress):**
+**Transferred targeted stress (T1-T4; not run by v0.2 Core):**
 
 | Case | How | Expected |
 |---|---|---|
@@ -114,13 +118,19 @@ The fake-client unit test additionally covers: nothing confirmed before the serv
 - The existing WP01-B / C / E live harnesses are not re-run: they assume the fixed Compose project name.
 - The existing Online Combat / Trade TEST modes have the same sign-in-in-flight race fixed here in the Resume mode (R8); not changed (out of scope).
 
-## Evidence (written to the run's artifact)
+## Evidence and final gate
 
-`summary.json` (every step: command, exit, signal, timeout, survivors, duration, verdict; comparisons C01–C08; parsed results; leftover inventory), `launcher.log`, one log per step, `run-state.json`, `leftover-inventory.json`, plus the workflow's `environment.txt`, `docker-version.log`, `godot-version.txt`, `wp01f-console.log` and `leftover-inventory.log`.
+Every evidence leaf is created by its owning process with `O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW`, mode `0600`, then checked with `fstat`. Append or replacement continues only through that same open file descriptor; before every write, the evidence directory and leaf device/inode are rechecked. No evidence path is reopened for writing, and the workflow does not use `tee` to write evidence.
+
+The workflow writes `environment.txt`, `docker-version.log`, `godot-version.txt`, `wp01f-console.log` and `leftover-inventory.log` through the safe writer. If argument validation, runner guard, initial directory validation, exclusive open, post-open `fstat`, or a later write check fails, evidence-file writing stops but stdin is still drained and forwarded to the job log before exit 2, 3, or 7. This preserves upstream output without allowing the job to pass.
+
+Acceptance owns `launcher.log`, `summary.json`, `run-state.json` and numbered step logs. Inventory always runs when the evidence environment exists, owns `inventory-launcher.log`, numbered inventory logs and `leftover-inventory.json`, and returns its real result rather than swallowing failure.
+
+Finalize reads the acceptance and inventory outcomes, classifies every hidden or non-regular entry as an anomaly without following or reading it, writes those details into `final-audit.json`, and creates `manifest.json` last. The manifest includes every other safely readable ordinary evidence file, including both console logs and `final-audit.json`, with byte size and SHA-256, plus the anomaly names and reasons. Verify is read-only and independently checks directory identity, the exact file set, sizes, hashes and an empty anomaly list. Any anomaly makes Finalize and Verify fail and prevents upload. Only verify exit 0 sets `upload_safe=true`; an ordinary acceptance FAIL with safe, complete evidence can therefore upload failure evidence, while an evidence safety/audit failure cannot upload. The final gate prints and preserves the original acceptance, inventory, finalize, verify and upload outcomes and fails if any required result is not successful.
 
 ## Rollback
 
-Before Merge: delete the six new files (or the branch). No schema, migration or data rollback exists or is needed. Test data lives only in the disposable runner's Compose volume and run root.
+Before any approved commit or push, discard this three-file local amendment to return the detached workspace exactly to `e2bb532`. After an approved push but before Merge, rollback requires a Charlie-authorized revert commit on the review branch, preserving fast-forward history; do not force-push. Abandoning the whole unmerged branch also removes its separately added workflow, six WP files and the existing test-allowlist change. Deleting only the six WP files is not a complete rollback. No schema, migration or data rollback exists or is needed. Test data lives only in the disposable runner's Compose volume and run root.
 
 ## Corrective patch (GPT pre-execution review, 2026-10-20)
 
@@ -131,3 +141,12 @@ Before Merge: delete the six new files (or the branch). No schema, migration or 
 | H04 `inside()` fail-open; import before probe | **C2:** containment fails closed (nearest existing ancestor); isolation proven before the import; the order import -> probe is required and documented. |
 | H05 workflow root lockfile | **C3:** `cache-dependency-path: nakama/package-lock.json` only; the always-run step renamed to the inventory step (`--inventory-only`). Workflow needs a renewed static review. |
 | M06 stale / late coverage | **C4:** Resume mode undoes a late sign-in success after a sign-out and blocks overlapping sign-ins; unit case R8. T3 / T4 claims narrowed (above). |
+
+## Corrective history and v0.2 Core-only amendment
+
+| Commit / state | Record |
+|---|---|
+| `149845f` | Earlier corrective implementation retained for traceability. |
+| `4262ac3` | Added one WP01-F allowlist line to the existing online contract verification file; corrects the former “no existing main file changed” claim. |
+| `e2bb532` | Current review/execution baseline before this v0.2 amendment; retains in-flight resume adapters and bounded waits. |
+| v0.2 Core-only | Explicit scope, C01-C08 before stress, T1-T4 transferred, `PASS_CORE_SCOPE`, safe writer, final audit/manifest/verify, and final job gate. Approval 2 Cloud Run remains separate and is not authorized by this document. |
