@@ -1,0 +1,171 @@
+name: WP01-G Phase B diagnostic (dedicated branch, review-gated)
+
+# WP01-G Phase B DIAGNOSTIC only (Proposal r2.1); not acceptance. Only a push
+# to the exact branch wp01-g-diag-execution triggers it: the review branch,
+# main and every other branch do not. Updating that branch is a separate
+# Charlie Approval 2 action for one exact commit SHA.
+#
+# No step pipes or tees child output into the job log: the runner redacts
+# every child output line (rules S1-S5) before writing it to evidence or to
+# its own console. No repository or Actions secrets are used; the per-run D5
+# account passwords exist only inside the runner process, which creates them
+# after all earlier workflow steps have finished.
+on:
+  push:
+    branches:
+      - wp01-g-diag-execution
+
+permissions:
+  contents: read
+
+jobs:
+  wp01g-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GODOT_VERSION: "4.7.2"
+      GODOT_ARCHIVE: "Godot_v4.7.2-stable_linux.x86_64.zip"
+      GODOT_SHA256: "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4"
+      WP01G_RUN_ID: "wp01g_${{ github.run_id }}_${{ github.run_attempt }}"
+
+    steps:
+      - name: Checkout triggering WP01-G execution branch read-only
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: nakama/package-lock.json
+
+      - name: Create evidence directory (identity recorded)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${RUNNER_TEMP:-}"
+          evidence_dir="$RUNNER_TEMP/wp01g-evidence"
+          test ! -e "$evidence_dir" && test ! -L "$evidence_dir"
+          mkdir -m 700 "$evidence_dir"
+          test ! -L "$evidence_dir" && test -d "$evidence_dir"
+          test "$(realpath "$evidence_dir")" = "$(realpath "$RUNNER_TEMP")/wp01g-evidence"
+          test "$(stat -c '%u' "$evidence_dir")" = "$(id -u)"
+          evidence_id="$(stat -c '%d:%i' "$evidence_dir")"
+          echo "WP01G_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
+          echo "WP01G_EVIDENCE_ID=$evidence_id" >> "$GITHUB_ENV"
+
+      - name: Download and verify official Godot 4.7.2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          archive_path="$RUNNER_TEMP/$GODOT_ARCHIVE"
+          sums_path="$RUNNER_TEMP/SHA512-SUMS.txt"
+          verify_path="$RUNNER_TEMP/godot.sha512"
+          curl --fail --location --retry 3 --output "$archive_path" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/$GODOT_ARCHIVE"
+          curl --fail --location --retry 3 --output "$sums_path" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/SHA512-SUMS.txt"
+          echo "$GODOT_SHA256  $archive_path" | sha256sum --check -
+          grep -F " $GODOT_ARCHIVE" "$sums_path" > "$verify_path"
+          test "$(wc -l < "$verify_path")" -eq 1
+          (cd "$RUNNER_TEMP" && sha512sum --check "$(basename "$verify_path")")
+          unzip -q "$archive_path" -d "$RUNNER_TEMP/godot"
+          godot_bin="$(find "$RUNNER_TEMP/godot" -maxdepth 2 -type f -name 'Godot*' -perm -u+x -print -quit)"
+          test -n "$godot_bin"
+          echo "GODOT=$godot_bin" >> "$GITHUB_ENV"
+
+      - name: Run WP01-G Phase B diagnostic (D1-D5)
+        id: diag
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -f nakama/scripts/run_wp01g_diag.mjs
+          node nakama/scripts/run_wp01g_diag.mjs --diag \
+            --run-id "$WP01G_RUN_ID" \
+            --evidence-dir "$WP01G_EVIDENCE_DIR" \
+            --evidence-id "$WP01G_EVIDENCE_ID" \
+            --godot "$GODOT"
+
+      - name: Leftover inventory (nothing is deleted)
+        id: inventory
+        if: always() && env.WP01G_EVIDENCE_DIR != ''
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [ ! -f nakama/scripts/run_wp01g_diag.mjs ]; then
+            echo "Diagnostic runner absent; inventory cannot be completed." >&2
+            exit 1
+          fi
+          node nakama/scripts/run_wp01g_diag.mjs --inventory-only \
+            --run-id "$WP01G_RUN_ID" \
+            --evidence-dir "$WP01G_EVIDENCE_DIR" \
+            --evidence-id "$WP01G_EVIDENCE_ID"
+
+      - name: Finalize evidence (final secret re-scan and manifest)
+        id: finalize
+        if: always() && env.WP01G_EVIDENCE_DIR != ''
+        shell: bash
+        env:
+          WP01G_DIAG_OUTCOME: ${{ steps.diag.outcome }}
+          WP01G_INVENTORY_OUTCOME: ${{ steps.inventory.outcome }}
+        run: |
+          set -Eeuo pipefail
+          node nakama/scripts/run_wp01g_diag.mjs --finalize \
+            --run-id "$WP01G_RUN_ID" \
+            --evidence-dir "$WP01G_EVIDENCE_DIR" \
+            --evidence-id "$WP01G_EVIDENCE_ID"
+
+      - name: Verify manifest and upload safety
+        id: verify
+        if: always() && env.WP01G_EVIDENCE_DIR != ''
+        shell: bash
+        run: |
+          set +e
+          node nakama/scripts/run_wp01g_diag.mjs --verify-manifest \
+            --run-id "$WP01G_RUN_ID" \
+            --evidence-dir "$WP01G_EVIDENCE_DIR" \
+            --evidence-id "$WP01G_EVIDENCE_ID"
+          verify_status=$?
+          echo "verify_exit=$verify_status" >> "$GITHUB_OUTPUT"
+          if [ "$verify_status" -eq 0 ]; then
+            echo "upload_safe=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upload_safe=false" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$verify_status"
+
+      - name: Upload verified WP01-G diagnostic evidence
+        id: upload
+        if: always() && env.WP01G_EVIDENCE_DIR != '' && steps.verify.outputs.upload_safe == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp01g-diag-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.WP01G_EVIDENCE_DIR }}/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Final job gate
+        if: always()
+        shell: bash
+        env:
+          DIAG_OUTCOME: ${{ steps.diag.outcome }}
+          INVENTORY_OUTCOME: ${{ steps.inventory.outcome }}
+          FINALIZE_OUTCOME: ${{ steps.finalize.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          VERIFY_EXIT: ${{ steps.verify.outputs.verify_exit }}
+          UPLOAD_SAFE: ${{ steps.verify.outputs.upload_safe }}
+        run: |
+          set -Eeuo pipefail
+          printf 'diag=%s\ninventory=%s\nfinalize=%s\nverify=%s\nupload=%s\nverify_exit=%s\nupload_safe=%s\n' \
+            "$DIAG_OUTCOME" "$INVENTORY_OUTCOME" "$FINALIZE_OUTCOME" \
+            "$VERIFY_OUTCOME" "$UPLOAD_OUTCOME" "$VERIFY_EXIT" "$UPLOAD_SAFE"
+          test "$DIAG_OUTCOME" = success
+          test "$INVENTORY_OUTCOME" = success
+          test "$FINALIZE_OUTCOME" = success
+          test "$VERIFY_OUTCOME" = success
+          test "$UPLOAD_OUTCOME" = success
+          test "$VERIFY_EXIT" = 0
+          test "$UPLOAD_SAFE" = true
