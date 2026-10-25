@@ -92,7 +92,7 @@ The delivery package records raw commands, output, and exit codes separately.
 - Blueprint/source/blob/diff consistency: STATIC VERIFIED.
 - Exact three-file repository allowlist: STATIC VERIFIED.
 - Godot binary: official `4.7.2.stable.official.ed1daf0bf`.
-- Relevant Test final run: LOCAL TEST PASS, 57 checks, exit 0.
+- Relevant Test final run: LOCAL TEST PASS, 75 checks, exit 0.
 - Godot Full Normal Regression: LOCAL TEST PASS, 73/73 verify scripts,
   exit 0. The new WP01-G test passed again within this full run.
 - Runtime isolation: `HOME`, XDG data/config, and temporary paths were directed
