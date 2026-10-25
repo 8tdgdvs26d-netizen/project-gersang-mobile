@@ -43,6 +43,14 @@ const SUPERSEDED_REASON := "gameplay_session_superseded"
 
 const NakamaHTTPAdapterScript := preload("res://addons/com.heroiclabs.nakama/client/NakamaHTTPAdapter.gd")
 
+## WP01-G Phase C1: requests use the SDK's NON-threaded HTTP mode. In threaded
+## mode, when a server accepts the connection but never answers, the request
+## timeout waits for the request thread (Godot 4.7.2 HTTPRequest) and the whole
+## game stops (WP01-G Phase B run 40077605107: threaded 2/2 hang, non-threaded
+## 2/2 return). Non-threaded requests are handled once per frame. Timeout,
+## retry, payloads and every outcome rule below are unchanged.
+const HTTP_USE_THREADS := false
+
 const RPC_SESSION_BEGIN := "vs01_session_begin"
 const RPC_PROGRESS_GET := "vs01_progress_get"
 const RPC_TRADE := "vs01_trade"
@@ -413,6 +421,7 @@ func _get_client() -> NakamaClient:
 		if _adapter == null:
 			_adapter = NakamaHTTPAdapterScript.new()
 			_adapter.name = "NakamaHTTPAdapter"
+			_adapter.use_threads = HTTP_USE_THREADS
 			add_child(_adapter)
 		_adapter.timeout = timeout_sec
 		_client = NakamaClient.new(_adapter, server_key, scheme, host, port, timeout_sec)
