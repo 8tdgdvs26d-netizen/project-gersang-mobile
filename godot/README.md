@@ -3,6 +3,13 @@
 This directory contains the Godot 4.x + GDScript migration project for
 《萬行誌：白手》.
 
+> **Authority / execution safety:** This README documents repository setup and
+> historical work. It does **not** authorize running Godot, Mac/iOS actions,
+> tests, deployment, Save operations, or engineering changes. For current
+> decisions, permissions, and work status, always start at the
+> [MYRIAL AI work entry](https://docs.google.com/document/d/12s-PfPCKXl0NF1FvVqKIcnJf_zHygrvRMMQs4On-XR0/edit)
+> and verify current evidence before any separately approved work.
+
 ## Reproducible iOS development export
 
 The repository contains the non-sensitive inputs required to recreate an iOS
@@ -45,7 +52,12 @@ so iPhone never depends on device fonts, and desktop runs show the same glyphs. 
 export filter on all resources (or include `fonts/`) so the font is packaged.
 `tests/verify_tc_font.gd` checks that every player-visible character is in the font.
 
-## Current work package
+## Historical work package record — WP00A (2026-10-08; superseded as Current)
+
+> **Historical snapshot only.** The following 2026-10-08 WP00A/Supabase/
+> Save v14 passages, including the instruction to begin VS-01 WP01, are
+> preserved as past records, **not** current authority or execution approval.
+> Read the latest AI work entry and current WP before deciding what to do next.
 
 VS-01 WP00A: Repository Instruction Alignment (documentation only).
 

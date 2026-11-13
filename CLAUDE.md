@@ -7,12 +7,10 @@
 開始規劃、Implementation、Review 或 Acceptance 前，必須按以下次序核實：
 
 1. **Charlie 最新明確決定**。
-2. **`MYRIAL_Consolidated_Canonical_and_Vertical_Slice_Roadmap_2026-10-08_v1.0`**（Google Drive）— Current Consolidated Design Source of Truth。
-3. **`MYRIAL_Current_Project_Status_2026-10-08`**（Google Drive）— 最新工程／Project stop point；開始工作時仍須重新核實 GitHub。
-4. **`MYRIAL_Project_Instructions_Core_v4.2_2026-10-08`**（Google Drive）— 穩定工作規則。
-5. **`MYRIAL_Project_Source_Index_2026-10-08`**及**`MYRIAL_Checkpoint_Index_2026-10-08`**（Google Drive）。
-6. **即時 GitHub、CI、Mac、iPhone／iPad及Playtest證據** — 用來確認目前實作、SHA、PR、Tests及Acceptance；不可用現有程式反過來推翻Canonical。
-7. Canonical v0.5、2026-10-02 Prototype Canonical Update、V30 Handoff、Handoff Pack v0.4、800 Questions及Phaser/Web資料只屬 **Historical / Supporting**；衝突內容已被較新Source取代，不得自行補位或復活。
+2. **最新 `MYRIAL_AI工作入口_Current`**（Google Drive）：https://docs.google.com/document/d/12s-PfPCKXl0NF1FvVqKIcnJf_zHygrvRMMQs4On-XR0/edit 。先依入口讀取「文件位置索引」「項目現況與下一步」「操作限制」「文件與記錄執行指引」。
+3. **當次工作直接相關的正式 Current Canonical、System、WP、決策及驗收規格**，只讀需要的部分；若互相衝突，STOP 交 Charlie。
+4. **即時 GitHub、CI、Mac、iPhone／iPad及Playtest證據** — 用來確認實作、SHA、PR、Tests及Acceptance；不得用程式碼反過來推翻Gameplay Canonical。
+5. **歷史追溯（非 Current Authority）**：舊 `00_CURRENT_PROJECT_SOURCES`、2026-10-08 Consolidated Canonical／Current Status／Project Instructions v4.x／Source Index、舊完整 Art Bible、Canonical v0.5、Prototype、V30 Handoff、Handoff Pack v0.4、800 Questions及Phaser/Web資料。只在必要追溯時讀相關部分，不得復活已取代決定。
 
 設計真相與工程真相必須分開。Design approved不代表Implemented；Tests／CI PASS不代表Stage PASS或玩家體驗PASS。若Current Sources與工程證據衝突，立即STOP，列出衝突、影響及選項，交Charlie決定，禁止靜默覆蓋。
 
@@ -35,9 +33,9 @@ Coding批准不等於Merge批准；GPT Accepted亦不等於Charlie已關閉Gate�
 
 ## 4. Roles 與 STOP Conditions
 
-- Charlie：方向、Canonical、Scope、玩家體驗、Merge及Stage／System Gate最終批准。
-- GPT：Brain／Gatekeeper；負責Blueprint、Scope、Architecture、Review、Acceptance、風險及下一步。
-- Claude／Engineering：只可在已批准Scope內Implementation、Tests、Regression、Stress、PR及Evidence整理。
+- Charlie：Project Owner；最終批准方向、Canonical、Scope、重大風險、玩家體驗、PR Merge及Stage／System Gate關閉。
+- GPT：Brain／Gatekeeper；負責Blueprint、Scope、優先級、重大技術方案獨立Review、Acceptance、風險及下一步。
+- Claude：Engineering Technical Advisor及主要工程執行者；只在Charlie批准Scope內進行Repo Preflight、Implementation、Bug Fix、Tests、Regression／Stress、PR及Evidence整理，並可獨立審查重大技術方案或提出NO-GO。同一工作的實作者不得自行充當獨立審查者。
 
 遇到以下情況必須STOP：
 - 新Gameplay／Canonical決定或衝突；
@@ -59,6 +57,8 @@ Coding批准不等於Merge批准；GPT Accepted亦不等於Charlie已關閉Gate�
 
 ## 6. 未經批准禁止改動
 
+- **預設READ ONLY**：工具具有讀寫能力不代表已獲授權；Google Drive之前的文件重整Editor授權已完結，任何新Drive寫入須Charlie就當次工作明確批准。
+- **Repo／工程另批**：文件指引對齊、Blueprint審查或P0解除不等於已批准Coding、Godot／CI、Development Save、PR／Merge、部署或裝置測試；所有操作按最新「操作限制_Current」與當次工作授權執行。
 - Canonical、Gameplay Rules、Scope或Acceptance Standard。
 - Database／Save Schema或Migration。
 - Gameplay邏輯、經濟、戰鬥、裝備、角色成長及數值。
