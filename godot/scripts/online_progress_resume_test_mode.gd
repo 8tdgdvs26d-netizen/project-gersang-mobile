@@ -75,6 +75,7 @@ func _ready() -> void:
 	if client.get_parent() == null:
 		add_child(client)
 	client.configure(host, port)
+	client.enable_bounded_reads()
 	_new_adapters()
 	client.gameplay_session_superseded.connect(_on_superseded)
 	_build_panel()
@@ -176,6 +177,11 @@ func sign_out() -> void:
 	_view_epoch += 1
 	_busy = false
 	_show_signed_out()
+
+
+func _exit_tree() -> void:
+	if client != null:
+		client.cancel_bounded_reads()
 
 
 func is_busy() -> bool:

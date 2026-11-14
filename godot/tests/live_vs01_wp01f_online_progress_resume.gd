@@ -30,6 +30,9 @@ const REP := OnlineTradeAdapter.REPRESENTATIVE_GOOD_ID
 ## The server confirms a claim only 10 s after the encounter began.
 const MIN_AGE_S := 10.5
 const FAULT_TIMEOUT_SEC := 2
+const PRODUCT_READ_DEADLINE_MS := 10_000
+const PRODUCT_REFRESH_DEADLINE_MS := 30_000
+const LIVE_WAIT_GUARD_MS := 45_000
 
 var _checks := 0
 var _failures := 0
@@ -222,12 +225,52 @@ func _phase_stress() -> void:
 	_check(stall_port > 0, "T2 local stall port opened")
 	_pump(stall)
 	mode.client.configure(_host, stall_port)
+	# B3: Trade read, Hero read and refresh_all() are measured separately. The
+	# per-read clock runs from the transport's read_started to read_finished
+	# (dispatch to decision) for each RPC id; the clock lives in this test only.
+	var transport: OnlineReadTransport = mode.client._read_transport
+	var t2_reads := {}
+	var on_read_started := func(request_id: int, rpc_id: String) -> void:
+		t2_reads[request_id] = {"rpc": rpc_id, "start": Time.get_ticks_msec(), "end": -1, "decision": "", "status": ""}
+	var on_read_finished := func(request_id: int, _rpc_id: String, decision: String, status: String) -> void:
+		if t2_reads.has(request_id):
+			t2_reads[request_id]["end"] = Time.get_ticks_msec()
+			t2_reads[request_id]["decision"] = decision
+			t2_reads[request_id]["status"] = status
+	transport.read_started.connect(on_read_started)
+	transport.read_finished.connect(on_read_finished)
+	var t2_out := []
 	var t0 := Time.get_ticks_msec()
-	var timed_out := await mode.refresh_all()
+	_start_refresh(mode, t2_out)
+	var t2_wait_ok := await _wait_for_result(t2_out, LIVE_WAIT_GUARD_MS)
 	counts["t2_elapsed_ms"] = Time.get_ticks_msec() - t0
+	transport.read_started.disconnect(on_read_started)
+	transport.read_finished.disconnect(on_read_finished)
 	counts["t2_connections"] = stall.accepted
 	stall.stop()
+	_check(t2_wait_ok, "T2 refresh_all settles inside the 45 s live-test guard (%d ms)" % counts["t2_elapsed_ms"])
+	if not t2_wait_ok:
+		# B7: a guard expiry is a FAIL, never an UNCERTAIN; nothing after it runs.
+		counts["t2_guard_expired"] = true
+		var failed := _result("stress", mode.get_snapshot())
+		failed["cases"] = counts
+		_emit(failed)
+		return
+	var trade_read := _single_read(t2_reads, OnlineProgressClient.RPC_PROGRESS_GET)
+	var hero_read := _single_read(t2_reads, OnlineCombatAdapter.RPC_PROGRESSION)
+	counts["t2_read_count"] = t2_reads.size()
+	counts["t2_trade_ms"] = _read_ms(trade_read)
+	counts["t2_hero_ms"] = _read_ms(hero_read)
+	counts["t2_trade_decision"] = trade_read.get("decision", "")
+	counts["t2_hero_decision"] = hero_read.get("decision", "")
+	_check(t2_reads.size() == 2 and not trade_read.is_empty() and not hero_read.is_empty(), "T2 exactly one Trade read and one Hero read were measured (%d reads)" % t2_reads.size())
+	_check(_read_ms(trade_read) >= 0 and _read_ms(trade_read) <= PRODUCT_READ_DEADLINE_MS, "T2 Trade read returns within the 10 s product deadline (%d ms, %s)" % [_read_ms(trade_read), trade_read.get("decision", "")])
+	_check(_read_ms(hero_read) >= 0 and _read_ms(hero_read) <= PRODUCT_READ_DEADLINE_MS, "T2 Hero read returns within the 10 s product deadline (%d ms, %s)" % [_read_ms(hero_read), hero_read.get("decision", "")])
+	_check(counts["t2_elapsed_ms"] <= PRODUCT_REFRESH_DEADLINE_MS, "T2 refresh_all returns within the 30 s product deadline (%d ms)" % counts["t2_elapsed_ms"])
+	_check(trade_read.get("status") == OnlineProgressClient.UNCERTAIN and hero_read.get("status") == OnlineProgressClient.UNCERTAIN, "T2 both stalled reads ended UNCERTAIN (Trade %s, Hero %s)" % [trade_read.get("status", ""), hero_read.get("status", "")])
 	_check(stall.accepted >= 1, "T2 the read reached the stalled port (%d connection(s), %d ms)" % [stall.accepted, counts["t2_elapsed_ms"]])
+	_check(stall.accepted <= 2, "T2 uses at most one attempt for each of the two read RPCs (%d connections)" % stall.accepted)
+	var timed_out: Dictionary = t2_out[0]
 	_check(timed_out["status"] == OnlineProgressClient.UNCERTAIN and mode.get_status_text() == Mode.UNCERTAIN_TEXT, "T2 timeout: uncertain, never 'confirmed'")
 	_check(_same_values(mode.get_snapshot(), base), "T2 timeout: last server-confirmed values kept")
 	mode.client.configure(_host, _port)
@@ -259,10 +302,18 @@ func _phase_stress() -> void:
 	# Checked in the same frame: the HTTP request cannot have been answered yet.
 	var in_flight := mode.is_busy()
 	mode.sign_out()
-	while out.is_empty():
-		await process_frame
-	await process_frame
+	var t4_wait_ok := await _wait_for_result(out, LIVE_WAIT_GUARD_MS)
 	counts["t4_was_in_flight"] = in_flight
+	_check(t4_wait_ok, "T4 late response settles inside the 45 s live-test guard")
+	if not t4_wait_ok:
+		# B7: a guard expiry is a FAIL, never a stale answer; out[0] is not
+		# read and no later step (sign-in, begin, readback) runs.
+		counts["t4_guard_expired"] = true
+		var failed := _result("stress", mode.get_snapshot())
+		failed["cases"] = counts
+		_emit(failed)
+		return
+	await process_frame
 	_check(in_flight and out[0].get("stale", false), "T4 the read was in flight and its answer came back as stale")
 	_check(not mode.get_snapshot().has("money") and not mode.get_snapshot().has("level") and mode.get_trade_text() == Mode.TRADE_UNKNOWN_TEXT, "T4 the late answer did not reach the signed-out screen")
 	_check((await mode.sign_in(account["email"], account["password"], false))["status"] == OnlineProgressClient.OK and (await mode.begin_session())["status"] == OnlineProgressClient.OK, "T4 signed in again")
@@ -308,6 +359,7 @@ func _new_mode() -> OnlineProgressResumeTestMode:
 	root.add_child(mode)
 	await process_frame
 	mode.client.configure(_host, _port)
+	_check(mode.client._read_transport.request_timeout_sec * 1000 < PRODUCT_READ_DEADLINE_MS and mode.client._read_transport.owner_deadline_sec * 1000 < PRODUCT_READ_DEADLINE_MS, "A4-Lite per-read transport limits are below 10 s")
 	return mode
 
 
@@ -339,6 +391,29 @@ func _pump(port: FaultPort) -> void:
 
 func _start_refresh(mode: OnlineProgressResumeTestMode, out: Array) -> void:
 	out.append(await mode.refresh_all())
+
+
+func _wait_for_result(out: Array, guard_ms: int) -> bool:
+	var started := Time.get_ticks_msec()
+	while out.is_empty() and Time.get_ticks_msec() - started <= guard_ms:
+		await process_frame
+	return not out.is_empty()
+
+
+## The one measured read of `rpc_id`, or {} when there is none or several.
+static func _single_read(reads: Dictionary, rpc_id: String) -> Dictionary:
+	var found := []
+	for entry in reads.values():
+		if entry["rpc"] == rpc_id:
+			found.append(entry)
+	return found[0] if found.size() == 1 else {}
+
+
+## Elapsed ms of a measured read, or -1 when it did not finish.
+static func _read_ms(entry: Dictionary) -> int:
+	if entry.is_empty() or int(entry["end"]) < 0:
+		return -1
+	return int(entry["end"]) - int(entry["start"])
 
 
 func _win(battle: CombatBattle) -> void:
