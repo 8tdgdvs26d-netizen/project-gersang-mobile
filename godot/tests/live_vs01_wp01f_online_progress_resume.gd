@@ -13,9 +13,13 @@ extends SceneTree
 ##   stress    targeted cases on a second disposable account: read dropped
 ##             mid-request, server timeout, two devices / takeover, a late
 ##             answer after sign-out
+##   t2        WP01-G C2-E1 diagnostic only: the server-timeout case (T2) alone,
+##             in its own process, on a third disposable account, with the
+##             client's REAL read settings (5 s timeout, 3 attempts,
+##             non-threaded HTTP). Measures each read; never changes the client.
 ##
 ##   godot --headless --path godot --script res://tests/live_vs01_wp01f_online_progress_resume.gd -- \
-##     --phase <probe|seed|readback|stress> [--label <name>] [--host 127.0.0.1] [--port 17350]
+##     --phase <probe|seed|readback|stress|t2> [--label <name>] [--host 127.0.0.1] [--port 17350]
 ##
 ## The account e-mail / password come from the environment
 ## (MYRIAL_WP01F_EMAIL / _PASSWORD, stress: MYRIAL_WP01F_STRESS_EMAIL /
@@ -31,8 +35,23 @@ const REP := OnlineTradeAdapter.REPRESENTATIVE_GOOD_ID
 const MIN_AGE_S := 10.5
 const FAULT_TIMEOUT_SEC := 2
 
+## WP01-G C2-E1 (phase t2). Product limits are assertions only; E1 adds no
+## client deadline. Guards are test-safety limits; the launcher kills the
+## whole process at 180 s.
+const E1_PRODUCT_READ_MS := 10000
+const E1_PRODUCT_REFRESH_MS := 30000
+const E1_READ_GUARD_MS := 45000
+const E1_AUTH_GUARD_MS := 30000
+const E1_EXPECTED_TIMEOUT_SEC := 5
+const E1_EXPECTED_ATTEMPTS := 3
+## The only RPC ids the diagnostic may name in its output.
+const E1_READ_RPCS := {"vs01_progress_get": "trade", "vs01e_progression_get": "hero"}
+
 var _checks := 0
 var _failures := 0
+## C2-E1: the one T2 result, emitted once at the very end (after the save checks).
+var _t2_out := {}
+var _t2_snap := {}
 var _phase := ""
 var _label := ""
 var _host := "127.0.0.1"
@@ -50,6 +69,8 @@ class FaultPort extends RefCounted:
 	var accepted := 0
 	var dropped := 0
 	var running := false
+	## Monotonic time (usec) of each accepted connection; observation only.
+	var accept_usec: Array = []
 
 	func start(p_mode: String) -> int:
 		mode = p_mode
@@ -62,6 +83,7 @@ class FaultPort extends RefCounted:
 		while server.is_connection_available():
 			peers.append(server.take_connection())
 			accepted += 1
+			accept_usec.append(Time.get_ticks_usec())
 		for peer in peers:
 			var p: StreamPeerTCP = peer
 			p.poll()
@@ -93,10 +115,15 @@ func _initialize() -> void:
 			await _phase_readback()
 		"stress":
 			await _phase_stress()
+		"t2":
+			await _phase_t2()
 		_:
 			_check(false, "Known phase (got '%s')" % _phase)
+	var failures_before_save := _failures
 	_check(_dev_save_fingerprint() == dev_before, "No local save file was created or changed")
 	_check(not FileAccess.file_exists(SaveStore.DEFAULT_PATH), "No local save file exists in the isolated user data folder")
+	if _phase == "t2":
+		_finish_t2(_failures == failures_before_save)
 	await process_frame
 	if _failures == 0:
 		print("VS-01 WP01-F live %s passed (%d checks)" % [_phase, _checks])
@@ -274,6 +301,285 @@ func _phase_stress() -> void:
 	mode.sign_out()
 	mode.queue_free()
 	await process_frame
+
+
+## WP01-G C2-E1: T2 (server accepts, never answers) alone, real client read
+## settings. Every await is bounded; a failed setup step or an expired guard
+## ends the diagnostic at once (no stall / no reconnect). The single result is
+## emitted by _finish_t2() after the save checks, from an allowlist of safe
+## fields: no e-mail, password, token, header, URI or body is ever printed.
+func _phase_t2() -> void:
+	var out := {"case_id": "E1-T2", "classification": "", "product_acceptance": "NOT OBSERVED",
+		"setup_failure": "", "guard_stage": "", "config": {}, "trade_read": {}, "hero_read": {},
+		"refresh_all": {}, "fault_port": {}, "heartbeat": {}, "observer": "NOT RUN",
+		"state_checks": {}, "reconnect": "NOT RUN"}
+	_t2_out = out
+	var account := _account("MYRIAL_WP01F_DIAG")
+	if account.is_empty():
+		_t2_setup_fail(out, "credentials")
+		return
+	var mode := await _new_mode()
+	var signed := await _bounded(mode.sign_in.bind(account["email"], account["password"], true), E1_AUTH_GUARD_MS)
+	if not _t2_guard_ok(signed, "sign_in", out):
+		return
+	var signed_ok: bool = signed["value"].get("status") == OnlineProgressClient.OK
+	_check(signed_ok, "E1-T2: a third disposable local test account signed in")
+	if not signed_ok:
+		_t2_setup_fail(out, "sign_in")
+		return
+	var begun := await _bounded(mode.begin_session, E1_AUTH_GUARD_MS)
+	if not _t2_guard_ok(begun, "begin_session", out):
+		return
+	var begun_ok: bool = begun["value"].get("status") == OnlineProgressClient.OK and mode.get_status_text() == Mode.CONFIRMED_TEXT
+	_check(begun_ok, "E1-T2: session begun, both contracts confirmed")
+	if not begun_ok:
+		_t2_setup_fail(out, "begin_session")
+		return
+	var base := mode.get_snapshot()
+	_t2_snap = base
+
+	# Stall port first; nothing is pointed at it unless it really listens.
+	var stall := FaultPort.new()
+	var stall_port := stall.start("stall")
+	_check(stall_port > 0, "E1-T2: local stall port opened")
+	if stall_port <= 0:
+		stall.stop()
+		_t2_setup_fail(out, "fault_port")
+		return
+	_pump(stall)
+	# Real read settings, read back from the objects that send the request.
+	mode.client.configure(_host, stall_port)
+	mode.client._get_client() # builds the SDK client for this port; no request is sent
+	var adapter = mode.client._adapter
+	var cfg := {
+		"client_timeout_sec": mode.client.timeout_sec,
+		"adapter_timeout_sec": adapter.timeout,
+		"use_threads": adapter.use_threads,
+		"auto_retry": mode.client._client.auto_retry,
+		"auto_retry_count": adapter.auto_retry_count,
+		"auto_retry_backoff_base": adapter.auto_retry_backoff_base,
+		"logger_level": int(adapter.logger._level),
+	}
+	out["config"] = cfg
+	var cfg_ok: bool = cfg["client_timeout_sec"] == E1_EXPECTED_TIMEOUT_SEC and cfg["adapter_timeout_sec"] == E1_EXPECTED_TIMEOUT_SEC \
+		and cfg["use_threads"] == false and cfg["auto_retry"] == true and cfg["auto_retry_count"] == E1_EXPECTED_ATTEMPTS \
+		and cfg["logger_level"] <= NakamaLogger.LOG_LEVEL.ERROR
+	_check(cfg_ok, "E1-T2: real read settings 5 s / 3 attempts / non-threaded / logger ERROR or quieter (%s)" % JSON.stringify(cfg))
+	if not cfg_ok:
+		stall.stop()
+		out["classification"] = "CONFIG_MISMATCH"
+		return
+
+	# The stalled read, observed per request and per frame.
+	var trace := _new_trace()
+	_observe(adapter, trace)
+	var t2 := await _bounded(mode.refresh_all, E1_READ_GUARD_MS)
+	# Final sweep in the frame refresh_all returned, before the observer stops,
+	# so the last request's completion is never lost.
+	_observe_sample(adapter, trace, Time.get_ticks_usec())
+	trace["stop"] = true
+	var waited := 0
+	while not trace["observer_done"] and waited < 10:
+		await process_frame
+		waited += 1
+	out["observer"] = "STOPPED" if trace["observer_done"] else "NOT STOPPED"
+	stall.stop()
+	out["fault_port"] = {"accepted": stall.accepted, "accept_offsets_ms": _offsets_ms(stall.accept_usec)}
+	out["heartbeat"] = {"frames": trace["frames"], "max_frame_gap_ms": int(trace["max_frame_gap_usec"] / 1000)}
+	out["trade_read"] = _read_summary(trace, "trade")
+	out["hero_read"] = _read_summary(trace, "hero")
+	out["refresh_all"] = {"returned": t2["done"], "elapsed_ms": int(t2["elapsed_usec"] / 1000)}
+	if not _t2_guard_ok(t2, "refresh_all_stalled", out):
+		return
+	var r: Dictionary = t2["value"]
+	out["refresh_all"]["status"] = r.get("status", "")
+	var st := {
+		"uncertain": r.get("status") == OnlineProgressClient.UNCERTAIN and mode.get_status_text() == Mode.UNCERTAIN_TEXT,
+		"values_kept": _same_values(mode.get_snapshot(), base),
+		"not_busy": not mode.is_busy(),
+		"port_reached": stall.accepted >= 1,
+		"observer_stopped": trace["observer_done"],
+	}
+	_check(st["port_reached"], "E1-T2: the read reached the stalled port (%d connection(s))" % stall.accepted)
+	_check(st["uncertain"], "E1-T2: stalled read is uncertain, never 'confirmed'")
+	_check(st["values_kept"], "E1-T2: last server-confirmed values kept")
+	_check(st["not_busy"], "E1-T2: not busy after the stalled read returned")
+	_check(st["observer_stopped"], "E1-T2: request observer stopped after the final sweep")
+	var observed: bool = out["trade_read"]["observed"] == "COMPLETE" and out["hero_read"]["observed"] == "COMPLETE"
+	var product_ok := true
+	for read_key in ["trade_read", "hero_read"]:
+		var read: Dictionary = out[read_key]
+		if read["observed"] != "COMPLETE":
+			product_ok = false
+			_check(false, "E1-T2: %s NOT OBSERVED (%s); no 10 s claim" % [read_key, read["observed"]])
+		else:
+			var ok_read: bool = read["elapsed_ms"] <= E1_PRODUCT_READ_MS
+			product_ok = product_ok and ok_read
+			_check(ok_read, "E1-T2: %s within the 10 s product limit (%d ms)" % [read_key, read["elapsed_ms"]])
+	var ok_total: bool = out["refresh_all"]["elapsed_ms"] <= E1_PRODUCT_REFRESH_MS
+	product_ok = product_ok and ok_total
+	_check(ok_total, "E1-T2: refresh_all within the 30 s product limit (%d ms)" % out["refresh_all"]["elapsed_ms"])
+
+	# Reconnect to the real server (bounded) and read both contracts again.
+	mode.client.configure(_host, _port)
+	var again := await _bounded(mode.refresh_all, E1_READ_GUARD_MS)
+	if not _t2_guard_ok(again, "refresh_all_reconnect", out):
+		out["state_checks"] = st
+		return
+	st["reconnect_ok"] = again["value"].get("status") == OnlineProgressClient.OK and _same_values(mode.get_snapshot(), base)
+	st["not_busy_after_reconnect"] = not mode.is_busy()
+	out["reconnect"] = "OK_SAME_VALUES" if st["reconnect_ok"] else "FAIL"
+	_check(st["reconnect_ok"], "E1-T2: after reconnect both contracts read again with the same values")
+	_check(st["not_busy_after_reconnect"], "E1-T2: not busy after reconnect")
+	out["state_checks"] = st
+	_t2_snap = mode.get_snapshot()
+
+	# One classification from ALL results above (state, busy, reconnect,
+	# observation, product limits). State/safety problems win over timing.
+	var state_ok: bool = st["uncertain"] and st["values_kept"] and st["not_busy"] and st["reconnect_ok"] and st["not_busy_after_reconnect"]
+	if not state_ok:
+		out["classification"] = "FUNCTIONAL_FAIL_SUSPECT_EVIDENCE"
+	elif not observed or not st["port_reached"] or not st["observer_stopped"]:
+		out["classification"] = "DIAGNOSTIC_INCONCLUSIVE"
+	elif not product_ok:
+		out["classification"] = "PRODUCT_DEADLINE_FAIL"
+	else:
+		out["classification"] = "WITHIN_PRODUCT_LIMITS"
+	if out["classification"] == "WITHIN_PRODUCT_LIMITS":
+		out["product_acceptance"] = "PASS_OBSERVED"
+	elif out["classification"] == "PRODUCT_DEADLINE_FAIL":
+		out["product_acceptance"] = "FAIL"
+	else:
+		out["product_acceptance"] = "NOT OBSERVED"
+	mode.sign_out()
+	mode.queue_free()
+	await process_frame
+
+
+## Runs `fn` (a coroutine) while counting frames against `guard_ms`. Never
+## cancels the request: if the guard expires the coroutine is left pending
+## and the caller ends the process.
+func _bounded(fn: Callable, guard_ms: int) -> Dictionary:
+	var box := {"done": false, "value": {}}
+	_run_into(fn, box)
+	var start := Time.get_ticks_usec()
+	while not box["done"]:
+		if Time.get_ticks_usec() - start > guard_ms * 1000:
+			return {"done": false, "value": {}, "elapsed_usec": Time.get_ticks_usec() - start}
+		await process_frame
+	return {"done": true, "value": box["value"], "elapsed_usec": Time.get_ticks_usec() - start}
+
+
+func _run_into(fn: Callable, box: Dictionary) -> void:
+	var value = await fn.call()
+	box["value"] = value if typeof(value) == TYPE_DICTIONARY else {}
+	box["done"] = true
+
+
+## On an expired guard: report DIAGNOSTIC_GUARD_FAIL and stop this phase.
+func _t2_guard_ok(r: Dictionary, stage: String, out: Dictionary) -> bool:
+	if r["done"]:
+		return true
+	out["classification"] = "DIAGNOSTIC_GUARD_FAIL"
+	out["guard_stage"] = stage
+	out["product_acceptance"] = "NOT OBSERVED"
+	_check(false, "E1-T2: guard expired at %s after %d ms; process ends without reconnect" % [stage, int(r["elapsed_usec"] / 1000)])
+	return false
+
+
+## A setup step (credentials, sign-in, session, stall port) failed: stop the
+## diagnostic at once; nothing about T2 is claimed.
+func _t2_setup_fail(out: Dictionary, stage: String) -> void:
+	out["classification"] = "DIAGNOSTIC_INCONCLUSIVE"
+	out["setup_failure"] = stage
+	out["product_acceptance"] = "NOT OBSERVED"
+	_check(false, "E1-T2: setup failed at %s; diagnostic stopped before the stall" % stage)
+
+
+func _new_trace() -> Dictionary:
+	var re := RegEx.new()
+	re.compile("/v2/rpc/([a-z0-9_]+)")
+	return {"requests": {}, "max_frame_gap_usec": 0, "frames": 0, "stop": false, "observer_done": false, "re": re}
+
+
+## Test-only probe of the SDK adapter's private request table (read only),
+## sampled once per frame until trace.stop. The caller takes a final sample
+## itself before setting stop, so the loop's exit can never drop an end time.
+func _observe(adapter, trace: Dictionary) -> void:
+	var last := Time.get_ticks_usec()
+	while not trace["stop"]:
+		var now := Time.get_ticks_usec()
+		trace["frames"] += 1
+		trace["max_frame_gap_usec"] = maxi(int(trace["max_frame_gap_usec"]), now - last)
+		last = now
+		_observe_sample(adapter, trace, now)
+		await process_frame
+	trace["observer_done"] = true
+
+
+## Keeps only: request id, read RPC name, first/last time seen, attempt.
+## The request object itself (token, headers, URI, body) is never stored.
+func _observe_sample(adapter, trace: Dictionary, now: int) -> void:
+	var re: RegEx = trace["re"]
+	var pending: Dictionary = adapter.get("_pending")
+	var seen: Dictionary = trace["requests"]
+	for id in pending.keys():
+		var req = pending[id]
+		if not seen.has(id):
+			var m := re.search(String(req.uri))
+			var rpc := m.get_string(1) if m != null else ""
+			seen[id] = {"contract": E1_READ_RPCS.get(rpc, "other"), "start_usec": now, "end_usec": -1, "max_try": 0}
+		seen[id]["max_try"] = maxi(int(seen[id]["max_try"]), int(req.cur_try))
+	for id in seen.keys():
+		if seen[id]["end_usec"] < 0 and not pending.has(id):
+			seen[id]["end_usec"] = now
+
+
+func _read_summary(trace: Dictionary, contract: String) -> Dictionary:
+	var found: Array = []
+	for id in trace["requests"].keys():
+		if trace["requests"][id]["contract"] == contract:
+			found.append(trace["requests"][id])
+	if found.is_empty():
+		return {"observed": "NOT OBSERVED (no request sent)"}
+	if found.size() > 1:
+		return {"observed": "NOT OBSERVED (%d requests, ambiguous)" % found.size()}
+	var r: Dictionary = found[0]
+	if r["end_usec"] < 0:
+		return {"observed": "NOT OBSERVED (request did not settle)", "attempts_seen": r["max_try"]}
+	return {"observed": "COMPLETE", "elapsed_ms": int((r["end_usec"] - r["start_usec"]) / 1000), "attempts_seen": r["max_try"], "precision": "1 frame"}
+
+
+static func _offsets_ms(usec: Array) -> Array:
+	var outv: Array = []
+	for t in usec:
+		outv.append(int((int(t) - int(usec[0])) / 1000))
+	return outv
+
+
+## Emits the ONE T2 result after the save checks, so the classification
+## agrees with every check of this process and with its exit code.
+func _finish_t2(save_ok: bool) -> void:
+	var out := _t2_out
+	if out.is_empty():
+		out = {"case_id": "E1-T2", "product_acceptance": "NOT OBSERVED"}
+	if not save_ok:
+		out["classification"] = "SAFETY_STOP"
+		out["product_acceptance"] = "NOT OBSERVED"
+	elif String(out.get("classification", "")).is_empty():
+		out["classification"] = "DIAGNOSTIC_INCONCLUSIVE"
+		out["product_acceptance"] = "NOT OBSERVED"
+	if _failures > 0 and out["classification"] == "WITHIN_PRODUCT_LIMITS":
+		out["classification"] = "DIAGNOSTIC_INCONCLUSIVE"
+		out["product_acceptance"] = "NOT OBSERVED"
+	out["save_checks_ok"] = save_ok
+	out["checks"] = _checks
+	out["failures"] = _failures
+	out["exit_code"] = 1 if _failures > 0 else 0
+	var r := _result("t2", _t2_snap)
+	for key in out.keys():
+		r[key] = out[key]
+	_emit(r)
 
 
 # --- Helpers ---------------------------------------------------------------------

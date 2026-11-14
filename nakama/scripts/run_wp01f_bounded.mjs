@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // VS-01 WP01-F bounded acceptance/evidence launcher. Disposable GitHub runner
-// only. Acceptance requires --scope core|full. Evidence is never deleted.
+// only. Acceptance requires --scope core|full|diag-t2. Evidence is never deleted.
+// diag-t2 (WP01-G C2-E1): the Core path, then ONLY the T2 diagnostic case in
+// its own Godot process (180 s). It is not full scope and never named so.
 
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
@@ -27,12 +29,43 @@ const EXPECTED_GODOT = "4.7.2";
 const MIN_VERIFY_SCRIPTS = 72;
 const WRITER_FILES = new Set(["environment.txt", "docker-version.log", "godot-version.txt", "wp01f-console.log", "leftover-inventory.log"]);
 const PLANNED = ["relevant_tests", "full_normal_regression", "live_seed", "fresh_process_readback", "nakama_restart", "restart_readback", "C01-C08", "stress_phase", "acceptance_audit"];
+const PLANNED_DIAG_T2 = PLANNED.map((x) => (x === "stress_phase" ? "e1_diag_t2" : x));
 const TRANSFERRED = ["T1", "T2", "T3", "T4"].map((id) => ({ id, status: "NOT RUN / TRANSFERRED TO WP01-G" }));
+const DIAG_T2_CASES = [{ id: "T1", status: "NOT RUN (C2-E1 diag-t2)" }, { id: "T2", status: "RUN AS C2-E1 DIAGNOSTIC (own process)" }, { id: "T3", status: "NOT RUN (C2-E1 diag-t2)" }, { id: "T4", status: "NOT RUN (C2-E1 diag-t2)" }];
+const SCOPES = ["core", "full", "diag-t2"];
+const PASS_VERDICT = { core: "PASS_CORE_SCOPE", full: "PASS_FULL_SCOPE", "diag-t2": "PASS_CORE_PLUS_DIAG_T2" };
+// C2-E1: checked on the in-memory output of the diagnostic process BEFORE any
+// byte of it is written; a match withholds the whole output (SAFETY_STOP).
+const E1_CLASSES = new Set(["WITHIN_PRODUCT_LIMITS", "PRODUCT_DEADLINE_FAIL", "FUNCTIONAL_FAIL_SUSPECT_EVIDENCE", "DIAGNOSTIC_GUARD_FAIL", "DIAGNOSTIC_INCONCLUSIVE", "CONFIG_MISMATCH", "SAFETY_STOP"]);
+const E1_PRODUCT = new Set(["PASS_OBSERVED", "FAIL", "NOT OBSERVED"]);
+const E1_FIELDS = ["phase", "label", "pid", "nonce", "user_data_dir", "case_id", "classification", "product_acceptance", "config", "trade_read", "hero_read", "refresh_all", "fault_port", "heartbeat", "observer", "state_checks", "reconnect", "save_checks_ok", "checks", "failures", "exit_code"];
+// C2-E1: the T2 process must print exactly ONE complete, self-consistent
+// result; anything missing or contradictory is a FAIL, never a guess.
+function e1ResultProblem(rs, rec, passLine) {
+  if (rs.length !== 1) return `expected exactly 1 result, got ${rs.length}`;
+  const t = rs[0]; if (!t || typeof t !== "object" || t.unparsable) return "result unparsable";
+  const missing = E1_FIELDS.filter((k) => !(k in t)); if (missing.length) return `missing fields: ${missing.join(",")}`;
+  if (t.phase !== "t2" || t.case_id !== "E1-T2") return "wrong phase/case_id";
+  if (!E1_CLASSES.has(t.classification)) return `unknown classification ${t.classification}`;
+  if (!E1_PRODUCT.has(t.product_acceptance)) return `unknown product_acceptance ${t.product_acceptance}`;
+  if (!Number.isInteger(t.failures) || !Number.isInteger(t.checks) || t.failures < 0 || t.checks < 1) return "invalid check counts";
+  if (t.exit_code !== (t.failures > 0 ? 1 : 0)) return "exit_code disagrees with failures";
+  if (rec.exit_code !== t.exit_code) return `process exit ${rec.exit_code} disagrees with result exit_code ${t.exit_code}`;
+  const pass = t.classification === "WITHIN_PRODUCT_LIMITS";
+  if (pass !== (t.failures === 0)) return "classification disagrees with failures";
+  if (pass !== (t.product_acceptance === "PASS_OBSERVED")) return "classification disagrees with product_acceptance";
+  if (t.classification === "PRODUCT_DEADLINE_FAIL" && t.product_acceptance !== "FAIL") return "PRODUCT_DEADLINE_FAIL needs product FAIL";
+  if (!pass && t.classification !== "PRODUCT_DEADLINE_FAIL" && t.product_acceptance !== "NOT OBSERVED") return "non-product failure must be NOT OBSERVED";
+  if (pass !== passLine) return "success line disagrees with classification";
+  if ((t.classification === "SAFETY_STOP") !== (t.save_checks_ok === false)) return "save checks disagree with classification";
+  return "";
+}
+const SENSITIVE_OUTPUT = [/authorization/i, /bearer\s/i, /http_key/i, /"token"/i, /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/, /set-cookie/i, /\/v2\//];
 const REQUIRED_PASS = ["environment.txt", "docker-version.log", "godot-version.txt", "wp01f-console.log", "launcher.log", "summary.json", STATE_FILE, "leftover-inventory.log", "inventory-launcher.log", "leftover-inventory.json"];
 const OUTCOMES = new Set(["success", "failure", "cancelled", "skipped"]);
 const TIMEOUT_MS = { nodeTest: 600000, npmCi: 600000, nakamaTest: 600000, godotImport: 600000,
   probe: 120000, verify: 240000, composeUp: 900000, health: 180000, seed: 240000,
-  readback: 180000, restart: 300000, stress: 420000, short: 60000 };
+  readback: 180000, restart: 300000, stress: 420000, diagT2: 180000, short: 60000 };
 const KILL_GRACE_MS = 5000;
 class SafetyError extends Error {}
 
@@ -64,7 +97,7 @@ function parseArgs(argv) {
   if (!RUN_ID_RE.test(out.runId)) throw new Error("--run-id must match " + RUN_ID_RE);
   if (!path.isAbsolute(out.evidenceDir)) throw new Error("--evidence-dir must be an absolute path");
   if (!ID_RE.test(out.evidenceId)) throw new Error("--evidence-id must be <dev>:<ino>");
-  if (out.scope && !["core", "full"].includes(out.scope)) throw new Error("--scope must be exactly core or full");
+  if (out.scope && !SCOPES.includes(out.scope)) throw new Error("--scope must be exactly core, full or diag-t2");
   if (["acceptance", "finalize"].includes(out.mode) && !out.scope) throw new Error(`--scope is required in ${out.mode} mode`);
   if (out.mode === "acceptance" && !path.isAbsolute(out.godot)) throw new Error("--godot must be an absolute path in acceptance mode");
   if (out.mode !== "acceptance" && out.godot) throw new Error("--godot is valid only in acceptance mode");
@@ -193,10 +226,11 @@ class Evidence {
     this.logFd = new Leaf(args.evidenceDir, inventory ? "inventory-launcher.log" : "launcher.log", args.evidenceId, temp, true);
     this.summaryFd = inventory ? null : new Leaf(args.evidenceDir, "summary.json", args.evidenceId, temp);
     this.stateFd = null;
+    const planned = args.scope === "diag-t2" ? PLANNED_DIAG_T2 : PLANNED;
     this.summary = inventory ? null : { run_id: args.runId, started_at: new Date().toISOString(), scope: args.scope,
-      scope_note: args.scope === "core" ? "Core resume only; T1-T4 NOT RUN and transferred to WP01-G." : "Full scope includes targeted stress; not Full Stress or Gate X/FS-08.",
-      planned_steps: PLANNED, transferred_cases: args.scope === "core" ? TRANSFERRED : [],
-      stage_status: Object.fromEntries(PLANNED.map((x) => [x, "NOT RUN"])), steps: [], comparisons: [], results: {}, verdict: "RUNNING" };
+      scope_note: args.scope === "core" ? "Core resume only; T1-T4 NOT RUN and transferred to WP01-G." : args.scope === "diag-t2" ? "WP01-G C2-E1 diagnostic: Core path plus the T2 case alone in its own process. Not full scope, not Targeted Stress complete, not C2/G-AC-01 acceptance." : "Full scope includes targeted stress; not Full Stress or Gate X/FS-08.",
+      planned_steps: planned, transferred_cases: args.scope === "core" ? TRANSFERRED : args.scope === "diag-t2" ? DIAG_T2_CASES : [],
+      stage_status: Object.fromEntries(planned.map((x) => [x, "NOT RUN"])), steps: [], comparisons: [], results: {}, verdict: "RUNNING" };
     if (this.summaryFd) this.save();
   }
   redact(v) { let s = String(v); for (const x of this.secrets) if (x) s = s.split(x).join("***REDACTED***"); return s; }
@@ -222,7 +256,7 @@ async function writer(args, temp) {
 
 function groupAlive(id) { try { process.kill(-id, 0); return "yes"; } catch (e) { return e.code === "ESRCH" ? "no" : "unknown"; } }
 function stopGroup(id, sig) { try { process.kill(-id, sig); } catch { /* gone */ } }
-function runBounded(ev, name, cmd, argv, { cwd = REPO, env = process.env, timeoutMs }) {
+function runBounded(ev, name, cmd, argv, { cwd = REPO, env = process.env, timeoutMs, guardOutput = false }) {
   return new Promise((resolve) => {
     const log = ev.next(name), display = [cmd, ...argv].join(" "), started = Date.now(), chunks = [];
     let child, timed = false, closed = false;
@@ -232,7 +266,9 @@ function runBounded(ev, name, cmd, argv, { cwd = REPO, env = process.env, timeou
     const timer = setTimeout(() => { timed = true; stopGroup(pgid, "SIGTERM"); setTimeout(() => { if (!closed) stopGroup(pgid, "SIGKILL"); }, KILL_GRACE_MS).unref(); }, timeoutMs);
     child.on("error", (e) => chunks.push(Buffer.from(`\nchild error: ${e}\n`)));
     child.on("close", (code, signal) => { closed = true; clearTimeout(timer); const survivors = groupAlive(pgid); if (survivors === "yes") stopGroup(pgid, "SIGKILL");
-      const output = Buffer.concat(chunks).toString("utf8"); const rec = { name, command: ev.redact(display), cwd: path.relative(REPO, cwd) || ".", exit_code: code, signal, timed_out: timed, survivors, duration_ms: Date.now() - started, log, pgid };
+      let output = Buffer.concat(chunks).toString("utf8"); const rec = { name, command: ev.redact(display), cwd: path.relative(REPO, cwd) || ".", exit_code: code, signal, timed_out: timed, survivors, duration_ms: Date.now() - started, log, pgid };
+      if (guardOutput) { const hit = SENSITIVE_OUTPUT.some((re) => re.test(output)) || ev.secrets.some((x) => x && output.includes(x)); rec.sensitive_output_blocked = hit;
+        if (hit) { const n = Buffer.byteLength(output); chunks.length = 0; output = ""; ev.file(log, `$ ${ev.redact(display)}\n# cwd=${rec.cwd} timeout_ms=${timeoutMs}\n# OUTPUT WITHHELD: sensitive pattern found in memory before write (${n} bytes not written)\n# exit=${code} signal=${signal} timed_out=${timed} survivors=${survivors} duration_ms=${rec.duration_ms}\n`); resolve({ rec, output }); return; } }
       ev.file(log, `$ ${display}\n# cwd=${rec.cwd} timeout_ms=${timeoutMs}\n${output}\n# exit=${code} signal=${signal} timed_out=${timed} survivors=${survivors} duration_ms=${rec.duration_ms}\n`); resolve({ rec, output }); });
   });
 }
@@ -327,8 +363,38 @@ async function acceptance(ev, args, temp) {
     expect("C05", same(seed, fresh, ["level", "exp", "exp_to_next"]), "hero values preserved"); expect("C06", Number.isInteger(seed.hero_revision) && fresh.hero_revision === seed.hero_revision, "hero revision preserved");
     expect("C07", same(fresh, relogin, ["money", "goods", "level", "exp", "hero_revision"]) && relogin.trade_revision === fresh.trade_revision + 1, "relogin");
     expect("C08", same(relogin, restarted, ["money", "goods", "level", "exp", "exp_to_next", "hero_revision"]) && restarted.trade_revision === relogin.trade_revision + 1, "after restart"); ev.save(); if (ev.summary.comparisons.some((x) => x.verdict !== "PASS")) throw new Stop("comparison failed");
+    if (args.scope === "diag-t2") { next("e1_diag_t2"); await diagT2(ev, state, tag, godot, recheck, godotEnv); active = ""; return; }
     next("stress_phase"); if (args.scope === "full") { const a = { email: `${tag}-b@wp01f.invalid`, password: crypto.randomBytes(24).toString("base64url") }; ev.secrets.push(a.password); await live("live-targeted-stress", "stress", "stress", liveEnv(a, "MYRIAL_WP01F_STRESS"), TIMEOUT_MS.stress); stage(ev, active, "PASS"); } else stage(ev, active, "NOT RUN / TRANSFERRED TO WP01-G"); active = "";
   } catch (e) { if (active && ev.summary.stage_status[active] === "RUNNING") stage(ev, active, "FAIL"); throw e; }
+}
+
+// C2-E1: the T2 case alone. Product FAIL, guard FAIL and SAFETY_STOP are kept
+// apart in the step record; any of them makes the run FAIL (never PASS).
+async function diagT2(ev, state, tag, godot, recheck, envFor) {
+  recheck("before live-e1-t2-diagnostic"); const iso = isolationProblem(state); if (iso) throw new Stop(`SAFETY_STOP isolation: ${iso}`);
+  const a = { email: `${tag}-c@wp01f.invalid`, password: crypto.randomBytes(24).toString("base64url") }; ev.secrets.push(a.password);
+  const r = await runBounded(ev, "live-e1-t2-diagnostic", godot, ["--headless", "--path", GODOT_DIR, "--script", LIVE_SCRIPT, "--", "--phase", "t2", "--label", "e1_t2", "--host", HOST, "--port", String(API_PORT)],
+    { env: envFor(state, { MYRIAL_WP01F_DIAG_EMAIL: a.email, MYRIAL_WP01F_DIAG_PASSWORD: a.password }), timeoutMs: TIMEOUT_MS.diagT2, guardOutput: true });
+  const rs = results(r.output), t2 = rs.length === 1 && !rs[0].unparsable ? rs[0] : {};
+  let safety = "";
+  if (r.rec.sensitive_output_blocked) safety = "sensitive output withheld";
+  else if (r.rec.error) safety = `could not start: ${r.rec.error}`;
+  else if (r.rec.timed_out) safety = "180 s case limit reached; process group terminated";
+  else if (r.rec.survivors !== "no") safety = `survivors ${r.rec.survivors}`;
+  else if (rs.some((x) => !x.unparsable && !inside(state.root, x.user_data_dir))) safety = "user data outside run root";
+  else if (t2.classification === "SAFETY_STOP") safety = "diagnostic process reported SAFETY_STOP (save checks)";
+  const scriptError = /SCRIPT ERROR|Parse Error/.test(r.output);
+  const passLine = r.output.split("\n").some((x) => /VS-01 WP01-F live t2 passed/.test(x) && !/^(ERROR: )?FAILED:/.test(x));
+  const invalid = safety ? "" : scriptError ? "script or parse error" : e1ResultProblem(rs, r.rec, passLine);
+  const classification = safety ? "SAFETY_STOP" : invalid ? "DIAGNOSTIC_INCONCLUSIVE" : t2.classification;
+  ev.summary.results.e1_t2 = safety || invalid ? { classification, result_problem: invalid } : t2;
+  ev.summary.e1_t2 = { classification, product_acceptance: safety || invalid ? "NOT OBSERVED" : t2.product_acceptance,
+    result_valid: !safety && !invalid, diagnostic_evidence_quality: "PENDING GPT REVIEW", case_timeout_ms: TIMEOUT_MS.diagT2, safety_stop: safety };
+  const problem = safety ? `SAFETY_STOP: ${safety}` : invalid ? `RESULT_INVALID: ${invalid}` : classification !== "WITHIN_PRODUCT_LIMITS" ? `${classification} (exit ${r.rec.exit_code})` : "";
+  const x = { ...r.rec, verdict: problem ? "FAIL" : "PASS", reason: problem, e1_classification: classification }; ev.summary.steps.push(x); ev.save();
+  ev.log(`${x.verdict} live-e1-t2-diagnostic: ${classification}${problem ? ` (${problem})` : ""}`);
+  if (problem) throw new Stop(`live-e1-t2-diagnostic: ${problem}`);
+  stage(ev, "e1_diag_t2", "PASS");
 }
 
 async function audit(ev) {
@@ -361,8 +427,8 @@ function finalize(args, temp) {
     try { const x = readSafe(args.evidenceDir, name, args.evidenceId, temp); files.push({ name, size: Number(x.size), sha256: crypto.createHash("sha256").update(x.data).digest("hex") }); }
     catch (e) { if (e instanceof SafetyError) { f.close(); throw e; } anomalies.push({ name, type: currentFileType(args.evidenceDir, name), reason: `manifest-read-failed: ${e.code ?? e.message ?? e}` }); }
   }
-  const checks = { acceptance_outcome_valid: OUTCOMES.has(ao), inventory_outcome_valid: OUTCOMES.has(io), acceptance_success: ao === "success", inventory_success: io === "success", scope_matches: summary.scope === args.scope, summary_verdict_matches: summary.verdict === (args.scope === "core" ? "PASS_CORE_SCOPE" : "PASS_FULL_SCOPE"), acceptance_audit_passed: summary.stage_status?.acceptance_audit === "PASS", inventory_complete: inv?.complete === true, required_evidence_present: REQUIRED_PASS.every((x) => first.files.includes(x)), no_anomalies: anomalies.length === 0 };
-  const verdict = Object.values(checks).every(Boolean) ? (args.scope === "core" ? "PASS_CORE_SCOPE" : "PASS_FULL_SCOPE") : "FAIL";
+  const checks = { acceptance_outcome_valid: OUTCOMES.has(ao), inventory_outcome_valid: OUTCOMES.has(io), acceptance_success: ao === "success", inventory_success: io === "success", scope_matches: summary.scope === args.scope, summary_verdict_matches: summary.verdict === PASS_VERDICT[args.scope], acceptance_audit_passed: summary.stage_status?.acceptance_audit === "PASS", inventory_complete: inv?.complete === true, required_evidence_present: REQUIRED_PASS.every((x) => first.files.includes(x)), no_anomalies: anomalies.length === 0 };
+  const verdict = Object.values(checks).every(Boolean) ? PASS_VERDICT[args.scope] : "FAIL";
   try { f.once(JSON.stringify({ run_id: args.runId, scope: args.scope, acceptance_outcome: ao, inventory_outcome: io, checks, anomalies, final_verdict: verdict, finalized_at: new Date().toISOString() }, null, 2) + "\n"); } finally { f.close(); }
   const finalAudit = readSafe(args.evidenceDir, "final-audit.json", args.evidenceId, temp);
   files.push({ name: "final-audit.json", size: Number(finalAudit.size), sha256: crypto.createHash("sha256").update(finalAudit.data).digest("hex") });
@@ -394,7 +460,7 @@ async function main() {
   if (args.mode === "inventory-only") { try { const r = await inventory(ev, args, temp); ev.file("leftover-inventory.json", JSON.stringify(r, null, 2) + "\n"); ev.close(); return 0; } catch (e) { try { ev.log(`leftover inventory error: ${e.message ?? e}`); } catch {} ev.close(); return e instanceof SafetyError ? 7 : 4; } }
   ev.log(`WP01-F bounded ${args.scope} run ${args.runId} (node ${process.version}, ${os.platform()} ${os.release()})`); let failed = "";
   try { await acceptance(ev, args, temp); } catch (e) { if (e instanceof SafetyError) { console.error(`evidence safety failure: ${e.message}`); ev.close(); return 7; } failed = e instanceof Stop ? e.message : `launcher error: ${e?.stack ?? e}`; try { ev.log(`STOP: ${failed}`); } catch { ev.close(); return 7; } }
-  try { const p = await audit(ev); if (p) failed = [failed, p].filter(Boolean).join("; "); ev.summary.verdict = failed ? "FAIL" : args.scope === "core" ? "PASS_CORE_SCOPE" : "PASS_FULL_SCOPE"; ev.summary.stop_reason = failed; ev.summary.not_run_stages = Object.entries(ev.summary.stage_status).filter(([, x]) => x === "NOT RUN").map(([x]) => x); ev.summary.finished_at = new Date().toISOString(); ev.save(); ev.log(failed ? `WP01-F bounded run: FAIL (${failed})` : `WP01-F bounded run: ${ev.summary.verdict}`); } catch (e) { console.error(`audit/evidence failure: ${e.message ?? e}`); ev.close(); return 7; }
+  try { const p = await audit(ev); if (p) failed = [failed, p].filter(Boolean).join("; "); ev.summary.verdict = failed ? "FAIL" : PASS_VERDICT[args.scope]; ev.summary.stop_reason = failed; ev.summary.not_run_stages = Object.entries(ev.summary.stage_status).filter(([, x]) => x === "NOT RUN").map(([x]) => x); ev.summary.finished_at = new Date().toISOString(); ev.save(); ev.log(failed ? `WP01-F bounded run: FAIL (${failed})` : `WP01-F bounded run: ${ev.summary.verdict}`); } catch (e) { console.error(`audit/evidence failure: ${e.message ?? e}`); ev.close(); return 7; }
   ev.close(); return failed ? 1 : 0;
 }
 

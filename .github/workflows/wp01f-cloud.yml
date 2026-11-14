@@ -102,7 +102,7 @@ jobs:
           esac
           echo "GODOT=$godot_bin" >> "$GITHUB_ENV"
 
-      - name: Run WP01-F bounded core acceptance
+      - name: Run WP01-G C2-E1 bounded diag-t2 acceptance (Core + T2 diagnostic)
         id: acceptance
         shell: bash
         run: |
@@ -113,7 +113,7 @@ jobs:
             --evidence-dir "$WP01F_EVIDENCE_DIR" \
             --evidence-id "$WP01F_EVIDENCE_ID" \
             --godot "$GODOT" \
-            --scope core \
+            --scope diag-t2 \
             2>&1 | node nakama/scripts/run_wp01f_bounded.mjs \
               --run-id "$WP01F_RUN_ID" \
               --evidence-dir "$WP01F_EVIDENCE_DIR" \
@@ -154,7 +154,7 @@ jobs:
             --run-id "$WP01F_RUN_ID" \
             --evidence-dir "$WP01F_EVIDENCE_DIR" \
             --evidence-id "$WP01F_EVIDENCE_ID" \
-            --finalize --scope core
+            --finalize --scope diag-t2
 
       - name: Verify final manifest
         id: verify
