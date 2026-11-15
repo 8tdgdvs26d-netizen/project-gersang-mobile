@@ -1,11 +1,13 @@
-name: WP01-F cloud acceptance (dedicated branch, review-gated)
+name: WP01-G C2-E2 full-scope cloud acceptance (dedicated branch, review-gated)
 
-# WP01-F only. The review branch does not match this trigger. Updating the
-# execution branch remains a separate Charlie Approval 2 action.
+# Runs ONLY on a push to the dedicated WP01-G C2-E2 execution branch. Review
+# and preparation branches do not match this trigger, and the old WP01-F
+# execution branch no longer triggers this file. Creating or updating the
+# execution branch is a separate Charlie Approval 2 action.
 on:
   push:
     branches:
-      - wp01-f-cloud-execution
+      - wp01-g-c2-e2-cloud-execution
 
 permissions:
   contents: read
@@ -21,7 +23,7 @@ jobs:
       WP01F_RUN_ID: "wp01f_${{ github.run_id }}_${{ github.run_attempt }}"
 
     steps:
-      - name: Checkout triggering WP01-F execution branch read-only
+      - name: Checkout triggering WP01-G C2-E2 execution branch read-only
         uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -102,7 +104,7 @@ jobs:
           esac
           echo "GODOT=$godot_bin" >> "$GITHUB_ENV"
 
-      - name: Run WP01-F bounded core acceptance
+      - name: Run WP01-F bounded acceptance, explicit full scope (core + WP01-G T1-T4, DL)
         id: acceptance
         shell: bash
         run: |
@@ -113,7 +115,7 @@ jobs:
             --evidence-dir "$WP01F_EVIDENCE_DIR" \
             --evidence-id "$WP01F_EVIDENCE_ID" \
             --godot "$GODOT" \
-            --scope core \
+            --scope full \
             2>&1 | node nakama/scripts/run_wp01f_bounded.mjs \
               --run-id "$WP01F_RUN_ID" \
               --evidence-dir "$WP01F_EVIDENCE_DIR" \
@@ -154,7 +156,7 @@ jobs:
             --run-id "$WP01F_RUN_ID" \
             --evidence-dir "$WP01F_EVIDENCE_DIR" \
             --evidence-id "$WP01F_EVIDENCE_ID" \
-            --finalize --scope core
+            --finalize --scope full
 
       - name: Verify final manifest
         id: verify

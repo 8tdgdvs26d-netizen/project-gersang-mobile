@@ -77,10 +77,12 @@ func _verify_isolation() -> void:
 	var dir := DirAccess.open("res://scripts")
 	for file in dir.get_files():
 		# The online layer itself: the WP01 client, the WP01-B adapter, the
-		# WP01-C Online TEST mode and the WP01-E combat adapter / TEST mode
-		# (separate scenes, not the normal game).
+		# WP01-C Online TEST mode, the WP01-E combat adapter / TEST mode
+		# (separate scenes, not the normal game) and the WP01-G C2-E2 bounded
+		# read transport owned by the WP01 client.
 		if file.ends_with(".gd") and not file in ["online_progress_client.gd", "online_trade_adapter.gd", "online_trade_test_mode.gd",
-				"online_combat_adapter.gd", "online_combat_test_mode.gd", "online_progress_resume_test_mode.gd"]:
+				"online_combat_adapter.gd", "online_combat_test_mode.gd", "online_progress_resume_test_mode.gd",
+				"online_read_transport.gd"]:
 			var source := FileAccess.get_file_as_string("res://scripts/" + file)
 			_check(not source.contains("OnlineProgressClient") and not source.contains("OnlineTradeAdapter") and not source.contains("OnlineCombatAdapter") and not source.contains("Nakama"),
 				"WP01 / WP01-B do not wire the online layer into gameplay yet (%s)" % file)

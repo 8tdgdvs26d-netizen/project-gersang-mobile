@@ -42,6 +42,7 @@ signal gameplay_session_superseded
 const SUPERSEDED_REASON := "gameplay_session_superseded"
 
 const NakamaHTTPAdapterScript := preload("res://addons/com.heroiclabs.nakama/client/NakamaHTTPAdapter.gd")
+const OnlineReadTransportScript := preload("res://scripts/online_read_transport.gd")
 
 ## WP01-G Phase C1: requests use the SDK's NON-threaded HTTP mode. In threaded
 ## mode, when a server accepts the connection but never answers, the request
@@ -55,6 +56,7 @@ const RPC_SESSION_BEGIN := "vs01_session_begin"
 const RPC_PROGRESS_GET := "vs01_progress_get"
 const RPC_TRADE := "vs01_trade"
 const RPC_COMBAT_REWARD_CLAIM := "vs01_combat_reward_claim"
+const BOUNDED_READ_RPC_IDS := [RPC_PROGRESS_GET, "vs01e_progression_get"]
 
 ## Hosts where D1 local email TEST accounts may be used. Anything else must
 ## use Sign in with Apple.
@@ -98,14 +100,28 @@ var _auth_epoch := 0
 var _pending := {}
 ## Pending commands of accounts that are not signed in right now (user_id -> dict).
 var _pending_by_user := {}
+## C2-E2 is opt-in so existing isolated modes and their scripted clients keep
+## their exact behavior. The Resume mode enables it for its two approved reads.
+var _bounded_reads_enabled := false
+var _read_transport: OnlineReadTransport
 
 
 func configure(p_host: String, p_port: int, p_scheme: String = "http", p_server_key: String = "defaultkey") -> void:
+	_cancel_bounded_reads()
 	host = p_host
 	port = p_port
 	scheme = p_scheme
 	server_key = p_server_key
 	_client = null
+
+
+func enable_bounded_reads() -> void:
+	_bounded_reads_enabled = true
+	_get_read_transport()
+
+
+func cancel_bounded_reads() -> void:
+	_cancel_bounded_reads()
 
 
 func is_local_test_host() -> bool:
@@ -160,6 +176,7 @@ func sign_in_email_test(email: String, password: String, create: bool = true) ->
 
 
 func sign_out_local() -> void:
+	_cancel_bounded_reads()
 	_park_pending(get_user_id())
 	_session = null
 	_gameplay_session_id = ""
@@ -183,6 +200,7 @@ func begin_gameplay_session() -> Dictionary:
 		# one); an older begin answering late must not bring back its
 		# (already superseded) session id.
 		if int(view.get("revision", -1)) >= _session_revision:
+			_cancel_bounded_reads()
 			_session_revision = int(view.get("revision", -1))
 			_gameplay_session_id = result["data"]["gameplay_session_id"]
 			_superseded = false
@@ -369,6 +387,8 @@ static func _stale(result: Dictionary) -> Dictionary:
 func _rpc(id: String, payload: Dictionary) -> Dictionary:
 	if not is_signed_in():
 		return _outcome(NOT_SIGNED_IN, "not_signed_in")
+	if _bounded_reads_enabled and id in BOUNDED_READ_RPC_IDS:
+		return await _get_read_transport().read_rpc(self, id, payload)
 	var response = await _get_client().rpc_async(_session, id, JSON.stringify(payload))
 	if response.is_exception():
 		var error: NakamaException = response.get_exception()
@@ -394,6 +414,7 @@ func _accept_session(session: NakamaSession) -> Dictionary:
 		if error != null:
 			rejected["grpc_status"] = error.grpc_status_code
 		return rejected
+	_cancel_bounded_reads()
 	var previous_user := get_user_id()
 	if _session == null or session.user_id != previous_user:
 		# Signed out before, or a different account: nothing of the previous
@@ -429,6 +450,19 @@ func _get_client() -> NakamaClient:
 		# SDK's own transient retry but never rely on it for correctness.
 		_client.auto_retry = true
 	return _client
+
+
+func _get_read_transport() -> OnlineReadTransport:
+	if _read_transport == null:
+		_read_transport = OnlineReadTransportScript.new()
+		_read_transport.name = "OnlineReadTransport"
+		add_child(_read_transport)
+	return _read_transport
+
+
+func _cancel_bounded_reads() -> void:
+	if _read_transport != null:
+		_read_transport.cancel_all()
 
 
 static func _outcome(status: String, reason: String) -> Dictionary:
