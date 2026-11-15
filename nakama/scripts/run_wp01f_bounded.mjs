@@ -26,13 +26,77 @@ const SENTINEL = ".wp01f-run.json";
 const EXPECTED_GODOT = "4.7.2";
 const MIN_VERIFY_SCRIPTS = 72;
 const WRITER_FILES = new Set(["environment.txt", "docker-version.log", "godot-version.txt", "wp01f-console.log", "leftover-inventory.log"]);
-const PLANNED = ["relevant_tests", "full_normal_regression", "live_seed", "fresh_process_readback", "nakama_restart", "restart_readback", "C01-C08", "stress_phase", "acceptance_audit"];
-const TRANSFERRED = ["T1", "T2", "T3", "T4"].map((id) => ({ id, status: "NOT RUN / TRANSFERRED TO WP01-G" }));
+// WP01-G B2 targeted stress: one Godot process, one new account, one fault
+// state, one log and one result per case. Run only with --scope full.
+const STRESS_CASES = ["t1", "t2", "t3", "t4", "dl"];
+const stressStage = (c) => `stress_${c.toUpperCase()}`;
+// FAILED messages of the live script that report protected-data or isolation
+// problems. They are SAFETY (STOP), never ordinary FUNCTIONAL FAILs. The run
+// refuses to start if the live script no longer contains them verbatim.
+const GODOT_SAFETY_CHECKS = ["No local save file was created or changed", "No local save file exists in the isolated user data folder", "Godot reports a user data folder"];
+// Child output that must never be written into evidence.
+const SENSITIVE_PATTERNS = [
+  ["authorization_header", /\bauthorization\s*:\s*\S+/i],
+  ["bearer_token", /\bbearer\s+[A-Za-z0-9._~+/=-]{16,}/i],
+  ["jwt", /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]*/],
+  ["token_field", /["']?\b(?:token|refresh_token|session_token|access_token)["']?\s*[:=]\s*["'][^"'\s]{16,}["']/i],
+  ["password_field", /["']?\bpassword["']?\s*[:=]\s*["'][^"'\s]{6,}["']/i],
+  ["password_param", /\bpassword=[^\s&"']{6,}/i],
+];
+function sensitiveFindings(text, secrets = []) {
+  const found = [];
+  if (secrets.some((x) => typeof x === "string" && x.length >= 8 && text.includes(x))) found.push("known_test_secret");
+  for (const [id, re] of SENSITIVE_PATTERNS) if (re.test(text)) found.push(id);
+  return found;
+}
+function godotSafetyFailures(out) {
+  return [...new Set(out.split("\n").filter((x) => /^(ERROR: )?FAILED:/.test(x)).map((x) => x.replace(/^(ERROR: )?FAILED:\s*/, "").trim()).filter((m) => GODOT_SAFETY_CHECKS.some((k) => m.startsWith(k))))];
+}
+// One stress-case process -> { safety, functional, one }. SAFETY wins over
+// FUNCTIONAL. `seen` (user ids, pids, nonces) is extended only when safe.
+function classifyCase(c, r, rs, { isInside, seen }) {
+  const res = { safety: "", functional: "", one: rs[0] };
+  const safe = (why) => { res.safety = why; return res; };
+  if (r.rec.sensitive_output?.length) return safe(`sensitive output withheld (${r.rec.sensitive_output.join(", ")})`);
+  if (r.rec.error) return safe(`could not start: ${r.rec.error}`);
+  if (r.rec.survivors !== "no") return safe(`process survivors ${r.rec.survivors}`);
+  const godotSafety = godotSafetyFailures(r.output); if (godotSafety.length) return safe(`Godot reported: ${godotSafety.join(" | ")}`);
+  if (rs.some((x) => x.unparsable)) return safe("unparsable result");
+  if (rs.some((x) => !isInside(x.user_data_dir))) return safe("user data outside run root");
+  if (rs.length > 1 || rs.some((x) => x.phase !== c || x.label !== c)) return safe("result does not belong to exactly this case");
+  const one = rs[0], uid = typeof one?.user_id === "string" ? one.user_id : "";
+  if (one) {
+    if (uid && seen.users.has(uid)) return safe("account shared with another case or the seed account");
+    if (seen.pids.has(one.pid) || seen.nonces.has(one.nonce)) return safe("process identity reused");
+    if (uid) seen.users.add(uid); seen.pids.add(one.pid); seen.nonces.add(one.nonce);
+  }
+  const guard = one?.cases?.stopped_at ? `stopped at ${one.cases.stopped_at}${one.cases.guard_expired ? " (guard expired)" : ""}` : "";
+  let p = r.rec.timed_out ? "launcher case timeout (test guard also failed)" : r.rec.exit_code !== 0 ? `exit ${r.rec.exit_code}` : "";
+  if (!p) p = godotVerdict(r.output, new RegExp(`VS-01 WP01-F live ${c} passed`));
+  if (!p && !one) p = "no case result";
+  if (!p && guard) p = guard;
+  if (!p && !uid) p = "no user id";
+  if (p && guard && !p.includes(guard)) p = `${p}; ${guard}`;
+  res.functional = p; return res;
+}
+class CaseSafety extends Error {}
+// B2 orchestration: a CaseSafety from runCase ends the loop at once (no later
+// case runs); any other non-PASS outcome is recorded and the loop goes on.
+async function runStressCases(cases, runCase) {
+  const outcomes = [], failed = [];
+  for (const c of cases) {
+    let o; try { o = await runCase(c); } catch (e) { if (e instanceof CaseSafety) return { outcomes, failed, safety: `${c}: ${e.message}` }; throw e; }
+    outcomes.push(o); if (o.verdict !== "PASS") failed.push(`${c}: ${o.reason}`);
+  }
+  return { outcomes, failed, safety: "" };
+}
+const PLANNED = ["relevant_tests", "full_normal_regression", "live_seed", "fresh_process_readback", "nakama_restart", "restart_readback", "C01-C08", ...STRESS_CASES.map(stressStage), "acceptance_audit"];
+const TRANSFERRED = ["T1", "T2", "T3", "T4", "DL"].map((id) => ({ id, status: "NOT RUN / TRANSFERRED TO WP01-G" }));
 const REQUIRED_PASS = ["environment.txt", "docker-version.log", "godot-version.txt", "wp01f-console.log", "launcher.log", "summary.json", STATE_FILE, "leftover-inventory.log", "inventory-launcher.log", "leftover-inventory.json"];
 const OUTCOMES = new Set(["success", "failure", "cancelled", "skipped"]);
 const TIMEOUT_MS = { nodeTest: 600000, npmCi: 600000, nakamaTest: 600000, godotImport: 600000,
   probe: 120000, verify: 240000, composeUp: 900000, health: 180000, seed: 240000,
-  readback: 180000, restart: 300000, stress: 420000, short: 60000 };
+  readback: 180000, restart: 300000, stressCase: 180000, short: 60000 };
 const KILL_GRACE_MS = 5000;
 class SafetyError extends Error {}
 
@@ -194,8 +258,8 @@ class Evidence {
     this.summaryFd = inventory ? null : new Leaf(args.evidenceDir, "summary.json", args.evidenceId, temp);
     this.stateFd = null;
     this.summary = inventory ? null : { run_id: args.runId, started_at: new Date().toISOString(), scope: args.scope,
-      scope_note: args.scope === "core" ? "Core resume only; T1-T4 NOT RUN and transferred to WP01-G." : "Full scope includes targeted stress; not Full Stress or Gate X/FS-08.",
-      planned_steps: PLANNED, transferred_cases: args.scope === "core" ? TRANSFERRED : [],
+      scope_note: args.scope === "core" ? "Core resume only; T1-T4 and DL NOT RUN and transferred to WP01-G." : "Full scope: core plus WP01-G targeted stress T1, T2, T3, T4 and DL, each in its own Godot process with its own account; not Full Stress or Gate X/FS-08.",
+      planned_steps: PLANNED, transferred_cases: args.scope === "core" ? TRANSFERRED : [], stress_cases: [],
       stage_status: Object.fromEntries(PLANNED.map((x) => [x, "NOT RUN"])), steps: [], comparisons: [], results: {}, verdict: "RUNNING" };
     if (this.summaryFd) this.save();
   }
@@ -227,17 +291,42 @@ function runBounded(ev, name, cmd, argv, { cwd = REPO, env = process.env, timeou
     const log = ev.next(name), display = [cmd, ...argv].join(" "), started = Date.now(), chunks = [];
     let child, timed = false, closed = false;
     try { child = spawn(cmd, argv, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] }); }
-    catch (e) { const rec = { name, command: display, cwd: path.relative(REPO, cwd) || ".", exit_code: null, signal: null, timed_out: false, survivors: "no", duration_ms: 0, log, error: String(e) }; ev.file(log, `$ ${display}\nspawn failed: ${e}\n`); resolve({ rec, output: "" }); return; }
+    catch (e) {
+      // Same rule as a normal run: nothing sensitive reaches evidence, even in a spawn error
+      // (Node can echo argv values, e.g. ERR_INVALID_ARG_VALUE).
+      const errText = String(e), cmdSensitive = sensitiveFindings(display, ev.secrets), sensitive = [...new Set([...cmdSensitive, ...sensitiveFindings(errText, ev.secrets)])];
+      const shown = cmdSensitive.length ? "<command withheld: sensitive data detected>" : display, error = sensitive.length ? `spawn failed (error text withheld: sensitive data detected: ${sensitive.join(", ")})` : errText;
+      const rec = { name, command: ev.redact(shown), cwd: path.relative(REPO, cwd) || ".", exit_code: null, signal: null, timed_out: false, survivors: "no", duration_ms: 0, log, error, sensitive_output: sensitive };
+      ev.file(log, `$ ${shown}\nspawn failed: ${sensitive.length ? `<error withheld: sensitive data detected (${sensitive.join(", ")})>` : errText}\n`);
+      if (sensitive.length) ev.log(`SAFETY: sensitive spawn error of ${name} withheld from ${log} (${sensitive.join(", ")})`);
+      resolve({ rec, output: "" }); return;
+    }
     const pgid = child.pid; ev.pgids.push(pgid); child.stdout.on("data", (c) => chunks.push(c)); child.stderr.on("data", (c) => chunks.push(c));
     const timer = setTimeout(() => { timed = true; stopGroup(pgid, "SIGTERM"); setTimeout(() => { if (!closed) stopGroup(pgid, "SIGKILL"); }, KILL_GRACE_MS).unref(); }, timeoutMs);
     child.on("error", (e) => chunks.push(Buffer.from(`\nchild error: ${e}\n`)));
     child.on("close", (code, signal) => { closed = true; clearTimeout(timer); const survivors = groupAlive(pgid); if (survivors === "yes") stopGroup(pgid, "SIGKILL");
-      const output = Buffer.concat(chunks).toString("utf8"); const rec = { name, command: ev.redact(display), cwd: path.relative(REPO, cwd) || ".", exit_code: code, signal, timed_out: timed, survivors, duration_ms: Date.now() - started, log, pgid };
-      ev.file(log, `$ ${display}\n# cwd=${rec.cwd} timeout_ms=${timeoutMs}\n${output}\n# exit=${code} signal=${signal} timed_out=${timed} survivors=${survivors} duration_ms=${rec.duration_ms}\n`); resolve({ rec, output }); });
+      const output = Buffer.concat(chunks).toString("utf8"), cmdSensitive = sensitiveFindings(display, ev.secrets), sensitive = [...new Set([...sensitiveFindings(output, ev.secrets), ...cmdSensitive])];
+      const shown = cmdSensitive.length ? "<command withheld: sensitive data detected>" : display;
+      const rec = { name, command: ev.redact(shown), cwd: path.relative(REPO, cwd) || ".", exit_code: code, signal, timed_out: timed, survivors, duration_ms: Date.now() - started, log, pgid, sensitive_output: sensitive };
+      // Sensitive output is never written (not even redacted) and never handed on.
+      const body = sensitive.length ? `# OUTPUT WITHHELD: sensitive data detected (${sensitive.join(", ")}); ${Buffer.byteLength(output)} bytes not written to evidence` : output;
+      ev.file(log, `$ ${shown}\n# cwd=${rec.cwd} timeout_ms=${timeoutMs}\n${body}\n# exit=${code} signal=${signal} timed_out=${timed} survivors=${survivors} duration_ms=${rec.duration_ms}\n`);
+      if (sensitive.length) ev.log(`SAFETY: sensitive output of ${name} withheld from ${log} (${sensitive.join(", ")})`);
+      resolve({ rec, output: sensitive.length ? "" : output }); });
   });
 }
 
 function godotVerdict(out, re) { const lines = out.split("\n"); if (/SCRIPT ERROR|Parse Error/.test(out)) return "script or parse error"; if (lines.some((x) => /^(ERROR: )?FAILED:/.test(x))) return "test reported FAILED"; return lines.some((x) => !/^(ERROR: )?FAILED:/.test(x) && re.test(x)) ? "" : "no success line"; }
+function basicProblem(r) { return r.rec.sensitive_output?.length ? `SAFETY sensitive output withheld (${r.rec.sensitive_output.join(", ")})` : r.rec.error ? `could not start: ${r.rec.error}` : r.rec.timed_out ? "timed out" : r.rec.survivors !== "no" ? `survivors ${r.rec.survivors}` : r.rec.exit_code !== 0 ? `exit ${r.rec.exit_code}` : ""; }
+// Core live step (seed / readback) -> problem, "" when PASS. SAFETY comes first: withheld
+// sensitive output, then a Godot-reported save / isolation failure, before any exit-code reason.
+function coreLiveProblem(phase, r, rs, isInside) {
+  if (r.rec.sensitive_output?.length) return basicProblem(r);
+  const gs = godotSafetyFailures(r.output); if (gs.length) return `SAFETY Godot reported: ${gs.join(" | ")}`;
+  let p = basicProblem(r) || godotVerdict(r.output, new RegExp(`VS-01 WP01-F live ${phase} passed`));
+  if (!p && (rs.some((x) => x.unparsable) || rs.some((x) => !isInside(x.user_data_dir)))) p = "invalid result/user data";
+  return p;
+}
 function results(out) { return out.split("\n").filter((x) => x.includes("WP01F_RESULT ")).map((x) => { try { return JSON.parse(x.slice(x.indexOf("WP01F_RESULT ") + 13)); } catch { return { unparsable: true }; } }); }
 function c01FreshRuntime(seed, fresh, restarted) {
   const phases = [seed, fresh, restarted];
@@ -275,7 +364,7 @@ async function inventory(ev, args, temp) {
     const project = state.compose_project; if (project !== composeProject(args.runId) || !PROJECT_RE.test(project)) throw new Error("Compose project differs");
     const ps = await runBounded(ev, "inventory-compose-containers", "docker", ["ps", "-a", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Names}} {{.Status}}"], { timeoutMs: TIMEOUT_MS.short });
     const vs = await runBounded(ev, "inventory-compose-volumes", "docker", ["volume", "ls", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Name}}"], { timeoutMs: TIMEOUT_MS.short });
-    if ([ps, vs].some((x) => x.rec.exit_code !== 0 || x.rec.timed_out || x.rec.survivors !== "no")) throw new Error("Docker inventory incomplete");
+    if ([ps, vs].some((x) => x.rec.exit_code !== 0 || x.rec.timed_out || x.rec.survivors !== "no" || x.rec.sensitive_output?.length)) throw new Error("Docker inventory incomplete");
     const n = (x) => x.output.split("\n").filter((y) => y.trim()).length; report.compose = `PRESERVED: ${project}, ${n(ps)} container(s), ${n(vs)} volume(s)`;
   }
   const p = rootProblem(state); if (p && p !== "absent") throw new Error(`work root: ${p}`); report.root = p === "absent" ? "absent" : `PRESERVED: ${state.root}`;
@@ -292,13 +381,14 @@ function stage(ev, name, status) { ev.summary.stage_status[name] = status; ev.sa
 
 async function acceptance(ev, args, temp) {
   let active = "relevant_tests"; stage(ev, active, "RUNNING");
-  const basic = (r) => r.rec.error ? `could not start: ${r.rec.error}` : r.rec.timed_out ? "timed out" : r.rec.survivors !== "no" ? `survivors ${r.rec.survivors}` : r.rec.exit_code !== 0 ? `exit ${r.rec.exit_code}` : "";
+  const basic = basicProblem;
   const record = (rec, problem, extra = {}) => { const x = { ...rec, verdict: problem ? "FAIL" : "PASS", reason: problem, ...extra }; ev.summary.steps.push(x); ev.save(); ev.log(`${x.verdict} ${rec.name}${problem ? ` (${problem})` : ""}`); if (problem) throw new Stop(`${rec.name}: ${problem}`); };
   const next = (name) => { if (active && ev.summary.stage_status[active] === "RUNNING") stage(ev, active, "PASS"); active = name; stage(ev, name, "RUNNING"); };
   try {
     const godot = fs.realpathSync(args.godot); if (!fs.statSync(godot).isFile()) throw new Stop("--godot is not a file");
     const head = await runBounded(ev, "git-head", "git", ["rev-parse", "HEAD"], { timeoutMs: TIMEOUT_MS.short }); record(head.rec, basic(head)); ev.summary.source_sha = head.output.trim();
     const before = await runBounded(ev, "git-status-before", "git", ["status", "--porcelain"], { timeoutMs: TIMEOUT_MS.short }); record(before.rec, basic(before) || (before.output.trim() ? "checkout has changes" : ""));
+    const liveSource = fs.readFileSync(path.join(GODOT_DIR, "tests", path.basename(LIVE_SCRIPT)), "utf8"); if (GODOT_SAFETY_CHECKS.some((m) => !liveSource.includes(`"${m}"`))) throw new Stop("SAFETY classifier out of date: live script safety check messages changed");
     const state = createRoot(ev, args.runId, temp), recheck = (label) => { const p = rootProblem(state); if (p) throw new Stop(`${label}: ${p}`); }, nodeEnv = { ...process.env, TMPDIR: path.join(state.root, "tmp") };
     const rt = await runBounded(ev, "node-root-tests", "npm", ["test"], { cwd: REPO, env: nodeEnv, timeoutMs: TIMEOUT_MS.nodeTest }); record(rt.rec, basic(rt), { ci_kind: "Node, not Godot" });
     const ci = await runBounded(ev, "nakama-npm-ci", "npm", ["ci"], { cwd: NAKAMA_DIR, env: nodeEnv, timeoutMs: TIMEOUT_MS.npmCi }); record(ci.rec, basic(ci));
@@ -314,7 +404,7 @@ async function acceptance(ev, args, temp) {
     const h0 = Date.now(), ok = await healthy(TIMEOUT_MS.health); record({ name: "nakama-healthy", command: "healthcheck", exit_code: ok ? 0 : 1, signal: null, timed_out: !ok, survivors: "no", duration_ms: Date.now() - h0, log: "" }, ok ? "" : "not healthy");
     const tag = args.runId.replace(/_/g, "-"), account = { email: `${tag}-a@wp01f.invalid`, password: crypto.randomBytes(24).toString("base64url") }; ev.secrets.push(account.password);
     const liveEnv = (a, prefix) => godotEnv(state, { [`${prefix}_EMAIL`]: a.email, [`${prefix}_PASSWORD`]: a.password });
-    const live = async (stepName, phase, label, env, timeoutMs) => { recheck(`before ${stepName}`); const r = await runBounded(ev, stepName, godot, ["--headless", "--path", GODOT_DIR, "--script", LIVE_SCRIPT, "--", "--phase", phase, "--label", label, "--host", HOST, "--port", String(API_PORT)], { env, timeoutMs }); const rs = results(r.output); ev.summary.results[label] = rs; let p = basic(r) || godotVerdict(r.output, new RegExp(`VS-01 WP01-F live ${phase} passed`)); if (!p && (rs.some((x) => x.unparsable) || rs.some((x) => !inside(state.root, x.user_data_dir)))) p = "invalid result/user data"; record(r.rec, p); return rs; };
+    const live = async (stepName, phase, label, env, timeoutMs) => { recheck(`before ${stepName}`); const r = await runBounded(ev, stepName, godot, ["--headless", "--path", GODOT_DIR, "--script", LIVE_SCRIPT, "--", "--phase", phase, "--label", label, "--host", HOST, "--port", String(API_PORT)], { env, timeoutMs }); const rs = results(r.output); ev.summary.results[label] = rs; const p = coreLiveProblem(phase, r, rs, (d) => inside(state.root, d)); record(r.rec, p, p.startsWith("SAFETY") ? { failure_class: "safety" } : {}); return rs; };
     next("live_seed"); const [seed] = await live("live-seed", "seed", "seed", liveEnv(account, "MYRIAL_WP01F"), TIMEOUT_MS.seed);
     next("fresh_process_readback"); const rb1 = await live("live-readback-fresh-process", "readback", "fresh_process", liveEnv(account, "MYRIAL_WP01F"), TIMEOUT_MS.readback);
     next("nakama_restart"); const rr = await runBounded(ev, "compose-restart-nakama", "docker", ["compose", "-p", state.compose_project, "-f", COMPOSE_FILE, "restart", "nakama"], { cwd: NAKAMA_DIR, timeoutMs: TIMEOUT_MS.restart }); record(rr.rec, basic(rr));
@@ -327,14 +417,38 @@ async function acceptance(ev, args, temp) {
     expect("C05", same(seed, fresh, ["level", "exp", "exp_to_next"]), "hero values preserved"); expect("C06", Number.isInteger(seed.hero_revision) && fresh.hero_revision === seed.hero_revision, "hero revision preserved");
     expect("C07", same(fresh, relogin, ["money", "goods", "level", "exp", "hero_revision"]) && relogin.trade_revision === fresh.trade_revision + 1, "relogin");
     expect("C08", same(relogin, restarted, ["money", "goods", "level", "exp", "exp_to_next", "hero_revision"]) && restarted.trade_revision === relogin.trade_revision + 1, "after restart"); ev.save(); if (ev.summary.comparisons.some((x) => x.verdict !== "PASS")) throw new Stop("comparison failed");
-    next("stress_phase"); if (args.scope === "full") { const a = { email: `${tag}-b@wp01f.invalid`, password: crypto.randomBytes(24).toString("base64url") }; ev.secrets.push(a.password); await live("live-targeted-stress", "stress", "stress", liveEnv(a, "MYRIAL_WP01F_STRESS"), TIMEOUT_MS.stress); stage(ev, active, "PASS"); } else stage(ev, active, "NOT RUN / TRANSFERRED TO WP01-G"); active = "";
+    // B2: a SAFETY / ISOLATION problem throws Stop at once (no later case runs);
+    // a FUNCTIONAL failure is recorded and the next case still runs; the run
+    // FAILs at the end if any case failed.
+    const seen = { users: new Set([seed.user_id]), pids: new Set(), nonces: new Set() };
+    const liveCase = async (c, env) => {
+      recheck(`before stress case ${c}`); const iso2 = isolationProblem(state); if (iso2) throw new CaseSafety(`isolation: ${iso2}`);
+      const r = await runBounded(ev, `live-stress-${c}`, godot, ["--headless", "--path", GODOT_DIR, "--script", LIVE_SCRIPT, "--", "--phase", c, "--label", c, "--host", HOST, "--port", String(API_PORT)], { env, timeoutMs: TIMEOUT_MS.stressCase });
+      const rs = results(r.output); ev.summary.results[c] = rs;
+      const k = classifyCase(c, r, rs, { isInside: (d) => inside(state.root, d), seen });
+      if (k.safety) { ev.summary.steps.push({ ...r.rec, verdict: "FAIL", reason: `SAFETY: ${k.safety}`, failure_class: "safety", case: c }); ev.save(); ev.log(`FAIL live-stress-${c} (SAFETY: ${k.safety})`); throw new CaseSafety(k.safety); }
+      const p = k.functional, one = k.one;
+      const x = { ...r.rec, verdict: p ? "FAIL" : "PASS", reason: p, failure_class: p ? "functional" : "", case: c, ci_kind: "Godot headless live (local disposable Nakama)" };
+      ev.summary.steps.push(x); ev.save(); ev.log(`${x.verdict} live-stress-${c}${p ? ` (${p})` : ""}`);
+      return { id: c, verdict: x.verdict, reason: p, user_id: one?.user_id ?? null, pid: one?.pid ?? null, cases: one?.cases ?? null, log: r.rec.log, duration_ms: r.rec.duration_ms };
+    };
+    if (args.scope === "full") {
+      const res = await runStressCases(STRESS_CASES, async (c) => {
+        next(stressStage(c));
+        const h = Date.now(), okc = await healthy(TIMEOUT_MS.health); if (!okc) throw new CaseSafety(`server not healthy before the case (${Date.now() - h} ms)`);
+        const a = { email: `${tag}-${c}@wp01f.invalid`, password: crypto.randomBytes(24).toString("base64url") }; ev.secrets.push(a.password);
+        const outcome = await liveCase(c, liveEnv(a, "MYRIAL_WP01F_CASE")); ev.summary.stress_cases.push(outcome); stage(ev, active, outcome.verdict); return outcome;
+      });
+      if (res.safety) throw new Stop(`stress case SAFETY STOP: ${res.safety}`);
+      active = ""; if (res.failed.length) throw new Stop(`stress case FAIL: ${res.failed.join("; ")}`);
+    } else { stage(ev, active, "PASS"); for (const c of STRESS_CASES) stage(ev, stressStage(c), "NOT RUN / TRANSFERRED TO WP01-G"); active = ""; }
   } catch (e) { if (active && ev.summary.stage_status[active] === "RUNNING") stage(ev, active, "FAIL"); throw e; }
 }
 
 async function audit(ev) {
   stage(ev, "acceptance_audit", "RUNNING"); let problem = "";
   const s = await runBounded(ev, "git-status-after", "git", ["status", "--porcelain"], { timeoutMs: TIMEOUT_MS.short });
-  const p = s.rec.error ? "could not start" : s.rec.timed_out ? "timed out" : s.rec.survivors !== "no" ? "survivors" : s.rec.exit_code !== 0 ? `exit ${s.rec.exit_code}` : s.output.trim() ? "checkout changed" : "";
+  const p = s.rec.sensitive_output?.length ? "SAFETY sensitive output withheld" : s.rec.error ? "could not start" : s.rec.timed_out ? "timed out" : s.rec.survivors !== "no" ? "survivors" : s.rec.exit_code !== 0 ? `exit ${s.rec.exit_code}` : s.output.trim() ? "checkout changed" : "";
   ev.summary.steps.push({ ...s.rec, verdict: p ? "FAIL" : "PASS", reason: p }); if (p) problem = `git-status-after: ${p}`;
   const groups = ev.pgids.map((pgid) => ({ pgid, status: groupAlive(pgid) })); ev.summary.process_survivor_inventory = groups; if (groups.some((x) => x.status !== "no")) problem = [problem, "process survivor yes/unknown"].filter(Boolean).join("; ");
   stage(ev, "acceptance_audit", problem ? "FAIL" : "PASS"); return problem;
@@ -361,7 +475,7 @@ function finalize(args, temp) {
     try { const x = readSafe(args.evidenceDir, name, args.evidenceId, temp); files.push({ name, size: Number(x.size), sha256: crypto.createHash("sha256").update(x.data).digest("hex") }); }
     catch (e) { if (e instanceof SafetyError) { f.close(); throw e; } anomalies.push({ name, type: currentFileType(args.evidenceDir, name), reason: `manifest-read-failed: ${e.code ?? e.message ?? e}` }); }
   }
-  const checks = { acceptance_outcome_valid: OUTCOMES.has(ao), inventory_outcome_valid: OUTCOMES.has(io), acceptance_success: ao === "success", inventory_success: io === "success", scope_matches: summary.scope === args.scope, summary_verdict_matches: summary.verdict === (args.scope === "core" ? "PASS_CORE_SCOPE" : "PASS_FULL_SCOPE"), acceptance_audit_passed: summary.stage_status?.acceptance_audit === "PASS", inventory_complete: inv?.complete === true, required_evidence_present: REQUIRED_PASS.every((x) => first.files.includes(x)), no_anomalies: anomalies.length === 0 };
+  const checks = { acceptance_outcome_valid: OUTCOMES.has(ao), inventory_outcome_valid: OUTCOMES.has(io), acceptance_success: ao === "success", inventory_success: io === "success", scope_matches: summary.scope === args.scope, summary_verdict_matches: summary.verdict === (args.scope === "core" ? "PASS_CORE_SCOPE" : "PASS_FULL_SCOPE"), full_scope_cases_passed: args.scope !== "full" || (Array.isArray(summary.stress_cases) && summary.stress_cases.length === STRESS_CASES.length && STRESS_CASES.every((c) => summary.stress_cases.filter((x) => x.id === c && x.verdict === "PASS").length === 1 && summary.stage_status?.[stressStage(c)] === "PASS")), core_scope_claims_no_cases: args.scope !== "core" || (Array.isArray(summary.stress_cases) && summary.stress_cases.length === 0), acceptance_audit_passed: summary.stage_status?.acceptance_audit === "PASS", inventory_complete: inv?.complete === true, required_evidence_present: REQUIRED_PASS.every((x) => first.files.includes(x)), no_anomalies: anomalies.length === 0 };
   const verdict = Object.values(checks).every(Boolean) ? (args.scope === "core" ? "PASS_CORE_SCOPE" : "PASS_FULL_SCOPE") : "FAIL";
   try { f.once(JSON.stringify({ run_id: args.runId, scope: args.scope, acceptance_outcome: ao, inventory_outcome: io, checks, anomalies, final_verdict: verdict, finalized_at: new Date().toISOString() }, null, 2) + "\n"); } finally { f.close(); }
   const finalAudit = readSafe(args.evidenceDir, "final-audit.json", args.evidenceId, temp);
@@ -398,4 +512,7 @@ async function main() {
   ev.close(); return failed ? 1 : 0;
 }
 
-process.exitCode = await main();
+// Run only as the entry script; importing (for launcher self-tests) runs nothing.
+const isEntry = (() => { try { return Boolean(process.argv[1]) && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url)); } catch { return false; } })();
+if (isEntry) process.exitCode = await main();
+export { sensitiveFindings, godotSafetyFailures, classifyCase, runStressCases, runBounded, CaseSafety, GODOT_SAFETY_CHECKS, STRESS_CASES, basicProblem, coreLiveProblem };
