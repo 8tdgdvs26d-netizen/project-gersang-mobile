@@ -1,0 +1,423 @@
+name: SAFE-F2 v0.1 cloud test (dedicated execution branch, review-gated)
+
+# TEST-ONLY workflow. It exists only on the SAFE-F2 execution branch and is
+# never merged. It runs ONLY on a push to that branch; creating or updating
+# the branch is a separate Charlie approval (A-4 = the actual cloud run).
+# Nothing in this job deletes, cleans, commits or pushes anything.
+on:
+  push:
+    branches:
+      - safe-f2-v0.1-cloud-execution
+
+permissions:
+  contents: read
+
+concurrency:
+  group: safe-f2-v0.1-cloud-execution
+  cancel-in-progress: false
+
+jobs:
+  safe-f2-cloud-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      SAFE_F2_BASELINE_SHA: "fac32113377f50dca80211261d0a49db73932399"
+      SAFE_F2_R4_SHA256: "ab895451d5d17502b6c9b9ae5c4d636ec1172509ec847bf1e0f266ecf5c61a99"
+      SAFE_F2_WRAPPER_SHA256: "fa0fc067fe53352c09301b20dd49cba4107c7cfebc1965d72fd75ecc8ecd97d9"
+      SAFE_F2_RUNNER_SHA256: "295fc76b3dcecadf17b786c21e93d325393d3c54569415ca9b4881795115bdf8"
+      SAFE_F2_EXEC_REF: "refs/heads/safe-f2-v0.1-cloud-execution"
+      SAFE_F2_TARGET: "nakama/scripts/test_run_godot_regression_isolated.sh"
+      SAFE_F2_HARNESS: "nakama/scripts/safe_f2_cloud_harness.sh"
+      SAFE_F2_WORKFLOW: ".github/workflows/safe-f2-cloud.yml"
+      SAFE_F2_GROUPS: "N M F L N6 G R1 R2 R3"
+      GODOT_VERSION: "4.7.2"
+      GODOT_ARCHIVE: "Godot_v4.7.2-stable_linux.x86_64.zip"
+      GODOT_SHA256: "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4"
+
+    steps:
+      # ── Stage 1: SAFE PREFLIGHT (no test code runs) ──────────────────────
+      # B-1: the runner identity guard is the FIRST step. It needs no
+      # repository files. If it fails, every later step without an
+      # always()-type condition is skipped, so nothing is checked out and no
+      # test runs; the Stage 6 steps are skipped because SAFE_F2_ROOT is
+      # empty, and the final gate fails.
+      - name: Stage 1a - runner identity guard (fail closed, before checkout)
+        id: guard
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test "${GITHUB_ACTIONS:-}" = "true"
+          test "${RUNNER_ENVIRONMENT:-}" = "github-hosted"
+          test "${RUNNER_OS:-}" = "Linux"
+          test "$(uname -s)" = "Linux"
+          test "${ImageOS:-}" = "ubuntu24"
+          test "$(id -u)" -ne 0
+          test "${GITHUB_REPOSITORY:-}" = "8tdgdvs26d-netizen/project-gersang-mobile"
+          test "${GITHUB_REF:-}" = "$SAFE_F2_EXEC_REF"
+          test "${GITHUB_EVENT_NAME:-}" = "push"
+          test -n "${RUNNER_TEMP:-}"
+          case "$RUNNER_TEMP" in /?*) ;; *) echo "RUNNER_TEMP is not absolute" >&2; exit 1 ;; esac
+          test -d "$RUNNER_TEMP"
+          test "$(basename "$(readlink -f /bin/sh)")" = "dash"
+          echo "Runner identity guard passed."
+
+      # clean: false - the checkout action must not run its own clean-up of
+      # the workspace (no deleting operation anywhere in this job).
+      - name: Stage 1a2 - checkout the execution branch read-only (full history)
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          clean: false
+
+      - name: Stage 1b - create the bounded run root
+        id: root
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          safe_root="$(realpath "$RUNNER_TEMP")/safe-f2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test ! -e "$safe_root" && test ! -L "$safe_root"
+          mkdir -m 700 "$safe_root"
+          test -d "$safe_root" && test ! -L "$safe_root"
+          test "$(realpath "$safe_root")" = "$safe_root"
+          test "$(stat -c '%u' "$safe_root")" = "$(id -u)"
+          mkdir -m 700 "$safe_root/home" "$safe_root/tmp" "$safe_root/evidence"
+          # Exported only after every check above passed. Later steps that
+          # touch the run root require this value to be non-empty.
+          echo "SAFE_F2_ROOT=$safe_root" >> "$GITHUB_ENV"
+          echo "Run root: $safe_root"
+
+      - name: Stage 1c - exact code identity and environment record
+        id: identity
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${SAFE_F2_ROOT:-}"
+          ev="$SAFE_F2_ROOT/evidence/environment.txt"
+          {
+            echo "head_sha=$(git rev-parse HEAD)"
+            echo "review_commit_sha=$(git rev-parse HEAD~1)"
+            echo "baseline_sha=$(git rev-parse HEAD~2)"
+            echo "github_sha=$GITHUB_SHA"
+            echo "github_ref=$GITHUB_REF"
+            echo "run_id=$GITHUB_RUN_ID attempt=$GITHUB_RUN_ATTEMPT"
+            echo "job_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo "runner_name=${RUNNER_NAME:-} runner_environment=$RUNNER_ENVIRONMENT runner_arch=${RUNNER_ARCH:-}"
+            echo "image_os=${ImageOS:-} image_version=${ImageVersion:-}"
+            echo "uid=$(id -u) user=$(id -un)"
+            uname -a
+            cat /etc/os-release
+            echo "bin_sh=$(readlink -f /bin/sh)"
+            dpkg-query -W -f='dash=${Version}\n' dash
+            bash --version | head -n 1
+            mktemp --version | head -n 1
+            echo "files_baseline_to_review:"; git diff --name-only "$SAFE_F2_BASELINE_SHA" HEAD~1
+            echo "files_review_to_execution:"; git diff --name-only HEAD~1 HEAD | sort
+            sha256sum "$SAFE_F2_TARGET" nakama/scripts/run_godot_regression_isolated.sh godot/tests/run_tests.sh "$SAFE_F2_HARNESS" "$SAFE_F2_WORKFLOW"
+          } > "$ev" 2>&1
+          cat "$ev"
+          # Exactly: baseline -> review commit (one file) -> execution commit (two test-only files).
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD~2)" = "$SAFE_F2_BASELINE_SHA"
+          test "$(git rev-list --count "$SAFE_F2_BASELINE_SHA"..HEAD)" = "2"
+          test "$(git rev-list --count --merges "$SAFE_F2_BASELINE_SHA"..HEAD)" = "0"
+          test "$(git diff --name-only "$SAFE_F2_BASELINE_SHA" HEAD~1)" = "$SAFE_F2_TARGET"
+          test "$(git diff --name-only HEAD~1 HEAD | sort)" = "$(printf '%s\n%s\n' "$SAFE_F2_WORKFLOW" "$SAFE_F2_HARNESS" | sort)"
+          test "$(git --no-optional-locks status --porcelain)" = ""
+          echo "$SAFE_F2_R4_SHA256  $SAFE_F2_TARGET" | sha256sum --check -
+          echo "$SAFE_F2_WRAPPER_SHA256  nakama/scripts/run_godot_regression_isolated.sh" | sha256sum --check -
+          echo "$SAFE_F2_RUNNER_SHA256  godot/tests/run_tests.sh" | sha256sum --check -
+
+      - name: Stage 1d - containment snapshot (before)
+        id: snap_before
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --snapshot before
+
+      # ── Stage 2: STATIC CHECKS ───────────────────────────────────────────
+      - name: Stage 2 - static checks
+        id: static
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ev="$SAFE_F2_ROOT/evidence/static.txt"
+          {
+            sh -n "$SAFE_F2_TARGET"; echo "sh -n: 0"
+            dash -n "$SAFE_F2_TARGET"; echo "dash -n: 0"
+            bash -n "$SAFE_F2_TARGET"; echo "bash -n: 0"
+            bash --posix -n "$SAFE_F2_TARGET"; echo "bash --posix -n: 0"
+            bash -n "$SAFE_F2_HARNESS"; echo "harness bash -n: 0"
+          } 2>&1 | tee "$ev"
+          # No deleting command on non-comment lines of the target or the harness.
+          for f in "$SAFE_F2_TARGET" "$SAFE_F2_HARNESS"; do
+            if grep -n -E '(^|[^A-Za-z_])(rm|rmdir|unlink|shred|truncate|mv)([^A-Za-z_]|$)|-delete' "$f" | grep -v -E '^[0-9]+:[[:space:]]*#'; then
+              echo "Deleting command found in $f" >&2
+              exit 1
+            fi
+            echo "no deleting command: $f" | tee -a "$ev"
+          done
+          # B-4 ShellCheck (no tool is installed by this job):
+          # - absent, or ended with an execution error (exit >= 2): STOP;
+          # - output line not in the expected gcc form, or exit code not
+          #   consistent with the findings: STOP;
+          # - any "error" finding: blocks;
+          # - any "warning" finding: blocks, unless its code is listed in
+          #   SC_WARNING_ALLOW. That list is EMPTY: adding a code requires
+          #   GPT review and Charlie approval;
+          # - "note" findings (ShellCheck info and style): recorded in the
+          #   evidence and printed in this log, not blocking.
+          # Both the r4 target and the harness are checked.
+          SC_WARNING_ALLOW=""
+          if ! command -v shellcheck > /dev/null 2>&1; then
+            echo "STOP: shellcheck is not available on this runner." | tee -a "$ev" >&2
+            exit 1
+          fi
+          shellcheck --version | tee -a "$ev"
+          sc_block=0
+          for pair in "sh:$SAFE_F2_TARGET:target" "bash:$SAFE_F2_HARNESS:harness"; do
+            sc_shell="${pair%%:*}"; rest="${pair#*:}"; sc_file="${rest%:*}"; sc_name="${rest##*:}"
+            out="$SAFE_F2_ROOT/evidence/shellcheck_${sc_name}.txt"
+            set +e
+            shellcheck --shell="$sc_shell" --severity=style --format=gcc "$sc_file" > "$out" 2> "$out.stderr"
+            sc_code=$?
+            set -e
+            echo "shellcheck $sc_name exit=$sc_code" | tee -a "$ev"
+            if [ "$sc_code" -ge 2 ]; then
+              echo "STOP: shellcheck execution failed for $sc_file (exit $sc_code)" | tee -a "$ev" >&2
+              cat "$out.stderr" >&2
+              exit 1
+            fi
+            if [ -s "$out.stderr" ]; then
+              echo "STOP: shellcheck wrote to stderr for $sc_file" | tee -a "$ev" >&2
+              cat "$out.stderr" >&2
+              exit 1
+            fi
+            lines="$(grep -c '' "$out" || true)"
+            parsed="$(grep -c -E '^[^:]+:[0-9]+:[0-9]+: (error|warning|note): .* \[SC[0-9]+\]$' "$out" || true)"
+            if [ "$lines" != "$parsed" ]; then
+              echo "STOP: unexpected shellcheck output format for $sc_file" | tee -a "$ev" >&2
+              exit 1
+            fi
+            if { [ "$sc_code" -eq 0 ] && [ "$lines" -ne 0 ]; } || { [ "$sc_code" -eq 1 ] && [ "$lines" -eq 0 ]; }; then
+              echo "STOP: shellcheck exit code and findings disagree for $sc_file" | tee -a "$ev" >&2
+              exit 1
+            fi
+            n_err="$(grep -c -E ': error: ' "$out" || true)"
+            n_warn=0; n_warn_allowed=0
+            while IFS= read -r line; do
+              code="$(printf '%s\n' "$line" | sed -n 's/.*\[\(SC[0-9][0-9]*\)\]$/\1/p')"
+              case " $SC_WARNING_ALLOW " in
+                *" $code "*) n_warn_allowed=$((n_warn_allowed + 1)) ;;
+                *) n_warn=$((n_warn + 1)) ;;
+              esac
+            done < <(grep -E ': warning: ' "$out" || true)
+            n_note="$(grep -c -E ': note: ' "$out" || true)"
+            printf 'shellcheck %s: error=%s warning_blocking=%s warning_allowed=%s note=%s\n' \
+              "$sc_name" "$n_err" "$n_warn" "$n_warn_allowed" "$n_note" | tee -a "$ev"
+            if [ "$lines" -ne 0 ]; then
+              echo "--- all shellcheck findings for $sc_name (recorded; notes do not block):"
+              cat "$out"
+            fi
+            if [ "$n_err" -ne 0 ] || [ "$n_warn" -ne 0 ]; then sc_block=1; fi
+          done
+          if [ "$sc_block" -ne 0 ]; then
+            echo "STOP: shellcheck error or warning findings block this run (see above)." | tee -a "$ev" >&2
+            exit 1
+          fi
+          echo "shellcheck: no blocking finding" | tee -a "$ev"
+
+      # ── Stage 3: RUNTIME TESTS without Godot ─────────────────────────────
+      # Each group stops at its first mismatch (harness exit 1). A failed step
+      # stops every later runtime step; only Stage 6 still runs.
+      - name: Stage 3a - original six stub cases, negative controls, canary (N)
+        id: rt_n
+        timeout-minutes: 10
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group N
+
+      - name: Stage 3b - mktemp faults (M)
+        id: rt_m
+        timeout-minutes: 15
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group M
+
+      - name: Stage 3c - mkdir / cp / fixture write faults (F)
+        id: rt_f
+        timeout-minutes: 10
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group F
+
+      - name: Stage 3d - launcher / status file / collector faults (L)
+        id: rt_l
+        timeout-minutes: 10
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group L
+
+      - name: Stage 3e - stub cases twenty times (N6)
+        id: rt_n6
+        timeout-minutes: 10
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group N6
+
+      # ── Stage 4: RUNTIME TESTS with Godot ────────────────────────────────
+      - name: Stage 4a - download and verify official Godot 4.7.2
+        id: godot_dl
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          dl="$SAFE_F2_ROOT/godot-download"
+          mkdir -m 700 "$dl"
+          archive_path="$dl/$GODOT_ARCHIVE"
+          sums_path="$dl/SHA512-SUMS.txt"
+          verify_path="$dl/godot.sha512"
+          curl --fail --location --retry 3 --output "$archive_path" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/$GODOT_ARCHIVE"
+          curl --fail --location --retry 3 --output "$sums_path" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/SHA512-SUMS.txt"
+          echo "$GODOT_SHA256  $archive_path" | sha256sum --check -
+          grep -F " $GODOT_ARCHIVE" "$sums_path" > "$verify_path"
+          test "$(wc -l < "$verify_path")" -eq 1
+          (cd "$dl" && sha512sum --check "$(basename "$verify_path")")
+          unzip -q "$archive_path" -d "$dl/godot"
+          godot_bin="$(find "$dl/godot" -maxdepth 2 -type f -name 'Godot*' -perm -u+x -print -quit)"
+          test -n "$godot_bin"
+          version="$(env HOME="$SAFE_F2_ROOT/home" "$godot_bin" --version)"
+          printf 'godot_binary=%s\ngodot_version=%s\narchive_sha256=%s\n' "$godot_bin" "$version" "$GODOT_SHA256" \
+            | tee "$SAFE_F2_ROOT/evidence/godot-version.txt"
+          case "$version" in
+            4.7.2*) ;;
+            *) echo "Unexpected Godot version: $version" >&2; exit 1 ;;
+          esac
+          echo "SAFE_F2_GODOT=$godot_bin" >> "$GITHUB_ENV"
+
+      - name: Stage 4b - original four Godot cases and containment (G)
+        id: rt_g
+        timeout-minutes: 35
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group G --godot "$SAFE_F2_GODOT"
+
+      # ── Stage 5: REGRESSION ──────────────────────────────────────────────
+      # These three are independent of each other and of the Godot cases:
+      # each runs when the safety stages (through N6) passed, even if another
+      # regression item or the Godot cases failed. The final gate still
+      # requires every one of them to succeed.
+      - name: Set up Node.js 22 (no cache)
+        id: node
+        if: ${{ !cancelled() && steps.rt_n6.outcome == 'success' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Stage 5a - Node root tests (R-1)
+        id: r1
+        if: ${{ !cancelled() && steps.node.outcome == 'success' }}
+        timeout-minutes: 16
+        shell: bash
+        run: |
+          node --version | tee "$SAFE_F2_ROOT/evidence/node-version.txt"
+          bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group R1
+
+      - name: Stage 5b - Nakama unit tests (R-2)
+        id: r2
+        if: ${{ !cancelled() && steps.node.outcome == 'success' }}
+        timeout-minutes: 21
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group R2
+
+      - name: Stage 5c - Godot verify regression through the unmodified wrapper (R-3)
+        id: r3
+        if: ${{ !cancelled() && steps.godot_dl.outcome == 'success' }}
+        timeout-minutes: 32
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --group R3 --godot "$SAFE_F2_GODOT"
+
+      # ── Stage 6: EVIDENCE AUDIT (always; nothing is deleted) ─────────────
+      # If the run root was never created, SAFE_F2_ROOT is empty: every step
+      # below that would touch it is skipped, and the final gate fails. The
+      # harness also refuses any root that is empty or not the expected one.
+      - name: Stage 6a - containment snapshot (after)
+        id: snap_after
+        if: ${{ always() && env.SAFE_F2_ROOT != '' }}
+        timeout-minutes: 2
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --snapshot after
+
+      - name: Stage 6b - leftover inventory (listed only, never cleaned)
+        id: inventory
+        if: ${{ always() && env.SAFE_F2_ROOT != '' }}
+        timeout-minutes: 5
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --inventory
+
+      - name: Stage 6c - false-PASS and completeness audit
+        id: audit
+        if: ${{ always() && env.SAFE_F2_ROOT != '' }}
+        timeout-minutes: 5
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --audit "$SAFE_F2_GROUPS"
+
+      - name: Stage 6d - evidence manifest
+        id: manifest
+        if: ${{ always() && env.SAFE_F2_ROOT != '' }}
+        timeout-minutes: 3
+        shell: bash
+        run: bash "$SAFE_F2_HARNESS" --root "$SAFE_F2_ROOT" --manifest
+
+      - name: Stage 6e - upload evidence (logs only)
+        id: upload
+        if: ${{ always() && env.SAFE_F2_ROOT != '' && steps.manifest.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: safe-f2-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.SAFE_F2_ROOT }}/evidence/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Final job gate
+        if: ${{ always() }}
+        timeout-minutes: 2
+        shell: bash
+        env:
+          O_GUARD: ${{ steps.guard.outcome }}
+          O_CHECKOUT: ${{ steps.checkout.outcome }}
+          O_ROOT: ${{ steps.root.outcome }}
+          O_IDENTITY: ${{ steps.identity.outcome }}
+          O_SNAP_BEFORE: ${{ steps.snap_before.outcome }}
+          O_STATIC: ${{ steps.static.outcome }}
+          O_RT_N: ${{ steps.rt_n.outcome }}
+          O_RT_M: ${{ steps.rt_m.outcome }}
+          O_RT_F: ${{ steps.rt_f.outcome }}
+          O_RT_L: ${{ steps.rt_l.outcome }}
+          O_RT_N6: ${{ steps.rt_n6.outcome }}
+          O_GODOT_DL: ${{ steps.godot_dl.outcome }}
+          O_RT_G: ${{ steps.rt_g.outcome }}
+          O_NODE: ${{ steps.node.outcome }}
+          O_R1: ${{ steps.r1.outcome }}
+          O_R2: ${{ steps.r2.outcome }}
+          O_R3: ${{ steps.r3.outcome }}
+          O_SNAP_AFTER: ${{ steps.snap_after.outcome }}
+          O_INVENTORY: ${{ steps.inventory.outcome }}
+          O_AUDIT: ${{ steps.audit.outcome }}
+          O_MANIFEST: ${{ steps.manifest.outcome }}
+          O_UPLOAD: ${{ steps.upload.outcome }}
+        run: |
+          set -Eeuo pipefail
+          bad=0
+          for v in O_GUARD O_CHECKOUT O_ROOT O_IDENTITY O_SNAP_BEFORE O_STATIC O_RT_N O_RT_M O_RT_F O_RT_L O_RT_N6 \
+                   O_GODOT_DL O_RT_G O_NODE O_R1 O_R2 O_R3 O_SNAP_AFTER O_INVENTORY O_AUDIT O_MANIFEST O_UPLOAD; do
+            printf '%s=%s\n' "$v" "${!v}"
+            if [ "${!v}" != "success" ]; then bad=1; fi
+          done
+          if [ "$bad" -ne 0 ]; then
+            echo "SAFE-F2 cloud test: NOT ALL STEPS SUCCEEDED. This is not a PASS." >&2
+            exit 1
+          fi
+          echo "SAFE-F2 cloud test: every step succeeded. This is Automated Tests evidence only; it is not GPT Accepted, not Merge approval and not a VS-01 Gate result."
