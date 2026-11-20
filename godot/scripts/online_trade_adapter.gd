@@ -22,6 +22,13 @@ extends RefCounted
 ## LATER-issued request (fresher time-dependent quotes). Money, goods and
 ## quotes never go back to an older server-confirmed revision.
 ##
+## WP01-H (E2): with a Pending Store enabled on the client, pending orders
+## survive an app kill and are recovered ONLY through vs01_trade_resolve.
+## A "voided" receipt means the original order was NOT executed (success
+## false, nothing moved); it is never shown as a trade. While any order is
+## unresolved / needs check / quarantined, new orders are refused locally
+## (B-4A); trade_block_reason() says why.
+##
 ## WP01-B limits:
 ## - Not wired into the main scene script, scenes, buttons or saves.
 ## - Pending commands live in the client's memory only. An app kill loses
@@ -140,6 +147,16 @@ func pending_count() -> int:
 	return _client.get_pending_commands().size()
 
 
+## WP01-H: key -> {"state", "reason"} (store mode; {} otherwise).
+func get_pending_states() -> Dictionary:
+	return _client.get_pending_states()
+
+
+## WP01-H: why a new order is refused locally right now ("" = allowed).
+func trade_block_reason() -> String:
+	return _client.trade_block_reason()
+
+
 func _trade(action: String, city_id: String, good_id: String, quantity: int) -> Dictionary:
 	if good_id != REPRESENTATIVE_GOOD_ID or not action in ["buy", "sell"]:
 		var refused := {"success": false, "total_value": 0, "reason": OUT_OF_SCOPE_REASON, "unit_price": 0,
@@ -161,7 +178,14 @@ func _to_trade_result(raw: Dictionary) -> Dictionary:
 	var receipt: Dictionary = raw.get("receipt", {})
 	var applied: bool = raw.get("status") == OnlineProgressClient.OK and receipt.get("status") == "applied"
 	var reason: String = receipt.get("reason", "") if raw.get("status") == OnlineProgressClient.OK else String(raw.get("reason", ""))
+	var outcome: String = String(receipt.get("status", "")) if raw.get("status") == OnlineProgressClient.OK else ""
 	return {
+		# WP01-H: "applied" / "rejected" / "voided" ("" without a receipt).
+		"outcome": outcome,
+		"voided": outcome == "voided",
+		"needs_check": bool(raw.get("needs_check", false)),
+		"quarantined": bool(raw.get("quarantined", false)) or raw.get("entry_state", "") == OnlinePendingStore.STATE_QUARANTINED,
+		"local": bool(raw.get("local", false)),
 		"success": applied,
 		"total_value": int(receipt.get("total", 0)),
 		"reason": reason,

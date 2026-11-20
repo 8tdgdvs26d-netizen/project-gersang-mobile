@@ -6,6 +6,10 @@ extends SceneTree
 ## Nakama and holds each answer until the test releases it. Part of the normal
 ## Godot regression; the live run against the local server is
 ## tests/live_vs01_wp01c_online_trade_ui.gd.
+##
+## WP01-H E2 (fixtures updated): trade answers are the exact E1 receipt of
+## the request (key, account, command, hash, money / cargo deltas); the
+## retry of an uncertain order is vs01_trade_resolve with the same key.
 
 const REP := OnlineTradeAdapter.REPRESENTATIVE_GOOD_ID
 const SCENE := "res://scenes/online_trade_test_mode.tscn"
@@ -27,7 +31,7 @@ class GatedClient extends OnlineProgressClient:
 		var body := Marshalls.utf8_to_base64(JSON.stringify({"uid": "ui-" + email, "usn": email, "exp": 4102444800})).trim_suffix("=").trim_suffix("=")
 		return _accept_session(NakamaSession.new("%s.%s.x" % [header, body], false))
 
-	func answer(result: Dictionary) -> int:
+	func answer(result: Variant) -> int:
 		gates.append({"answer": result, "released": false, "taken": false})
 		return gates.size() - 1
 
@@ -46,11 +50,13 @@ class GatedClient extends OnlineProgressClient:
 			return {"status": OnlineProgressClient.UNCERTAIN, "reason": "no scripted answer"}
 		while not gate["released"]:
 			await Engine.get_main_loop().process_frame
-		return gate["answer"]
+		var a: Variant = gate["answer"]
+		return a.call(payload, get_user_id()) if typeof(a) == TYPE_CALLABLE else a
 
 
 func _initialize() -> void:
 	await process_frame
+	_wipe("user://online_pending")  # synthetic accounts only (isolated user://)
 	var dev_before := _dev_save_fingerprint()
 	print("Isolated user:// for this run: %s" % OS.get_user_data_dir())
 	_verify_static_isolation()
@@ -154,6 +160,7 @@ func _verify_player_flow() -> void:
 	_release_next(client, _trade("applied", "", 126, 126, _view(10174, 1, 4), true))
 	await mode.retry_pending()
 	_check(client.sent[-1]["payload"]["idempotency_key"] == lost_key, "Retry reuses the original idempotency key")
+	_check(client.sent[-1]["id"] == OnlineProgressClient.RPC_TRADE_RESOLVE, "Retry asks vs01_trade_resolve, never a second vs01_trade (WP01-H)")
 	_check(hub.get_money_label_text() == "金錢：10174" and mode.get_pending_text() == "未確定交易：0 單", "Retry resolves the order once (money 10174, nothing pending)")
 
 	# Rate limit message.
@@ -246,12 +253,35 @@ static func _begin(view: Dictionary) -> Dictionary:
 		"gameplay_session_id": "00000000-0000-0000-0000-%012d" % int(view["revision"]), "progress": view}}
 
 
-static func _trade(status: String, reason: String, total: int, unit: int, view: Dictionary, replayed := false) -> Dictionary:
-	return {"status": OnlineProgressClient.OK, "reason": "", "data": {"replayed": replayed,
-		"receipt": {"status": status, "reason": reason, "total": total, "unit_price": unit, "progress_revision": view["revision"]}, "progress": view}}
+## WP01-H FIX-03: the exact Legacy v1 receipt rpcTrade writes for the
+## request; money / cargo "before" are derived from the resulting view.
+static func _trade(status: String, reason: String, total: int, unit: int, view: Dictionary, replayed := false) -> Callable:
+	return func(p: Dictionary, user_id: String) -> Dictionary:
+		var qty := int(p["quantity"])
+		var m1 := int(view["money"])
+		var c1 := int(view["backpack"].get(p["good_id"], 0))
+		var buy: bool = p["action"] == "buy"
+		var applied := status == "applied"
+		var receipt := {"idempotency_key": p["idempotency_key"], "request_hash": "%s|%s|%s|%d" % [p["action"], p["city_id"], p["good_id"], qty],
+			"user_id": user_id, "gameplay_session_id": p["gameplay_session_id"], "action": p["action"], "city_id": p["city_id"], "good_id": p["good_id"],
+			"quantity": qty, "status": status, "reason": reason, "unit_price": unit, "total": total,
+			"money_before": (m1 + total if buy else m1 - total) if applied else m1, "money_after": m1,
+			"carried_before": (c1 - qty if buy else c1 + qty) if applied else c1, "carried_after": c1,
+			"progress_revision": int(view["revision"]), "server_time_ms": 1}
+		return {"status": OnlineProgressClient.OK, "reason": "", "data": {"replayed": replayed, "receipt": receipt, "progress": view}}
 
 
-static func _release_next(client: GatedClient, result: Dictionary) -> void:
+func _wipe(dir: String) -> void:
+	if not DirAccess.dir_exists_absolute(dir):
+		return
+	for sub in DirAccess.get_directories_at(dir):
+		_wipe(dir + "/" + sub)
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + "/" + f)
+	DirAccess.remove_absolute(dir)
+
+
+static func _release_next(client: GatedClient, result: Variant) -> void:
 	client.release(client.answer(result))
 
 

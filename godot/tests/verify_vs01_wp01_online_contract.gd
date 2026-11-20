@@ -8,6 +8,9 @@ extends SceneTree
 ##   server port is tested against (drift on either side fails a test).
 ## - The client never applies trades locally, keeps an uncertain command
 ##   pending under ONE idempotency key, and recovers it with the same key.
+##   WP01-H E2 (FIX-01): pending orders are durable in the per-account
+##   Pending Store and recovered ONLY through vs01_trade_resolve; the WP01-B
+##   export / import and vs01_trade resend are superseded and now refused.
 ## - Isolation: no gameplay script, scene, autoload or SaveStore uses the
 ##   online client yet; Save v14 and the Development Save are untouched.
 
@@ -15,23 +18,48 @@ const RulesVectors := preload("res://tests/vs01_wp01_rules_vectors.gd")
 const CLOSED_PORT := 1
 
 
-## Test double: answers trades from a script instead of the network.
+const SCRIPTED_UID := "00000000-0000-0000-0000-0000000000f1"
+
+
+## Test double: answers trades from a script instead of the network. A
+## Callable answer is built from the request (WP01-H: receipts must be the
+## exact E1 receipt of the request's key and command). `sent` records ids.
 class ScriptedClient extends OnlineProgressClient:
 	var answers: Array = []
+	var sent: Array = []
 
 	func is_signed_in() -> bool:
 		return true
 
-	func _rpc(_id: String, _payload: Dictionary) -> Dictionary:
-		return answers.pop_front()
+	func _rpc(id: String, payload: Dictionary) -> Dictionary:
+		sent.append(id)
+		var a: Variant = answers.pop_front()
+		return a.call(payload) if typeof(a) == TYPE_CALLABLE else a
 
 
 static func _server_refusal(grpc: int, reason: String) -> Dictionary:
 	return {"status": OnlineProgressClient.REJECTED, "reason": reason, "grpc_status": grpc}
 
 
-static func _server_receipt(status: String) -> Dictionary:
-	return {"status": OnlineProgressClient.OK, "reason": "", "data": {"replayed": false, "receipt": {"status": status}, "progress": {"money": 1}}}
+## The exact Legacy v1 receipt rpcTrade writes for the request (WP01-H FIX-03).
+static func _server_receipt(status: String) -> Callable:
+	return func(p: Dictionary) -> Dictionary:
+		var qty := int(p["quantity"])
+		var applied := status == "applied"
+		var unit := 84 if applied else 0
+		var buy: bool = p["action"] == "buy"
+		var receipt := {"idempotency_key": p["idempotency_key"], "request_hash": "%s|%s|%s|%d" % [p["action"], p["city_id"], p["good_id"], qty],
+			"user_id": SCRIPTED_UID, "gameplay_session_id": p["gameplay_session_id"], "action": p["action"], "city_id": p["city_id"],
+			"good_id": p["good_id"], "quantity": qty, "status": status, "reason": "" if applied else "insufficient_money",
+			"unit_price": unit, "total": unit * qty, "money_before": 10000, "money_after": 10000 - (unit * qty if buy else -unit * qty) if applied else 10000,
+			"carried_before": 0 if buy else qty, "carried_after": (qty if buy else 0) if applied else (0 if buy else qty),
+			"progress_revision": 2, "server_time_ms": 1}
+		return {"status": OnlineProgressClient.OK, "reason": "", "data": {"replayed": false, "receipt": receipt, "progress": {"money": 1}}}
+
+
+static func _scripted(client: ScriptedClient, gsid: String) -> void:
+	client._session = NakamaSession.new(_unsigned_token(SCRIPTED_UID), false)
+	client._gameplay_session_id = gsid
 
 var _checks := 0
 var _failures := 0
@@ -40,6 +68,7 @@ var _failures := 0
 func _initialize() -> void:
 	# The root only enters the tree after the first frame; HTTP requests need it.
 	await process_frame
+	_wipe("user://online_pending")  # synthetic accounts only (isolated user://)
 	var dev_before := _dev_save_fingerprint()
 	_verify_rules_parity()
 	_verify_isolation()
@@ -143,12 +172,14 @@ func _verify_uncertain_command_stays_pending() -> void:
 	copy["money"] = 999999
 	_check(client.get_confirmed_progress()["money"] == 10000, "Callers cannot edit the confirmed cache")
 	var recovered := await client.recover_pending()
-	_check(recovered.size() == 1 and recovered[0]["idempotency_key"] == result["idempotency_key"], "Recovery resends the same idempotency key")
+	_check(recovered.size() == 1 and recovered[0]["idempotency_key"] == result["idempotency_key"] and recovered[0]["resolve"], "Recovery asks vs01_trade_resolve with the same idempotency key")
 	_check(client.get_pending_commands().size() == 1, "Still uncertain while the server is unreachable")
-	# A restarted app imports the pending list and keeps the original key.
+	# WP01-H (supersedes the WP01-B export / import): a restarted app reads the
+	# order back from the Pending Store with the original key; import is refused.
 	var restarted := _new_client("127.0.0.1", CLOSED_PORT)
-	restarted.import_pending_commands(client.get_pending_commands())
-	_check(restarted.get_pending_commands() == client.get_pending_commands(), "Pending commands survive an export / import")
+	_check(not restarted.import_pending_commands(client.get_pending_commands()), "Importing pending commands is refused (WP01-H FIX-01)")
+	restarted._accept_session(NakamaSession.new(_unsigned_token("00000000-0000-0000-0000-00000000000a"), false))
+	_check(restarted.get_pending_commands() == client.get_pending_commands(), "Pending commands survive a restart through the Pending Store")
 	client.queue_free()
 	restarted.queue_free()
 
@@ -158,12 +189,13 @@ func _verify_uncertain_command_stays_pending() -> void:
 func _verify_pending_resolution_rules() -> void:
 	var client := ScriptedClient.new()
 	root.add_child(client)
-	client._gameplay_session_id = "00000000-0000-0000-0000-00000000000c"
+	_scripted(client, "00000000-0000-0000-0000-00000000000c")
 	for grpc in [2, 4, 13, 14]:
 		client.answers = [_server_refusal(grpc, "storage_unavailable")]
 		var ambiguous := await client.buy("A", "test_good_01", 1)
 		_check(ambiguous["status"] == OnlineProgressClient.UNCERTAIN and ambiguous["pending"], "gRPC %d (commit unknown) keeps the command pending as uncertain" % grpc)
 		client._pending.clear()
+		client._pending_state.clear()
 	for refusal in [[3, "unexpected_fields"], [7, "permission_denied"], [8, "rate_limited"], [9, "no_gameplay_session"], [10, "gameplay_session_superseded"]]:
 		client.answers = [_server_refusal(refusal[0], refusal[1])]
 		var fresh := await client.buy("A", "test_good_01", 1)
@@ -181,8 +213,10 @@ func _verify_pending_resolution_rules() -> void:
 	for refusal in [[10, "gameplay_session_superseded"], [8, "rate_limited"], [14, "storage_unavailable"]]:
 		client.answers = [_server_refusal(refusal[0], refusal[1])]
 		client._superseded = false  # each case starts from an active session
+		client.sent.clear()
 		var retried := await client.recover_pending()
 		_check(retried.size() == 1 and retried[0]["idempotency_key"] == key and retried[0]["pending"], "A retry refused with %s keeps the command pending" % refusal[1])
+		_check(client.sent == [OnlineProgressClient.RPC_TRADE_RESOLVE], "The retry is vs01_trade_resolve, never vs01_trade (%s)" % str(client.sent))
 	client._superseded = false
 	client.answers = [_server_receipt("applied")]
 	var resolved := await client.recover_pending()
@@ -200,7 +234,8 @@ func _verify_pending_resolution_rules() -> void:
 func _verify_superseded_session_policy() -> void:
 	var client := ScriptedClient.new()
 	root.add_child(client)
-	client._gameplay_session_id = "00000000-0000-0000-0000-00000000000d"
+	_wipe("user://online_pending")
+	_scripted(client, "00000000-0000-0000-0000-00000000000d")
 	var prompts := [0]
 	client.gameplay_session_superseded.connect(func(): prompts[0] += 1)
 	client.answers = [{"status": OnlineProgressClient.UNCERTAIN, "reason": "no answer"}]
@@ -232,10 +267,20 @@ func _new_client(host: String, port: int) -> OnlineProgressClient:
 
 ## A syntactically valid, UNSIGNED token far in the future. Only used against
 ## a closed port; no server ever sees it.
-func _unsigned_token(user_id: String) -> String:
+static func _unsigned_token(user_id: String) -> String:
 	var header := Marshalls.utf8_to_base64(JSON.stringify({"alg": "none"}))
 	var body := Marshalls.utf8_to_base64(JSON.stringify({"uid": user_id, "usn": "offline", "exp": 4102444800}))
 	return "%s.%s.x" % [header.trim_suffix("=").trim_suffix("="), body.trim_suffix("=").trim_suffix("=")]
+
+
+func _wipe(dir: String) -> void:
+	if not DirAccess.dir_exists_absolute(dir):
+		return
+	for sub in DirAccess.get_directories_at(dir):
+		_wipe(dir + "/" + sub)
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + "/" + f)
+	DirAccess.remove_absolute(dir)
 
 
 func _dev_save_fingerprint() -> String:

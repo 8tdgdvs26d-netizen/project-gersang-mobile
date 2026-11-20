@@ -10,6 +10,11 @@ extends SceneTree
 ## - Only the one representative good is ever sent.
 ## - Results keep TradeService's shape and reason codes.
 ## - The adapter never prices, applies or saves anything itself.
+##
+## WP01-H E2 (superseded behaviour, updated): receipts are the exact E1
+## receipt of the request; recovery is vs01_trade_resolve; B-4A refuses a
+## second trade while one is unresolved, so the reversed-order case pairs a
+## trade with a newer progress READ (same "never roll back" property).
 
 const REP := OnlineTradeAdapter.REPRESENTATIVE_GOOD_ID
 
@@ -25,9 +30,10 @@ class ScriptedClient extends OnlineProgressClient:
 	func is_signed_in() -> bool:
 		return true
 
-	func _rpc(_id: String, _payload: Dictionary) -> Dictionary:
+	func _rpc(_id: String, payload: Dictionary) -> Dictionary:
 		calls += 1
-		return answers.pop_front()
+		var a: Variant = answers.pop_front()
+		return a.call(payload, get_user_id()) if typeof(a) == TYPE_CALLABLE else a
 
 
 ## Test double whose answers are held until the test releases them, so
@@ -38,13 +44,13 @@ class GatedClient extends OnlineProgressClient:
 	func is_signed_in() -> bool:
 		return true
 
-	func queue(answer: Dictionary) -> void:
+	func queue(answer: Variant) -> void:
 		gates.append({"answer": answer, "released": false, "taken": false})
 
 	func release(index: int) -> void:
 		gates[index]["released"] = true
 
-	func _rpc(_id: String, _payload: Dictionary) -> Dictionary:
+	func _rpc(_id: String, payload: Dictionary) -> Dictionary:
 		var gate: Dictionary = {}
 		for g in gates:
 			if not g["taken"]:
@@ -53,7 +59,8 @@ class GatedClient extends OnlineProgressClient:
 				break
 		while not gate["released"]:
 			await Engine.get_main_loop().process_frame
-		return gate["answer"]
+		var a: Variant = gate["answer"]
+		return a.call(payload, get_user_id()) if typeof(a) == TYPE_CALLABLE else a
 
 
 static func _view_q(money: int, carried: int, revision: int, buy_price: int) -> Dictionary:
@@ -70,14 +77,27 @@ static func _view(money: int, carried: int, revision: int) -> Dictionary:
 		"quotes": {"A": {REP: {"buy_price": 84, "buyback_price": 76, "stock": 100}}}}
 
 
-static func _receipt_answer(status: String, reason: String, total: int, unit: int, view: Dictionary, replayed := false) -> Dictionary:
-	return {"status": OnlineProgressClient.OK, "reason": "", "data": {
-		"replayed": replayed, "progress": view,
-		"receipt": {"status": status, "reason": reason, "total": total, "unit_price": unit}}}
+## WP01-H FIX-03: the exact Legacy v1 receipt rpcTrade writes for the
+## request; money / cargo "before" are derived from the resulting view.
+static func _receipt_answer(status: String, reason: String, total: int, unit: int, view: Dictionary, replayed := false) -> Callable:
+	return func(p: Dictionary, user_id: String) -> Dictionary:
+		var qty := int(p["quantity"])
+		var m1 := int(view["money"])
+		var c1 := int(view["backpack"].get(p["good_id"], 0))
+		var buy: bool = p["action"] == "buy"
+		var applied := status == "applied"
+		var receipt := {"idempotency_key": p["idempotency_key"], "request_hash": "%s|%s|%s|%d" % [p["action"], p["city_id"], p["good_id"], qty],
+			"user_id": user_id, "gameplay_session_id": p["gameplay_session_id"], "action": p["action"], "city_id": p["city_id"], "good_id": p["good_id"],
+			"quantity": qty, "status": status, "reason": reason, "unit_price": unit, "total": total,
+			"money_before": (m1 + total if buy else m1 - total) if applied else m1, "money_after": m1,
+			"carried_before": (c1 - qty if buy else c1 + qty) if applied else c1, "carried_after": c1,
+			"progress_revision": int(view["revision"]), "server_time_ms": 1}
+		return {"status": OnlineProgressClient.OK, "reason": "", "data": {"replayed": replayed, "progress": view, "receipt": receipt}}
 
 
 func _initialize() -> void:
 	await process_frame
+	_wipe("user://online_pending")  # synthetic accounts only (isolated user://)
 	var dev_before := _dev_save_fingerprint()
 	print("Isolated user:// for this run: %s" % OS.get_user_data_dir())
 	_verify_static()
@@ -141,6 +161,7 @@ func _verify_mirror_only_from_confirmation() -> void:
 	client.answers = [_receipt_answer("applied", "", 760, 76, _view(9920, 0, 3), true)]
 	var recovered := await adapter.recover()
 	_check(recovered.size() == 1 and recovered[0]["success"] and recovered[0]["replayed"] and recovered[0]["idempotency_key"] == lost["idempotency_key"], "Recovery reports the original receipt for the same key")
+	_check(recovered[0]["outcome"] == "applied" and not recovered[0]["voided"], "Recovery tells the applied outcome apart (WP01-H)")
 	_check(adapter.get_wallet().get_balance() == 9920 and adapter.get_inventory().get_quantity(REP) == 0 and adapter.pending_count() == 0, "Mirror follows the recovered receipt; nothing pending")
 	_check(revisions == [1, 2, 3], "confirmed_state_changed fires once per new server revision: %s" % str(revisions))
 	_check(client.calls == 5, "Exactly one request per call (%d)" % client.calls)
@@ -191,17 +212,18 @@ func _verify_inconsistent_view_is_flagged() -> void:
 func _verify_reversed_responses_never_roll_back() -> void:
 	var client := GatedClient.new()
 	root.add_child(client)
+	_sign(client)
 	var adapter := OnlineTradeAdapter.new(client)
 	client.queue({"status": OnlineProgressClient.OK, "reason": "", "data": {"gameplay_session_id": "00000000-0000-0000-0000-0000000000b5", "progress": _view_q(10000, 0, 1, 84)}})
 	client.release(0)
 	await adapter.begin()
 	client.queue(_receipt_answer("applied", "", 84, 84, _view_q(9916, 1, 2, 85)))  # trade A -> revision 2
-	client.queue(_receipt_answer("applied", "", 85, 85, _view_q(9831, 2, 3, 86)))  # trade B -> revision 3
+	client.queue({"status": OnlineProgressClient.OK, "reason": "", "data": {"progress": _view_q(9831, 2, 3, 86)}})  # B: a newer READ -> revision 3 (WP01-H B-4A)
 	var done := []
 	var revisions := []
 	adapter.confirmed_state_changed.connect(func(r): revisions.append(r))
-	_start_buy(adapter, done)  # A issued first
-	_start_buy(adapter, done)  # B issued second
+	_start_buy(adapter, done)      # A issued first
+	_start_refresh(adapter, done)  # B issued second
 	await process_frame
 	client.release(2)          # B answers FIRST
 	while done.size() < 1:
@@ -210,7 +232,7 @@ func _verify_reversed_responses_never_roll_back() -> void:
 	client.release(1)          # A answers LAST, with the OLDER revision 2
 	while done.size() < 2:
 		await process_frame
-	_check(done.all(func(r): return r["success"]), "Both reversed-order trades report success")
+	_check(done[1].get("success", false) and done[0]["status"] == OnlineProgressClient.OK, "Reversed order: the trade reports success and the read its view")
 	_check(adapter.get_confirmed_revision() == 3, "Reversed order: an older revision never replaces a newer one (rev %d)" % adapter.get_confirmed_revision())
 	_check(adapter.get_wallet().get_balance() == 9831 and adapter.get_inventory().get_quantity(REP) == 2, "Reversed order: money and goods stay at revision 3 (money %d, goods %d)" % [adapter.get_wallet().get_balance(), adapter.get_inventory().get_quantity(REP)])
 	_check(adapter.get_quote("A")["buy_price"] == 86, "Reversed order: the stale revision-2 quote does not replace the revision-3 quote (%s)" % str(adapter.get_quote("A")))
@@ -224,6 +246,7 @@ func _verify_reversed_responses_never_roll_back() -> void:
 func _verify_equal_revision_tie_break() -> void:
 	var client := GatedClient.new()
 	root.add_child(client)
+	_sign(client)
 	var adapter := OnlineTradeAdapter.new(client)
 	client.queue({"status": OnlineProgressClient.OK, "reason": "", "data": {"gameplay_session_id": "00000000-0000-0000-0000-0000000000b6", "progress": _view_q(10000, 0, 1, 84)}})
 	client.release(0)
@@ -255,7 +278,25 @@ func _start_refresh(adapter: OnlineTradeAdapter, done: Array) -> void:
 func _new_client() -> ScriptedClient:
 	var client := ScriptedClient.new()
 	root.add_child(client)
+	_sign(client)
 	return client
+
+
+## WP01-H: a synthetic signed-in account (the Pending Store is per account).
+static func _sign(client: OnlineProgressClient) -> void:
+	var header := Marshalls.utf8_to_base64(JSON.stringify({"alg": "none"})).trim_suffix("=").trim_suffix("=")
+	var body := Marshalls.utf8_to_base64(JSON.stringify({"uid": "00000000-0000-0000-0000-0000000000c1", "usn": "offline", "exp": 4102444800})).trim_suffix("=").trim_suffix("=")
+	client._session = NakamaSession.new("%s.%s.x" % [header, body], false)
+
+
+func _wipe(dir: String) -> void:
+	if not DirAccess.dir_exists_absolute(dir):
+		return
+	for sub in DirAccess.get_directories_at(dir):
+		_wipe(dir + "/" + sub)
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + "/" + f)
+	DirAccess.remove_absolute(dir)
 
 
 func _dev_save_fingerprint() -> String:

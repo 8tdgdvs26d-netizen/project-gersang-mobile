@@ -53,6 +53,15 @@ const HUB_SUPERSEDED_TEXT := "已被其他裝置接管，交易未送出"
 const HUB_RATE_LIMITED_TEXT := "操作太頻密，交易未生效"
 const HUB_REJECTED_TEXT := "伺服器拒絕：%s"
 const HUB_STALE_TEXT := "舊請求結果不會套用"
+## WP01-H (E2) minimal Online TEST prompts (B-4A): never a false success.
+const VOIDED_TEXT := "原交易未有執行（已作廢）：金錢及貨物未有更改。"
+const TRADE_UNRESOLVED_TEXT := "仍有未確定交易，核實中：已暫停新交易，請按「重試未確定」。"
+const TRADE_NEEDS_CHECK_TEXT := "交易紀錄需要核對：已暫停新交易，不會自動重試或清除。"
+const STORE_WRITE_FAILED_TEXT := "未能保存交易紀錄：交易未有送出。"
+const HUB_BLOCKED_TEXT := "已暫停新交易（核實中／需核對）"
+## Local / store refusals that are shown with TRADE_NEEDS_CHECK_TEXT.
+const NEEDS_CHECK_REASONS := ["pending_trade_needs_check", "pending_store_quarantined", "pending_store_untrusted",
+	"pending_store_unreadable", "receipt_mismatch", "receipt_unrecognized", "receipt_not_trusted", "idempotency_key_reused", "resolve_command_invalid"]
 
 var host := DEFAULT_HOST
 var port := DEFAULT_PORT
@@ -89,6 +98,7 @@ func _ready() -> void:
 	if client.get_parent() == null:
 		add_child(client)
 	client.configure(host, port)
+	# WP01-H: the client always owns its per-account Pending Store (FIX-01).
 	adapter = OnlineTradeAdapter.new(client)
 	hub = $CityHub as CityHub
 	hub.scale = Vector2(HUB_SCALE, HUB_SCALE)
@@ -266,7 +276,19 @@ static func _busy_result() -> Dictionary:
 
 
 func _show_result(action: String, quantity: int, result: Dictionary) -> void:
-	if result["online_status"] == OnlineProgressClient.OK:
+	if result.get("voided", false):
+		hub.show_feedback_text(VOIDED_TEXT)
+		_set_status(VOIDED_TEXT)
+	elif result["reason"] == OnlineProgressClient.TRADE_UNRESOLVED:
+		hub.show_feedback_text(HUB_BLOCKED_TEXT)
+		_set_status(TRADE_UNRESOLVED_TEXT)
+	elif result["reason"] in NEEDS_CHECK_REASONS or result.get("needs_check", false) or result.get("quarantined", false):
+		hub.show_feedback_text(HUB_BLOCKED_TEXT)
+		_set_status(TRADE_NEEDS_CHECK_TEXT)
+	elif result["reason"] == OnlineProgressClient.STORE_WRITE_FAILED:
+		hub.show_feedback_text(STORE_WRITE_FAILED_TEXT)
+		_set_status(STORE_WRITE_FAILED_TEXT)
+	elif result["online_status"] == OnlineProgressClient.OK:
 		# A server receipt: success, or a rule rejection with TradeService's code.
 		hub.show_trade_feedback(action, REP, quantity, result)
 		_set_status("伺服器已確認" + ("（重送結果）" if result["replayed"] else ""))

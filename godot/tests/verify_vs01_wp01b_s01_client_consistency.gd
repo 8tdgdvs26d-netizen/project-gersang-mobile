@@ -15,7 +15,14 @@ extends SceneTree
 ##     the character back
 ##   F taking the character back: late answers of the old session never undo it
 ##   G network loss and retry with the same idempotency key
-##   H pending recovery running concurrently with new trades
+##   H pending recovery running concurrently with other requests
+##
+## WP01-H E2 (superseded behaviour, updated): receipts are the exact E1
+## receipt of the request; recovery is vs01_trade_resolve with the original
+## key (never vs01_trade); B-4A refuses a NEW trade locally while an order is
+## unresolved, so the "two trades at once" orderings of A / G / H use a
+## concurrent progress READ for the newer revision instead (same ordering
+## property), and H also checks that a new trade is refused (nothing sent).
 ##   I the SAME account signs in again while requests are in flight
 ##     (PR #135 review): their late answers must not change the state
 
@@ -33,7 +40,7 @@ class GatedClient extends OnlineProgressClient:
 	func is_signed_in() -> bool:
 		return _session != null
 
-	func queue(answer: Dictionary) -> int:
+	func queue(answer: Variant) -> int:
 		gates.append({"answer": answer, "released": false, "taken": false})
 		return gates.size() - 1
 
@@ -52,11 +59,13 @@ class GatedClient extends OnlineProgressClient:
 			return {"status": OnlineProgressClient.UNCERTAIN, "reason": "no scripted answer"}
 		while not gate["released"]:
 			await Engine.get_main_loop().process_frame
-		return gate["answer"]
+		var a: Variant = gate["answer"]
+		return a.call(payload, get_user_id()) if typeof(a) == TYPE_CALLABLE else a
 
 
 func _initialize() -> void:
 	await process_frame
+	_wipe("user://online_pending")  # synthetic accounts only (isolated user://)
 	var dev_before := _dev_save_fingerprint()
 	print("Isolated user:// for this run: %s" % OS.get_user_data_dir())
 	await _case_a_reversed_revisions()
@@ -80,17 +89,18 @@ func _initialize() -> void:
 func _case_a_reversed_revisions() -> void:
 	var c := await _signed_in_client("a1", 10000, 1)
 	var g2 := c.queue(_trade_ok(9916, 1, 2, 85))
-	var g3 := c.queue(_trade_ok(9831, 2, 3, 86))
+	var g3 := c.queue(_read_ok(9831, 2, 3, 86))  # WP01-H: a newer READ (B-4A: no 2nd trade)
 	var done := []
 	_start_buy(c, done)
-	_start_buy(c, done)
+	_start_refresh(c, done)
 	await process_frame
 	await _release_and_wait(c, g3, done, 1)  # revision 3 first
 	await _release_and_wait(c, g2, done, 2)  # older revision 2 last
 	var p := c.get_confirmed_progress()
 	_check(int(p.get("revision", -1)) == 3 and int(p.get("money", -1)) == 9831 and int(p["backpack"].get(GOOD, 0)) == 2, "A: revision 3 is kept when revision 2 answers later (%s)" % _short(p))
 	_check(int(p["quotes"]["A"][GOOD]["buy_price"]) == 86, "A: quotes stay at revision 3")
-	_check(done.all(func(r): return r["status"] == OnlineProgressClient.OK), "A: both trades still report their own receipts")
+	_check(done.all(func(r): return r["status"] == OnlineProgressClient.OK), "A: the trade and the read still report their own answers")
+	_check(c.get_pending_commands().is_empty(), "A: the trade's own receipt resolved it")
 	c.queue_free()
 
 
@@ -148,7 +158,7 @@ func _case_d_answer_after_account_switch() -> void:
 	_check(int(p.get("money", -1)) == 10000 and int(p.get("revision", -1)) == 1 and p["backpack"].is_empty(), "D: the old account's late answer never reaches the new account's cache (%s)" % _short(p))
 	_check(c.get_pending_commands().is_empty(), "D: no old-account command can be recovered under the new account")
 	var recovered := await c.recover_pending()
-	_check(recovered.is_empty() and _sent_trade_keys(c).count(old_key) == 1, "D: recover_pending() never resends the old account's order")
+	_check(recovered.is_empty() and _sent_trade_keys(c).count(old_key) == 1, "D: recover_pending() never resends (nor resolves) the old account's order")
 	c._accept_session(NakamaSession.new(_token("d-old"), false))
 	_check(c.get_pending_commands().has(old_key), "D: switching back, the old account's own pending order is still there")
 	c.queue_free()
@@ -214,49 +224,50 @@ func _case_g_network_loss_and_retry() -> void:
 	c.release(c.gates.size() - 1)
 	var lost := await c.buy("A", GOOD, 10)
 	_check(lost["pending"] and int(c.get_confirmed_progress()["revision"]) == 1, "G: no answer: pending, cache unchanged")
-	# The retry (same key) and a NEW trade overlap; the newer revision answers first.
+	# The retry (same key) and a newer READ overlap (WP01-H: B-4A refuses a new
+	# trade while the order is unresolved); the newer revision answers first.
 	var g_retry := c.queue(_trade_ok(9160, 10, 2, 89, true))
-	var g_new := c.queue(_trade_ok(9071, 11, 3, 90))
+	var g_new := c.queue(_read_ok(9071, 11, 3, 90))
 	var done := []
 	_start_recover(c, done)
-	_start_buy(c, done)
+	_start_refresh(c, done)
 	await process_frame
 	await _release_and_wait(c, g_new, done, 1)
 	await _release_and_wait(c, g_retry, done, 2)
 	var p := c.get_confirmed_progress()
-	_check(int(p["revision"]) == 3 and int(p["money"]) == 9071, "G: retry answered last does not roll back the newer trade (%s)" % _short(p))
+	_check(int(p["revision"]) == 3 and int(p["money"]) == 9071, "G: retry answered last does not roll back the newer state (%s)" % _short(p))
 	_check(c.get_pending_commands().is_empty(), "G: the retried order is resolved, nothing pending")
 	_check(_sent_trade_keys(c).count(lost["idempotency_key"]) == 2, "G: the retry reused the SAME idempotency key")
+	_check(_sent_ids_for(c, lost["idempotency_key"]) == [OnlineProgressClient.RPC_TRADE, OnlineProgressClient.RPC_TRADE_RESOLVE], "G: the retry is vs01_trade_resolve, never a second vs01_trade")
 	c.queue_free()
 
 
 func _case_h_recovery_concurrent_with_trades() -> void:
 	var c := await _signed_in_client("h1", 10000, 1)
-	for i in range(2):
-		c.queue({"status": OnlineProgressClient.UNCERTAIN, "reason": "HTTPRequest failed!"})
-		c.release(c.gates.size() - 1)
-		await c.buy("A", GOOD, 1)
-	_check(c.get_pending_commands().size() == 2, "H: two uncertain orders pending")
-	# Recovery resends both orders (answers: revisions 2 and 4) while a new
-	# trade runs (revision 3). The new trade answers LAST, after both retries.
+	c.queue({"status": OnlineProgressClient.UNCERTAIN, "reason": "HTTPRequest failed!"})
+	c.release(c.gates.size() - 1)
+	var lost := await c.buy("A", GOOD, 1)
+	_check(c.get_pending_commands().size() == 1, "H: one uncertain order pending")
+	# WP01-H B-4A: while it is unresolved a NEW trade is refused locally.
+	var sent_before := c.sent.size()
+	var refused := await c.buy("A", GOOD, 1)
+	_check(refused["reason"] == OnlineProgressClient.TRADE_UNRESOLVED and c.sent.size() == sent_before, "H: a new trade is refused locally while an order is unresolved (nothing sent)")
+	# Recovery (answer: revision 2) runs while a read (revision 3) is in flight;
+	# the read answers FIRST, the recovery LAST.
 	var g_r1 := c.queue(_trade_ok(9916, 1, 2, 85, true))
-	var g_new := c.queue(_trade_ok(9831, 2, 3, 86))
+	var g_read := c.queue(_read_ok(9831, 2, 3, 86))
 	var recovered := []
-	var bought := []
+	var read := []
 	_start_recover(c, recovered)
 	await process_frame
-	_start_buy(c, bought)
+	_start_refresh(c, read)
 	await process_frame
-	var g_r2 := c.queue(_trade_ok(9745, 3, 4, 87, true))
-	c.release(g_r1)
-	# recover_pending sends the second retry only after the first resolved.
-	while c.sent.size() < 6:
-		await process_frame
-	await _release_and_wait(c, g_r2, recovered, 2)
-	await _release_and_wait(c, g_new, bought, 1)
+	await _release_and_wait(c, g_read, read, 1)
+	await _release_and_wait(c, g_r1, recovered, 1)
 	var p := c.get_confirmed_progress()
-	_check(int(p["revision"]) == 4 and int(p["money"]) == 9745 and int(p["backpack"][GOOD]) == 3, "H: the cache ends at the newest revision (%s)" % _short(p))
-	_check(c.get_pending_commands().is_empty(), "H: both recovered orders resolved, nothing pending")
+	_check(int(p["revision"]) == 3 and int(p["money"]) == 9831 and int(p["backpack"][GOOD]) == 2, "H: the cache ends at the newest revision (%s)" % _short(p))
+	_check(c.get_pending_commands().is_empty(), "H: the recovered order resolved, nothing pending")
+	_check(_sent_ids_for(c, lost["idempotency_key"]) == [OnlineProgressClient.RPC_TRADE, OnlineProgressClient.RPC_TRADE_RESOLVE], "H: recovered through vs01_trade_resolve with the original key")
 	c.queue_free()
 
 
@@ -300,6 +311,7 @@ func _case_i_same_account_reauth() -> void:
 	var recovered := await c.recover_pending()
 	_check(recovered.size() == 1 and recovered[0]["status"] == OnlineProgressClient.OK and recovered[0]["replayed"] and c.get_pending_commands().is_empty(), "I4: the pending order is recovered once with its original key")
 	_check(_sent_trade_keys(c).count(key) == 2, "I4: the recovery reused the same idempotency key")
+	_check(_sent_ids_for(c, key).back() == OnlineProgressClient.RPC_TRADE_RESOLVE, "I4: the recovery is vs01_trade_resolve")
 	c.queue_free()
 
 
@@ -332,9 +344,19 @@ static func _read_ok(money: int, carried: int, revision: int, buy_price: int) ->
 	return {"status": OnlineProgressClient.OK, "reason": "", "data": {"progress": _view(money, carried, revision, buy_price)}}
 
 
-static func _trade_ok(money: int, carried: int, revision: int, buy_price: int, replayed := false) -> Dictionary:
-	return {"status": OnlineProgressClient.OK, "reason": "", "data": {"replayed": replayed,
-		"receipt": {"status": "applied", "progress_revision": revision}, "progress": _view(money, carried, revision, buy_price)}}
+## WP01-H FIX-03: the exact Legacy v1 receipt rpcTrade writes for the
+## request (key, account, command, hash, consistent money / cargo).
+static func _trade_ok(money: int, carried: int, revision: int, buy_price: int, replayed := false) -> Callable:
+	return func(p: Dictionary, user_id: String) -> Dictionary:
+		var qty := int(p["quantity"])
+		var total := buy_price * qty
+		var receipt := {"idempotency_key": p["idempotency_key"], "request_hash": "%s|%s|%s|%d" % [p["action"], p["city_id"], p["good_id"], qty],
+			"user_id": user_id, "gameplay_session_id": p["gameplay_session_id"], "action": p["action"], "city_id": p["city_id"], "good_id": p["good_id"],
+			"quantity": qty, "status": "applied", "reason": "", "unit_price": buy_price, "total": total,
+			"money_before": money + total, "money_after": money, "carried_before": carried - qty, "carried_after": carried,
+			"progress_revision": revision, "server_time_ms": 1}
+		return {"status": OnlineProgressClient.OK, "reason": "", "data": {"replayed": replayed,
+			"receipt": receipt, "progress": _view(money, carried, revision, buy_price)}}
 
 
 func _release_and_wait(c: GatedClient, gate: int, done: Array, count: int) -> void:
@@ -360,12 +382,31 @@ func _start_recover(c: OnlineProgressClient, done: Array) -> void:
 		done.append(r)
 
 
+## Keys sent as vs01_trade OR vs01_trade_resolve (WP01-H: recovery resolves).
 static func _sent_trade_keys(c: GatedClient) -> Array:
 	var keys := []
 	for s in c.sent:
-		if s["id"] == OnlineProgressClient.RPC_TRADE:
+		if s["id"] == OnlineProgressClient.RPC_TRADE or s["id"] == OnlineProgressClient.RPC_TRADE_RESOLVE:
 			keys.append(s["payload"]["idempotency_key"])
 	return keys
+
+
+static func _sent_ids_for(c: GatedClient, key: String) -> Array:
+	var ids := []
+	for s in c.sent:
+		if s["payload"].get("idempotency_key", "") == key:
+			ids.append(s["id"])
+	return ids
+
+
+func _wipe(dir: String) -> void:
+	if not DirAccess.dir_exists_absolute(dir):
+		return
+	for sub in DirAccess.get_directories_at(dir):
+		_wipe(dir + "/" + sub)
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + "/" + f)
+	DirAccess.remove_absolute(dir)
 
 
 static func _short(p: Dictionary) -> String:

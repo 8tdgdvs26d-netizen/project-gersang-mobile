@@ -54,6 +54,14 @@ const FINAL_TEXTS := {
 	"cooldown_active": "此敵群剛被擊敗，冷卻中：請稍後再試或選其他敵群",
 	"ticket_unsettled": UNSETTLED_TEXT,
 }
+## WP01-H (E2) minimal Online TEST prompts (B-4A): never a false success.
+const CONFLICT_TEXT := "此遭遇的結果需要核對：已暫停此遭遇的提交／放棄，不會自動重試或清除。"
+const STORE_BLOCKED_TEXT := "本機待確認紀錄需要核對：已暫停戰鬥提交／放棄。"
+const STORE_WRITE_FAILED_TEXT := "未能保存戰鬥結果：今次未有提交。"
+const CLAIM_UNRESOLVED_TEXT := "上一場結果仍待伺服器確認：不能放棄或開始覆蓋，請先「重新提交」或「核實未確認結果」。"
+const RECOVERED_NOTHING_TEXT := "沒有需要核實的戰鬥結果"
+const UNVERIFIED_TEXT := "有未確認的戰鬥結果：請先按「核實未確認結果」，核對前不會重新提交。"
+const RECOVERY_UNSUPPORTED_TEXT := "伺服器未能核實上一場結果：已暫停此遭遇，未有重新提交，亦不會自行補發 EXP。"
 
 var host := DEFAULT_HOST
 var port := DEFAULT_PORT
@@ -92,6 +100,7 @@ func _ready() -> void:
 	if client.get_parent() == null:
 		add_child(client)
 	client.configure(host, port)
+	# WP01-H: the client always owns its per-account Pending Store (FIX-01).
 	adapter = OnlineCombatAdapter.new(client)
 	combat_view = CombatView.new()
 	combat_view.name = "CombatView"
@@ -160,6 +169,23 @@ func refresh() -> Dictionary:
 	else:
 		_set_status(_text_for(result))
 	_render()
+	return result
+
+
+## WP01-H: after a restart / takeover, checks the server's recorded intent
+## against the local pending claim and resends it with its original key.
+func recover() -> Dictionary:
+	if _busy:
+		return _busy_result()
+	var epoch := _begin_request()
+	var result := await adapter.recover()
+	if not _end_request(epoch):
+		return result
+	if result.get("reason", "") == "nothing_pending":
+		_set_status(RECOVERED_NOTHING_TEXT)
+		_render()
+	else:
+		_after_answer(result)
 	return result
 
 
@@ -292,6 +318,24 @@ func _after_answer(result: Dictionary) -> void:
 			_schedule_retry()
 		OnlineCombatAdapter.SUPERSEDED:
 			_set_status(SUPERSEDED_TEXT)
+		OnlineCombatAdapter.CONFLICT:
+			_retry_index = 0
+			_set_status(CONFLICT_TEXT)
+		OnlineCombatAdapter.BLOCKED:
+			_retry_index = 0
+			var reason := String(result.get("reason", ""))
+			if reason == OnlineProgressClient.STORE_WRITE_FAILED:
+				_set_status(STORE_WRITE_FAILED_TEXT)
+			elif reason in [OnlineCombatAdapter.PENDING_CLAIM_UNRESOLVED, OnlineCombatAdapter.PENDING_COMBAT_UNRESOLVED]:
+				_set_status(CLAIM_UNRESOLVED_TEXT)
+			elif reason == OnlineCombatAdapter.PENDING_NEEDS_CHECK:
+				_set_status(CONFLICT_TEXT)
+			elif reason == OnlineCombatAdapter.PENDING_UNVERIFIED:
+				_set_status(UNVERIFIED_TEXT)
+			elif reason == OnlineCombatAdapter.RECOVERY_UNSUPPORTED:
+				_set_status(RECOVERY_UNSUPPORTED_TEXT)
+			else:
+				_set_status(STORE_BLOCKED_TEXT)
 		_:
 			_retry_index = 0
 			_set_status(_text_for(result))
@@ -360,6 +404,7 @@ func _render() -> void:
 	_buttons["Reclaim"].disabled = _busy
 	_buttons["Refresh"].disabled = _busy or not session or superseded or fighting
 	_buttons["Resend"].disabled = _busy or not session or superseded or pending.is_empty()
+	_buttons["Recover"].disabled = _busy or not session or superseded or fighting
 	_buttons["Abandon"].visible = unresolved and not fighting
 	_buttons["Abandon"].text = "確認放棄（不計經驗）" if _confirming_abandon else "放棄上一場"
 	_buttons["Abandon"].disabled = _busy or superseded
@@ -448,6 +493,7 @@ func _build_panel() -> void:
 	row.add_child(_button("Reclaim", "重新接管", func(): reclaim_session()))
 	row.add_child(_button("Refresh", "重新讀取", func(): refresh()))
 	row.add_child(_button("Resend", "重新提交", func(): resend()))
+	row.add_child(_button("Recover", "核實未確認結果", func(): recover()))
 	row.add_child(_button("Abandon", "放棄上一場", func(): abandon_unresolved()))
 	_session_box.add_child(row)
 	var fights := HBoxContainer.new()

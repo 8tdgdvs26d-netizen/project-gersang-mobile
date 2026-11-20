@@ -8,6 +8,13 @@ extends SceneTree
 ## answer, superseded -> reclaim -> resend, final refusals, receipt replay,
 ## explicit abandon, app-kill recovery, sign-out isolation. Part of the normal
 ## Godot regression; the live run is tests/live_vs01_wp01e_online_combat.gd.
+##
+## WP01-H E2 (superseded behaviour, updated): receipts are the exact E1
+## encounter receipt (myrial.vs01.wp01e.receipt v1) of the request; the
+## pending result is durable in the account's Pending Store (no RAM-only
+## filing); claim_locked and invalid_claim are no longer "final, dropped" but
+## a CONFLICT that is kept and blocks the ticket (B-4A), checked in
+## _verify_conflicts_kept with its own account.
 
 const SCENE := "res://scenes/online_combat_test_mode.tscn"
 const OK := OnlineProgressClient.OK
@@ -32,34 +39,37 @@ class GatedClient extends OnlineProgressClient:
 		var body := Marshalls.utf8_to_base64(JSON.stringify({"uid": "ui-" + email, "usn": email, "exp": 4102444800})).trim_suffix("=").trim_suffix("=")
 		return _accept_session(NakamaSession.new("%s.%s.x" % [header, body], false))
 
-	func answer(result: Dictionary) -> void:
+	func answer(result: Variant) -> void:
 		answers.append(result)
 
 	## The next RPC waits until release_held() (to answer after a sign-out).
 	func hold_next() -> void:
 		answers.append({"__hold": true})
 
-	func release_held(result: Dictionary) -> void:
+	func release_held(result: Variant) -> void:
 		held.append(result)
 
 	func _rpc(id: String, payload: Dictionary) -> Dictionary:
 		sent.append({"id": id, "payload": payload.duplicate(true)})
 		if answers.is_empty():
 			return {"status": UNCERTAIN, "reason": "no scripted answer"}
-		var a: Dictionary = answers.pop_front()
-		if a.has("__hold"):
+		var user := get_user_id()
+		var a: Variant = answers.pop_front()
+		if typeof(a) == TYPE_DICTIONARY and a.has("__hold"):
 			while held.is_empty():
 				await Engine.get_main_loop().process_frame
-			return held.pop_front()
-		return a
+			a = held.pop_front()
+		return a.call(payload, user) if typeof(a) == TYPE_CALLABLE else a
 
 
 func _initialize() -> void:
 	await process_frame
 	var dev_before := _dev_save_fingerprint()
 	print("Isolated user:// for this run: %s" % OS.get_user_data_dir())
+	_wipe("user://online_pending")  # synthetic accounts only (isolated user://)
 	_verify_static()
 	await _verify_flow()
+	await _verify_conflicts_kept()
 	await _verify_app_kill_recovery()
 	await _verify_sign_out_isolation()
 	_check(_dev_save_fingerprint() == dev_before, "Development Save (%s) is untouched" % SaveStore.DEFAULT_PATH)
@@ -140,7 +150,7 @@ func _verify_flow() -> void:
 	_check(client.sent.size() == sent_before, "Superseded device sends nothing (policy A)")
 	client.answer(_session_answer("00000000-0000-0000-0000-000000000002", 3))
 	client.answer(_ok({"progression": _prog(1, 0, 0), "unresolved_ticket": _ticket(10), "group_available_at_ms": {}, "server_time_ms": 2}))
-	client.answer(_ok({"replayed": false, "receipt": _receipt("claim", 100, 1, 2), "progression": _prog(2, 0, 1)}))
+	client.answer(_receipt_answer(false, 100, 1, 2, _prog(2, 0, 1)))
 	await mode.reclaim_session()
 	var resent: Dictionary = client.sent[-1]
 	_check(resent["payload"]["idempotency_key"] == first["payload"]["idempotency_key"] and resent["payload"]["gameplay_session_id"] == "00000000-0000-0000-0000-000000000002", "After reclaim the same key is resent from the NEW session")
@@ -148,17 +158,18 @@ func _verify_flow() -> void:
 	_check(mode.get_progression_text() == "主角 Lv 2　經驗 0 / 150（伺服器確認）", "Level 2 shown only now (%s)" % mode.get_progression_text())
 
 	# A replay of an older confirmation never adds EXP twice; an older revision never wins.
-	mode.adapter._set_pending({"kind": "claim", "key": first["payload"]["idempotency_key"], "ticket_id": TICKET, "payload": first["payload"]})
-	client.answer(_ok({"replayed": true, "receipt": _receipt("claim", 100, 1, 2), "progression": _prog(2, 0, 1)}))
+	client.set_combat_pending(_claim_entry(first["payload"]["idempotency_key"], first["payload"]))
+	client.answer(_receipt_answer(true, 100, 1, 2, _prog(2, 0, 1)))
 	await mode.resend()
 	_check(mode.get_status_text() == OnlineCombatTestMode.REPLAYED_TEXT % [100, 1, 2], "Replay shown as already confirmed")
 	_check(mode.adapter.get_confirmed_progression()["revision"] == 1 and mode.get_progression_text() == "主角 Lv 2　經驗 0 / 150（伺服器確認）", "Replay adds no EXP")
 	mode.adapter._offer(_prog(1, 50, 0))
 	_check(mode.adapter.get_confirmed_progression()["level"] == 2, "An older server revision never replaces a newer one")
 
-	# Final refusals drop the pending result, with a clear message.
-	for reason in ["ticket_expired", "claim_locked", "ticket_already_claimed", "ticket_abandoned", "invalid_claim"]:
-		mode.adapter._set_pending({"kind": "claim", "key": OnlineProgressClient.new_idempotency_key(), "ticket_id": TICKET, "payload": first["payload"]})
+	# Final refusals drop the pending result, with a clear message. (WP01-H:
+	# claim_locked / invalid_claim are conflicts now: _verify_conflicts_kept.)
+	for reason in ["ticket_expired", "ticket_already_claimed", "ticket_abandoned"]:
+		client.set_combat_pending(_claim_entry(OnlineProgressClient.new_idempotency_key(), first["payload"]))
 		client.answer(_refused(reason, 9))
 		if reason == "ticket_already_claimed":
 			client.answer(_ok({"progression": _prog(2, 0, 1), "unresolved_ticket": null, "group_available_at_ms": {}, "server_time_ms": 3}))
@@ -179,13 +190,41 @@ func _verify_flow() -> void:
 	await mode.abandon_unresolved()
 	var ab1: Dictionary = client.sent[-1]
 	_check(ab1["id"] == OnlineCombatAdapter.RPC_ABANDON and ab1["payload"]["confirm"] == true and mode.adapter.has_pending(), "Uncertain abandon is kept")
-	client.answer(_ok({"replayed": false, "receipt": _receipt("abandon", 0, 2, 2), "progression": _prog(2, 0, 1)}))
+	client.answer(_abandon_answer(2, _prog(2, 0, 1)))
 	await mode.resend()
 	_check(client.sent[-1]["payload"]["idempotency_key"] == ab1["payload"]["idempotency_key"], "Abandon resent with its own same key")
 	_check(mode.get_status_text() == OnlineCombatTestMode.ABANDONED_TEXT and not mode.get_panel_button("Fight1").disabled, "Abandoned: new battles allowed; Level unchanged")
 	_check(mode.get_progression_text() == "主角 Lv 2　經驗 0 / 150（伺服器確認）", "Abandon changes no confirmed progression")
 	mode.queue_free()
 	await process_frame
+
+
+## WP01-H (supersedes "claim_locked / invalid_claim: final, dropped"): the
+## result is KEPT, quarantined, never resent automatically, and the ticket's
+## conflicting abandon is refused (B-4A). Own account, own ticket.
+func _verify_conflicts_kept() -> void:
+	for reason in ["claim_locked", "invalid_claim"]:
+		var client := GatedClient.new()
+		var mode := await _new_mode(client)
+		await mode.sign_in("conflict-%s@myrial.test" % reason, "localtest-x")
+		client.answer(_session_answer("00000000-0000-0000-0000-00000000000c", 1))
+		client.answer(_ok({"progression": _prog(1, 0, 0), "unresolved_ticket": null, "group_available_at_ms": {}, "server_time_ms": 1}))
+		await mode.begin_session()
+		client.answer(_ok({"ticket": _ticket(10), "progression": _prog(1, 0, 0)}))
+		await mode.start_battle(0)
+		_win(mode.get_battle())
+		client.answer(_refused(reason, 6 if reason == "claim_locked" else 3))
+		mode.combat_view.exit_requested.emit()
+		await _until_idle(mode)
+		var pending := mode.adapter.get_pending()
+		_check(pending.get("state") == "quarantined" and pending.get("reason") == reason, "%s: kept and quarantined, not dropped (%s)" % [reason, str(pending.get("state"))])
+		_check(mode.get_status_text() == OnlineCombatTestMode.CONFLICT_TEXT, "%s: the player is told it needs checking" % reason)
+		var sent_before := client.sent.size()
+		await mode.resend()
+		await mode.adapter.abandon(TICKET)
+		_check(client.sent.size() == sent_before and mode.adapter.has_pending(), "%s: no automatic resend, no abandon over the kept result" % reason)
+		mode.queue_free()
+		await process_frame
 
 
 ## App killed with a result in RAM: a fresh process shows only the server
@@ -222,12 +261,13 @@ func _verify_sign_out_isolation() -> void:
 	var first_user := client.get_user_id()
 	mode.sign_out()
 	await mode.sign_in("second@myrial.test", "localtest-y")
-	client.release_held(_ok({"replayed": false, "receipt": _receipt("claim", 100, 1, 2), "progression": _prog(2, 0, 1)}))
+	client.release_held(_receipt_answer(false, 100, 1, 2, _prog(2, 0, 1)))
 	for i in 5:
 		await process_frame
 	_check(mode.get_progression_text() == OnlineCombatTestMode.PROGRESSION_UNKNOWN_TEXT, "The first account's answer is not shown to the second account")
 	_check(not mode.adapter.has_pending(), "The second account has no pending result")
-	_check(mode.adapter._pending_by_user.has(first_user), "The first account's result stays filed under that account")
+	var filed: Dictionary = OnlinePendingStore.new().load_account(first_user)["combat"]
+	_check(filed.get("kind") == "claim" and filed.get("ticket_id") == TICKET, "The first account's result stays filed under that account (its Pending Store)")
 	mode.queue_free()
 	await process_frame
 
@@ -258,8 +298,44 @@ static func _ticket(enemies: int) -> Dictionary:
 		"enemy_count": float(enemies), "status": "OPEN", "intent_recorded": false}
 
 
-static func _receipt(kind: String, exp: int, before: int, after: int) -> Dictionary:
-	return {"kind": kind, "exp_awarded": float(exp), "level_before": float(before), "level_after": float(after), "ticket_id": TICKET}
+## WP01-H FIX-03: the exact E1 encounter receipt (22 fields) the server
+## writes for the request: key, account, ticket, claim and request hash.
+static func _receipt_answer(replayed: bool, exp: int, before: int, after: int, progression: Dictionary) -> Callable:
+	return func(p: Dictionary, user_id: String) -> Dictionary:
+		var kills := int(p["kills"])
+		var receipt := {"contract": "myrial.vs01.wp01e.receipt", "contract_version": 1.0, "kind": "claim",
+			"idempotency_key": p["idempotency_key"], "request_hash": "claim|%s|%s|%d|%s" % [p["ticket_id"], p["outcome"], kills, "1" if p["hero_alive"] else "0"],
+			"user_id": user_id, "gameplay_session_id": p["gameplay_session_id"], "ticket_id": p["ticket_id"], "status": "applied",
+			"outcome": p["outcome"], "kills_claimed": float(kills), "kills_accepted": float(kills), "hero_alive": p["hero_alive"],
+			"exp_awarded": float(exp), "level_before": float(before), "exp_before": 0.0, "level_after": float(after), "exp_after": 0.0,
+			"progression_revision": progression["revision"], "cooldown_groups": [], "intent_first_seen_at_ms": -1.0, "server_time_ms": 1.0}
+		return {"status": OK, "reason": "", "data": {"replayed": replayed, "receipt": receipt, "progression": progression}}
+
+
+static func _abandon_answer(level: int, progression: Dictionary) -> Callable:
+	return func(p: Dictionary, user_id: String) -> Dictionary:
+		var receipt := {"contract": "myrial.vs01.wp01e.receipt", "contract_version": 1.0, "kind": "abandon",
+			"idempotency_key": p["idempotency_key"], "request_hash": "abandon|" + p["ticket_id"], "user_id": user_id,
+			"gameplay_session_id": p["gameplay_session_id"], "ticket_id": p["ticket_id"], "status": "applied",
+			"outcome": null, "kills_claimed": null, "kills_accepted": null, "hero_alive": null,
+			"exp_awarded": 0.0, "level_before": float(level), "exp_before": 0.0, "level_after": float(level), "exp_after": 0.0,
+			"progression_revision": progression["revision"], "cooldown_groups": [], "intent_first_seen_at_ms": -1.0, "server_time_ms": 1.0}
+		return {"status": OK, "reason": "", "data": {"replayed": false, "receipt": receipt, "progression": progression}}
+
+
+static func _claim_entry(key: String, sent_payload: Dictionary) -> Dictionary:
+	return {"kind": "claim", "key": key, "ticket_id": TICKET, "state": "pending", "reason": "",
+		"payload": {"ticket_id": TICKET, "outcome": sent_payload["outcome"], "kills": int(sent_payload["kills"]), "hero_alive": sent_payload["hero_alive"]}}
+
+
+func _wipe(dir: String) -> void:
+	if not DirAccess.dir_exists_absolute(dir):
+		return
+	for sub in DirAccess.get_directories_at(dir):
+		_wipe(dir + "/" + sub)
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir + "/" + f)
+	DirAccess.remove_absolute(dir)
 
 
 static func _session_answer(gsid: String, revision: int) -> Dictionary:
