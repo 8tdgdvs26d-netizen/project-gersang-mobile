@@ -71,7 +71,7 @@ test("FS-K2 random lossy proxy (seeded, loopback): every key ends with exactly o
   record("FS-K2", { random_proxy: { seed: stats.seed, faults: stats.faults, disturbed: stats.disturbed }, outcomes: keys.map((k) => tradeReceipts(a, k)[0].status) });
 });
 
-// FS-K1 (r2): this test only drives the burst and records evidence; the
+// FS-K1 (r2, r3): this test only drives the burst and records evidence; the
 // launcher owns the restart timing (docker State.FinishedAt / StartedAt) and
 // gives the strict PASS / INCONCLUSIVE / FAIL verdict (restartVerdict) from
 // FS-K1-restart-round.json. Invariant breaks (not exactly one receipt per key,
@@ -84,10 +84,10 @@ test("FS-K1 server restart around commit: a trade / resolve / claim burst across
   await sleep(10300);
   const ckey = newKey();
   const requests = []; // every request of the burst: key, rpc, client send / done (Date.now, same host clock as docker), outcome
-  const timed = async (rpcName, key, p) => {
+  const timed = async (rpcName, key, p, phase = "burst") => {
     const sent = Date.now();
     const r = await safe(p);
-    requests.push({ key, rpc: rpcName, sent_at: sent, done_at: Date.now(), status: r.status, outcome: reason(r) });
+    requests.push({ key, rpc: rpcName, phase, sent_at: sent, done_at: Date.now(), status: r.status, outcome: reason(r) });
     return r;
   };
   fs.writeFileSync(`${CASE_DIR}/FS-K1-restart.ready`, new Date().toISOString() + "\n", { flag: "wx" }); // the launcher restarts nakama after this
@@ -107,6 +107,8 @@ test("FS-K1 server restart around commit: a trade / resolve / claim burst across
   for (let i = 0; i < 120 && (await fetch(`${BASE}/healthcheck`).then((x) => x.status).catch(() => 0)) !== 200; i++) await sleep(1000);
   const settledAt = Date.now();
   for (const k of keys) { await settle(a, k, cmd()); await sleep(400); }
+  // r3: one same-key retry per key after the restart; it must be replayed (exactly-once evidence on the same key)
+  for (const k of keys) { await timed("vs01_trade_resolve", k, resolve(a, k, cmd()), "verify"); await sleep(400); } // non-200 (e.g. rate limit) is just no evidence
   for (let i = 0; i < 5 && !claimed; i++) { const c = await safe(rpc(b, "vs01e_encounter_claim", { gameplay_session_id: b.gsid, idempotency_key: ckey, ticket_id: tk.ticket_id, outcome: "victory", kills: 10, hero_alive: true })); claimed = c.status === 200; if (!claimed) await sleep(6000); }
   const all = tradeReceipts(a);
   const perKey = keys.map((k) => ({ key: k, receipts: all.filter((r) => r.idempotency_key === k).map((r) => ({ status: r.status, server_time_ms: r.server_time_ms })) }));
@@ -118,6 +120,7 @@ test("FS-K1 server restart around commit: a trade / resolve / claim burst across
   for (const k of perKey) assert.equal(k.receipts.length, 1, `key ${k.key}: ${k.receipts.length} receipts after the restart`);
   assert.equal(settlements.length, 1, "the claim settled exactly once across the restart");
   assert.deepEqual(round.ledger_problems, []);
+  for (const r of requests.filter((x) => x.phase === "verify" && x.status === 200)) assert.equal(r.outcome, "replayed", `key ${r.key}: the same-key retry after the restart was not replayed`);
   record("FS-K1-restart", { keys: keys.length, requests: requests.length, client_errors: requests.filter((r) => r.status !== 200).length });
 });
 

@@ -75,10 +75,25 @@ The E3 live tests skip everything unless the launcher sets `MYRIAL_WP01H_E3_RUN_
 - **Verdict** (`restartVerdict`, pure, unit-tested; FAIL > INCONCLUSIVE > PASS):
   - **FAIL:** the h3 test failed, a key does not have exactly one receipt, the claim did not settle exactly once, or the ledger has problems.
   - **INCONCLUSIVE:** no timing or round file; restart exit ≠ 0; `StartedAt` unchanged; unparsable / missing times; times out of order (`cmd_start ≤ stop ≤ start ≤ cmd_end / health`, 1 s margin); a receipt committed inside the down window (contradictory clock evidence); no commit before the stop; no request in flight at the stop; no client error during the restart; no burst commit after the new start (settle-phase commits do not count). "The burst never became ready" is now INCONCLUSIVE (was FAIL): no restart was attempted.
-  - **PASS:** none of the above, i.e. direct evidence that the burst crossed the restart and exactly-once held.
+  - **PASS:** none of the above, i.e. direct evidence that the burst crossed the restart and exactly-once held. *(Superseded by r3: that is only in-flight coverage; the case now stays INCONCLUSIVE until there is commit-level evidence.)*
 - The client-side "some request failed" check moved from an h3 hard assert to the verdict's coverage rule (INCONCLUSIVE, not FAIL).
 - Kept unchanged: the G1 / G2 isolation checks, `recheckG2` before and after the restart, the module-hash STOP, run-project-only restart.
 - Assumption (Inference, not proven): docker timestamps, the launcher clock and nakama `server_time_ms` share one host clock (single-host run).
+
+## Corrective r3 (offline): no false PASS for FS-K1
+
+- **Process exit.** `restartVerdict` also gets the h3 process result (`code`, `signal`, `timedOut`). Any non-zero exit, signal or timeout is **FAIL**, even when TAP shows `ok`.
+- **Never ready.** This path now runs the same verdict, so a failure the child already proved (TAP `not ok`, an abnormal exit, an invariant break in the round file) is **FAIL**. Only a clean child that never became ready is INCONCLUSIVE.
+- **Same-key correlation.** After the settle, h3 retries every key once (`phase: "verify"`). A 200 retry must be `replayed`; anything else is FAIL. A non-200 retry (for example a rate limit) just gives no evidence. `restartKeyEvidence` classifies each key using only that key's own requests, receipt and retry:
+  - `response_lost_after_commit`: the key's request was in flight across the stop and got no 200; its single receipt is from before the stop; the same-key retry was replayed.
+  - `lost_then_committed_after_restart`: the same, except the single receipt is from after the new start.
+  - not coverage: `answered_in_flight`, `no_replayed_retry`, `ambiguous_near_stop` (within 1 s of the stop), `no_single_receipt`, `contradictory`, `not_in_flight`.
+- **Evidence levels** (reported in the case as `levels`):
+  - `inflight_restart`: COVERED when at least one key is in either of the first two classes.
+  - `response_lost_after_commit`: COVERED when at least one key is in the first class.
+  - `commit_level`: **PENDING**. A crash inside the commit itself cannot be shown by black-box timing; it needs a server-side hook, which is outside this scope (no E1 or server contract change).
+- **Case verdict.** The original FS-K1 requirement ("restart around commit") is kept, so without commit-level evidence FS-K1-restart is **INCONCLUSIVE at best, never PASS**. PASS needs `commitLevel: { verdict: "PASS" }`, which nothing in this phase supplies.
+- Unit tests include deliberate false-PASS cases: TAP ok with exit 1, SIGKILL or timeout; evidence spread across different keys; a request in flight but answered; no retry; a retry that was not 200; a receipt near the stop. A mutation check (`09_mutation_check.log`) shows each guard is load-bearing.
 
 ## Labels
 - FS-K IDs follow the order in which Blueprint v0.1r3 §9 lists the topics (D-P6 (a), Charlie, 2026-11-21).

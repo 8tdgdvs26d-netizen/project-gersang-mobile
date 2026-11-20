@@ -364,23 +364,26 @@ test("r1 FS-K2 random lossy proxy: deterministic, bounded, loopback only, faults
   await new Promise((r) => up.close(r));
 });
 
-// ---- r2: FS-K1 restart timing and strict verdict ----------------------------
+// ---- r2 / r3: FS-K1 restart timing, same-key correlation, strict verdict ----
 {
   const T0 = Date.parse("2026-11-21T10:00:00.000Z");
   const iso = (ms, extra = "") => new Date(ms).toISOString().replace("Z", extra + "Z");
   const STOP = T0 + 10000, START = T0 + 12000;
   const timing = (o = {}) => ({ restart_exit: 0, started_before: "2026-11-21T09:00:00.1Z", started_after: iso(START, "123456"), finished_at: iso(STOP, "987654"),
     cmd_start: T0 + 9500, cmd_end: START + 300, health_at: START + 1500, ...o });
-  const key = (k, t) => ({ key: k, receipts: [{ status: "committed", server_time_ms: t }] });
+  const rc = (k, t) => ({ key: k, receipts: [{ status: "committed", server_time_ms: t }] });
+  const rq = (key, sent, done, status, phase = "burst", outcome) => ({ key, rpc: "vs01_trade_resolve", phase, sent_at: sent, done_at: done, status, outcome: outcome ?? (status === 200 ? "committed" : "AbortError") });
+  const verify = (key) => rq(key, START + 20000, START + 20100, 200, "verify", "replayed");
+  // k1: answered before the stop; k2: in flight at the stop, committed BEFORE it, answer lost (response lost after commit);
+  // k3: in flight, lost, committed after the restart; k4: answered after the restart.
   const round = (o = {}) => ({
-    requests: [
-      { key: "k1", rpc: "vs01_trade", sent_at: T0 + 1000, done_at: T0 + 1100, status: 200 },
-      { key: "k2", rpc: "vs01_trade", sent_at: STOP - 500, done_at: STOP + 3500, status: 0 },
-      { key: "k3", rpc: "vs01_trade", sent_at: START + 2500, done_at: START + 2600, status: 200 },
-    ],
-    keys: [key("k1", T0 + 1050), key("k2", START + 20000), key("k3", START + 2550)],
+    requests: [rq("k1", T0 + 1000, T0 + 1100, 200), rq("k2", STOP - 3000, STOP + 1000, 0), rq("k3", STOP - 500, STOP + 3500, 0), rq("k4", START + 2500, START + 2600, 200),
+      verify("k1"), verify("k2"), verify("k3"), verify("k4")],
+    keys: [rc("k1", T0 + 1050), rc("k2", STOP - 2500), rc("k3", START + 15500), rc("k4", START + 2550)],
     settle_started_at: START + 15000, claim: { key: "c", settlements: [{ kind: "claim", server_time_ms: T0 + 2000 }] }, ledger_problems: [], ...o });
   const tap = (o = {}) => ({ passed: ["FS-K1 server restart"], failed: [], ...o });
+  const proc = (o = {}) => ({ code: 0, signal: null, timedOut: false, ...o });
+  const run = (o = {}) => L.restartVerdict({ timing: timing(), round: round(), tap: tap(), proc: proc(), ...o });
 
   test("r2 parseDockerTime: nanosecond RFC3339 to ms; zero / garbage are NaN", () => {
     assert.equal(L.parseDockerTime("2026-11-21T10:00:00.123456789Z"), Date.parse("2026-11-21T10:00:00.123Z"));
@@ -389,62 +392,84 @@ test("r1 FS-K2 random lossy proxy: deterministic, bounded, loopback only, faults
     for (const bad of ["0001-01-01T00:00:00Z", "", "yesterday", null, undefined]) assert.ok(Number.isNaN(L.parseDockerTime(bad)), String(bad));
   });
 
-  test("r2 restartVerdict PASS only with full timing evidence across the restart", () => {
-    const v = L.restartVerdict({ timing: timing(), round: round(), tap: tap() });
-    assert.equal(v.verdict, "PASS", v.reason);
-    assert.equal(v.in_flight_at_stop, 1); assert.equal(v.committed_before_stop, 1); assert.equal(v.burst_ok_after_start, 1);
+  test("r3 restartKeyEvidence classifies per key (same idempotency key for request, receipt, retry)", () => {
+    const e = Object.fromEntries(L.restartKeyEvidence({ round: round(), stop: STOP, start: START }).map((k) => [k.key, k.cls]));
+    assert.deepEqual(e, { k1: "not_in_flight", k2: "response_lost_after_commit", k3: "lost_then_committed_after_restart", k4: "not_in_flight" });
   });
 
-  test("r2 restartVerdict FAIL on invariant breaks (beats missing timing)", () => {
-    const two = round({ keys: [{ key: "k1", receipts: [{ server_time_ms: 1 }, { server_time_ms: 2 }] }] });
-    assert.equal(L.restartVerdict({ timing: null, round: two, tap: tap() }).verdict, "FAIL");
-    assert.equal(L.restartVerdict({ timing: timing(), round: round({ keys: [{ key: "k1", receipts: [] }] }), tap: tap() }).verdict, "FAIL");
-    assert.equal(L.restartVerdict({ timing: timing(), round: round({ claim: { settlements: [] } }), tap: tap() }).verdict, "FAIL");
-    assert.equal(L.restartVerdict({ timing: timing(), round: round({ claim: { settlements: [{}, {}] } }), tap: tap() }).verdict, "FAIL");
-    assert.equal(L.restartVerdict({ timing: timing(), round: round({ ledger_problems: ["x"] }), tap: tap() }).verdict, "FAIL");
-    assert.equal(L.restartVerdict({ timing: timing(), round: null, tap: tap({ passed: [], failed: ["FS-K1 server restart"] }) }).verdict, "FAIL");
+  test("r3 full in-flight evidence is still INCONCLUSIVE: commit-level stays PENDING (no false PASS)", () => {
+    const v = run();
+    assert.equal(v.verdict, "INCONCLUSIVE"); assert.match(v.reason, /commit-level interruption evidence PENDING/);
+    assert.deepEqual(v.levels, { inflight_restart: "COVERED", response_lost_after_commit: "COVERED", commit_level: "PENDING" });
+    assert.equal(v.response_lost_after_commit, 1); assert.equal(v.lost_then_committed_after_restart, 1);
   });
 
-  test("r2 restartVerdict INCONCLUSIVE on missing / failed restart evidence", () => {
-    const inc = (a) => { const v = L.restartVerdict({ timing: timing(), round: round(), tap: tap(), ...a }); assert.equal(v.verdict, "INCONCLUSIVE", JSON.stringify(a)); return v; };
-    inc({ timing: null });
-    inc({ timing: timing({ restart_exit: 1 }) });
-    inc({ round: null });
-    inc({ tap: tap({ passed: [] }) });
-    inc({ timing: timing({ started_after: "2026-11-21T09:00:00.1Z" }) });
-    inc({ timing: timing({ started_before: null }) });
-    inc({ timing: timing({ finished_at: "0001-01-01T00:00:00Z" }) });
-    inc({ timing: timing({ health_at: null }) });
+  test("r3 PASS needs explicit commit-level evidence on top of in-flight coverage", () => {
+    assert.equal(run({ commitLevel: { verdict: "PASS" } }).verdict, "PASS");
+    assert.equal(run({ commitLevel: { verdict: "INCONCLUSIVE" } }).verdict, "INCONCLUSIVE");
+    assert.equal(run({ commitLevel: { verdict: "PASS" }, round: round({ requests: round().requests.filter((r) => !["k2", "k3"].includes(r.key) || r.phase === "verify") }) }).verdict, "INCONCLUSIVE", "commit-level alone does not replace in-flight coverage");
   });
 
-  test("r2 restartVerdict INCONCLUSIVE on inconsistent or contradictory timing", () => {
-    const inc = (a) => assert.equal(L.restartVerdict({ timing: timing(), round: round(), tap: tap(), ...a }).verdict, "INCONCLUSIVE", JSON.stringify(a));
-    inc({ timing: timing({ finished_at: iso(START + 5000) }) });          // stop after start
-    inc({ timing: timing({ cmd_start: STOP + 5000 }) });                   // stop before the command
-    inc({ timing: timing({ cmd_end: START - 5000, health_at: START - 5000 }) }); // start after command / health
+  test("r3 FAIL on invariant breaks, failed TAP or abnormal process exit (beats everything else)", () => {
+    const f = (o) => { const v = run({ commitLevel: { verdict: "PASS" }, ...o }); assert.equal(v.verdict, "FAIL", JSON.stringify(o)); return v; };
+    f({ timing: null, round: round({ keys: [{ key: "k1", receipts: [{ server_time_ms: 1 }, { server_time_ms: 2 }] }] }) });
+    f({ round: round({ keys: [{ key: "k1", receipts: [] }] }) });
+    f({ round: round({ claim: { settlements: [] } }) });
+    f({ round: round({ claim: { settlements: [{}, {}] } }) });
+    f({ round: round({ ledger_problems: ["x"] }) });
+    f({ round: null, tap: tap({ passed: [], failed: ["FS-K1 server restart"] }) });
+    f({ round: round({ requests: [...round().requests, rq("k4", START + 21000, START + 21100, 200, "verify", "committed")] }) }); // a retry that re-committed
+    // TAP says ok but the process did not exit cleanly: never PASS
+    assert.match(f({ proc: proc({ code: 1 }) }).reason, /did not exit cleanly/);
+    f({ proc: proc({ code: null, signal: "SIGKILL", timedOut: true }) });
+    f({ proc: proc({ code: null, signal: "SIGTERM" }) });
   });
 
-  test("r2 restartVerdict INCONCLUSIVE: receipt committed inside the down window", () => {
-    const STOP2 = T0 + 10000, START2 = T0 + 20000;
-    const t = timing({ finished_at: iso(STOP2), started_after: iso(START2), cmd_end: START2 + 300, health_at: START2 + 1500 });
-    const r = round({ keys: [key("k1", T0 + 1050), key("k2", T0 + 15000), key("k3", START2 + 2550)],
-      requests: [{ sent_at: T0 + 1000, done_at: T0 + 1100, status: 200 }, { sent_at: STOP2 - 500, done_at: STOP2 + 3500, status: 0 }, { sent_at: START2 + 2500, done_at: START2 + 2600, status: 200 }] });
-    const v = L.restartVerdict({ timing: t, round: r, tap: tap() });
+  test("r3 never-ready: a proven child failure is FAIL, a clean child is INCONCLUSIVE", () => {
+    assert.equal(run({ ready: false, timing: null, tap: tap({ passed: [], failed: ["FS-K1 server restart"] }), proc: proc({ code: 1 }) }).verdict, "FAIL");
+    assert.equal(run({ ready: false, timing: null, round: null, tap: tap({ passed: [] }), proc: proc({ code: 1 }) }).verdict, "FAIL", "non-zero exit with no TAP line is still FAIL");
+    assert.equal(run({ ready: false, timing: null, round: round({ ledger_problems: ["x"] }) }).verdict, "FAIL");
+    const v = run({ ready: false, timing: null, commitLevel: { verdict: "PASS" } });
+    assert.equal(v.verdict, "INCONCLUSIVE"); assert.match(v.reason, /never became ready/);
+  });
+
+  test("r2/r3 INCONCLUSIVE on missing / failed restart evidence", () => {
+    const inc = (o) => assert.equal(run({ commitLevel: { verdict: "PASS" }, ...o }).verdict, "INCONCLUSIVE", JSON.stringify(o));
+    inc({ proc: null }); inc({ timing: null }); inc({ timing: timing({ restart_exit: 1 }) }); inc({ round: null }); inc({ tap: tap({ passed: [] }) });
+    inc({ timing: timing({ started_after: "2026-11-21T09:00:00.1Z" }) }); inc({ timing: timing({ started_before: null }) });
+    inc({ timing: timing({ finished_at: "0001-01-01T00:00:00Z" }) }); inc({ timing: timing({ health_at: null }) });
+    inc({ timing: timing({ finished_at: iso(START + 5000) }) }); inc({ timing: timing({ cmd_start: STOP + 5000 }) });
+    inc({ timing: timing({ cmd_end: START - 5000, health_at: START - 5000 }) });
+  });
+
+  test("r2 INCONCLUSIVE: a receipt committed inside the down window", () => {
+    const START2 = T0 + 20000;
+    const t = timing({ started_after: iso(START2), cmd_end: START2 + 300, health_at: START2 + 1500 });
+    const v = run({ timing: t, commitLevel: { verdict: "PASS" }, round: round({ keys: [rc("k1", T0 + 1050), rc("k2", T0 + 15000), rc("k3", START2 + 15500), rc("k4", START2 + 2550)] }) });
     assert.equal(v.verdict, "INCONCLUSIVE"); assert.match(v.reason, /while the server was down/);
   });
 
-  test("r2 restartVerdict INCONCLUSIVE when the burst did not straddle the restart", () => {
-    const base = round();
-    const inc = (o, re) => { const v = L.restartVerdict({ timing: timing(), round: round(o), tap: tap() }); assert.equal(v.verdict, "INCONCLUSIVE"); assert.match(v.reason, re); };
-    inc({ keys: [key("k2", START + 20000), key("k3", START + 2550)] }, /no commit before the stop/);
-    inc({ requests: [base.requests[0], { ...base.requests[1], sent_at: STOP + 100 }, base.requests[2]] }, /in flight/);
-    inc({ requests: [base.requests[0], { ...base.requests[1], status: 200 }, base.requests[2]] }, /observed no error/);
-    inc({ requests: base.requests.slice(0, 2) }, /after the new start/);
-    inc({ requests: [base.requests[0], base.requests[1], { ...base.requests[2], done_at: START + 16000 }] }, /after the new start/); // only settle-phase commits
-    inc({ keys: [key("k1", T0 + 1050)] }, /after the new start/);
+  test("r3 negative: evidence spread over different keys must not count as in-flight coverage", () => {
+    // k1 committed before the stop (answered), k5 in flight but answered 200, k4 committed after: r2 counted these as coverage
+    const r = round({ requests: [rq("k1", T0 + 1000, T0 + 1100, 200), rq("k5", STOP - 500, STOP + 500, 200), rq("k6", STOP - 400, STOP + 3000, 0),
+      rq("k4", START + 2500, START + 2600, 200), verify("k1"), verify("k4"), verify("k5")],
+      keys: [rc("k1", T0 + 1050), rc("k4", START + 2550), rc("k5", STOP - 450), rc("k6", START + 16000)] });
+    const v = run({ round: r, commitLevel: { verdict: "PASS" } });
+    assert.equal(v.verdict, "INCONCLUSIVE"); assert.equal(v.levels.inflight_restart, "NOT OBSERVED");
+    assert.deepEqual(v.unclassified_in_flight.sort(), ["k5:answered_in_flight", "k6:no_replayed_retry"]);
   });
 
-  test("r2 restart stage source: timing recorded around the command, verdict from restartVerdict, G2 + hash checks kept", () => {
+  test("r3 negative: in flight but no lost answer / no retry / receipt near the stop -> not coverage", () => {
+    const only = (reqs, keys) => run({ commitLevel: { verdict: "PASS" }, round: round({ requests: reqs, keys }) });
+    assert.equal(only([rq("k2", STOP - 3000, STOP + 1000, 200), verify("k2")], [rc("k2", STOP - 2500)]).verdict, "INCONCLUSIVE");          // answered
+    assert.equal(only([rq("k2", STOP - 3000, STOP + 1000, 0)], [rc("k2", STOP - 2500)]).verdict, "INCONCLUSIVE");                            // no retry
+    assert.equal(only([rq("k2", STOP - 3000, STOP + 1000, 0), rq("k2", START + 20000, START + 20100, 429, "verify", "rate")], [rc("k2", STOP - 2500)]).verdict, "INCONCLUSIVE"); // retry not 200
+    assert.equal(only([rq("k2", STOP - 3000, STOP + 1000, 0), verify("k2")], [rc("k2", STOP - 200)]).verdict, "INCONCLUSIVE");             // ambiguous near the stop
+    assert.equal(only([rq("k2", STOP - 3000, STOP - 100, 0), verify("k2")], [rc("k2", STOP - 2500)]).verdict, "INCONCLUSIVE");             // finished before the stop
+    assert.equal(only([rq("k2", STOP - 3000, STOP + 1000, 0), verify("k2")], [rc("k2", STOP - 2500)]).levels.response_lost_after_commit, "COVERED"); // positive control
+  });
+
+  test("r3 restart stage source: timing around the command, proc passed to the verdict, never-ready uses the verdict, G2 + hash kept", () => {
     const src = fs.readFileSync(new URL("../../scripts/run_wp01h_e3_bounded.mjs", import.meta.url), "utf8");
     const body = src.slice(src.indexOf("async function restartStage("), src.indexOf("async function ttlJob("));
     const at = (s) => { const i = body.indexOf(s); assert.ok(i >= 0, s); return i; };
@@ -454,7 +479,17 @@ test("r1 FS-K2 random lossy proxy: deterministic, bounded, loopback only, faults
     assert.ok(at("const cmdEnd = Date.now()") < at("const after = nakamaState(project)"));
     assert.equal(body.split("recheckG2(ev, project)").length - 1, 2);
     at('throw new Stop("module hash changed across the restart")');
-    at("restartVerdict({ timing, round, tap: t })");
-    assert.ok(!/caseResult\("FS-K1-restart", [^;]*\? "PASS"/.test(body), "no ad-hoc PASS ternary left");
+    assert.equal(body.split("proc: { code: r.code, signal: r.signal, timedOut: r.timedOut }").length - 1, 2);
+    at("ready: false });");
+    assert.ok(!/caseResult\("FS-K1-restart", "(PASS|INCONCLUSIVE|FAIL)"/.test(body), "every FS-K1 verdict comes from restartVerdict");
+  });
+
+  test("r3 h3 source: same-key verify retry after the settle, phase recorded, round file before asserts", () => {
+    const src = fs.readFileSync(new URL("../live/h3_wp01h_full_stress.test.mjs", import.meta.url), "utf8");
+    const body = src.slice(src.indexOf('test("FS-K1 server restart'), src.indexOf('test("FS-K3 race:'));
+    const at = (s) => { const i = body.indexOf(s); assert.ok(i >= 0, s); return i; };
+    at("requests.push({ key, rpc: rpcName, phase,");
+    assert.ok(at("await settle(a, k, cmd())") < at('resolve(a, k, cmd()), "verify")'));
+    assert.ok(at("FS-K1-restart-round.json") < at("assert.equal(k.receipts.length, 1"));
   });
 }
