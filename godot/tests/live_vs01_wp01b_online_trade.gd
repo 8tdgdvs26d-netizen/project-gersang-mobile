@@ -238,9 +238,12 @@ func _scenario_server_restart() -> void:
 	await _free(acc)
 
 
-## Pending commands live in RAM only (WP01-B limit, not changed here).
+## WP01-H (E2 + E3-Prep): pending commands are now DURABLE (OnlinePendingStore,
+## one file per account in the isolated user://) and recovered only through
+## vs01_trade_resolve. This replaces the WP01-B "S7 LIMITATION" expectations,
+## which asserted the RAM-only behaviour WP01-H fixes (superseded, stricter).
 func _scenario_app_kill_limitation() -> void:
-	print("== S7 app kill: documented LIMITATION (pending commands are RAM-only)")
+	print("== S7 app kill: pending orders survive (WP01-H durable store), recovered by resolve only")
 	var first := await _new_account("s7")
 	var a: OnlineTradeAdapter = first["adapter"]
 	await a.begin()
@@ -249,26 +252,34 @@ func _scenario_app_kill_limitation() -> void:
 	var lost := await a.buy("A", 10)
 	_check(lost["pending"], "S7 an order with a lost answer is pending in the running app")
 	var lost_key: String = lost["idempotency_key"]
-	await _free(first)  # app killed: its memory, including the pending list, is gone
+	await _free(first)  # app killed: memory gone, the durable pending file stays
 	var restarted := await _same_account(first)
 	var r: OnlineTradeAdapter = restarted["adapter"]
 	await r.begin()
-	_check(r.pending_count() == 0, "S7 LIMITATION: the restarted app has no pending command to recover")
+	_check(r.pending_count() == 1 and r.get_client().get_pending_commands().has(lost_key), "S7 the restarted app restores the killed order from its durable store (same key)")
 	_check(r.get_inventory().get_quantity(REP) == 10 and r.get_wallet().get_balance() == 9160, "S7 server state is still correct after the kill (the order applied once; nothing lost)")
-	_check((await r.recover()).is_empty(), "S7 LIMITATION: the killed order cannot be matched to its receipt by the new app")
+	var blocked := await r.buy("A", 10)
+	_check(not blocked["success"] and r.get_inventory().get_quantity(REP) == 10, "S7 B-4A: no new order while the old one is unresolved (no second trade)")
+	var recovered := await r.recover()
+	_check(recovered.size() == 1 and recovered[0]["success"] and recovered[0]["replayed"] and recovered[0]["idempotency_key"] == lost_key, "S7 recovery matches the killed order to its ORIGINAL receipt (vs01_trade_resolve replay)")
+	_check(r.pending_count() == 0 and r.get_inventory().get_quantity(REP) == 10 and r.get_wallet().get_balance() == 9160, "S7 nothing applied twice; nothing left pending")
 	var reissued := await r.buy("A", 10)
-	_check(reissued["success"] and not reissued["replayed"] and reissued["idempotency_key"] != lost_key, "S7 LIMITATION: a player re-issuing the order creates a SECOND, separate trade")
-	_check(r.get_inventory().get_quantity(REP) == 20, "S7 the re-issued order applied as a new order (10 + 10)")
+	_check(reissued["success"] and not reissued["replayed"] and reissued["idempotency_key"] != lost_key, "S7 a NEW order after recovery is a separate trade, as the player asked")
+	_check(r.get_inventory().get_quantity(REP) == 20, "S7 the new order applied once (10 + 10)")
 	# Kill BEFORE the order reached the server.
 	r.get_client().configure(_host, CLOSED_PORT)
 	r.get_client().timeout_sec = 2
 	var never_sent := await r.buy("A", 1)
 	_check(never_sent["pending"], "S7 an order that never reached the server is pending")
+	var never_key: String = never_sent["idempotency_key"]
 	await _free(restarted)
 	var third := await _same_account(first)
 	var t: OnlineTradeAdapter = third["adapter"]
 	await t.begin()
-	_check(t.get_inventory().get_quantity(REP) == 20 and t.pending_count() == 0, "S7 that order never applied; the server state is unchanged")
+	_check(t.pending_count() == 1 and t.get_client().get_pending_commands().has(never_key), "S7 the never-sent order is restored after the kill")
+	var voided := await t.recover()
+	_check(voided.size() == 1 and voided[0]["voided"] and not voided[0]["success"], "S7 resolve voids the never-sent order: it can never execute later")
+	_check(t.get_inventory().get_quantity(REP) == 20 and t.pending_count() == 0, "S7 that order never applied; the server state is unchanged; nothing pending")
 	await _free(third)
 
 

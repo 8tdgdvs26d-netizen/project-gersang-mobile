@@ -69,8 +69,12 @@ func _run() -> void:
 	_check(mode.get_progression_text() == "主角 Lv 2　經驗 0 / 150（伺服器確認）", "Server-confirmed Lv 2 shown (%s)" % mode.get_progression_text())
 
 	# 2. The same key again is a replay: no second EXP.
-	mode.adapter._set_pending({"kind": "claim", "key": key, "ticket_id": r["receipt"]["ticket_id"],
-		"payload": {"ticket_id": r["receipt"]["ticket_id"], "outcome": "victory", "kills": 10, "hero_alive": true}})
+	# WP01-H E2: pending commands live in the durable store (the old RAM-only
+	# adapter._set_pending was removed). Re-file the SAME key there, verified
+	# in this process, to resend it.
+	_check(mode.adapter.get_client().set_combat_pending({"kind": "claim", "key": key, "ticket_id": r["receipt"]["ticket_id"],
+		"payload": {"ticket_id": r["receipt"]["ticket_id"], "outcome": "victory", "kills": 10, "hero_alive": true},
+		"state": OnlinePendingStore.STATE_PENDING, "reason": ""}), "Same key re-filed in the durable pending store")
 	var replay := await mode.resend()
 	_check(replay.get("handling") == OnlineCombatAdapter.CONFIRMED and replay["replayed"], "Same key -> replayed receipt")
 	_check(int(mode.adapter.get_confirmed_progression()["revision"]) == 1, "Replay added no EXP (revision 1)")

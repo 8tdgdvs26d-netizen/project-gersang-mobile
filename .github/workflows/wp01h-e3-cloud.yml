@@ -1,0 +1,108 @@
+name: WP01-H E3 isolated live / stress execution (dedicated branch, review-gated)
+
+# Runs ONLY on a push to the dedicated WP01-H E3 execution branch. Creating or
+# updating that branch is a separate Charlie approval (Blueprint E3-Prep
+# v0.1r2 Phase 2). Preparation branches (wp01h/e3-prep) never match.
+# Every job is its own disposable GitHub-hosted runner; the launcher refuses
+# anything else (G1-2) and STOPs on any isolation gate before a test runs.
+on:
+  push:
+    branches:
+      - wp01-h-e3-cloud-execution
+
+permissions:
+  contents: read
+
+jobs:
+  wp01h-e3:
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [j1, j1r, j2, j3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GODOT_ARCHIVE: "Godot_v4.7.2-stable_linux.x86_64.zip"
+      GODOT_SHA256: "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4"
+      WP01H_RUN_ID: "wp01h_e3_${{ github.run_id }}_${{ github.run_attempt }}_${{ matrix.job }}"
+    steps:
+      - name: Checkout the execution branch read-only
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: nakama/package-lock.json
+
+      - name: Install dependencies (lockfiles only)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          npm ci
+          (cd nakama && npm ci)
+
+      - name: Download and verify official Godot 4.7.2 (SHA-256 + SHA-512)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          archive_path="$RUNNER_TEMP/$GODOT_ARCHIVE"
+          sums_path="$RUNNER_TEMP/SHA512-SUMS.txt"
+          verify_path="$RUNNER_TEMP/godot.sha512"
+          curl --fail --location --retry 3 --output "$archive_path" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/$GODOT_ARCHIVE"
+          curl --fail --location --retry 3 --output "$sums_path" \
+            "https://github.com/godotengine/godot-builds/releases/download/4.7.2-stable/SHA512-SUMS.txt"
+          echo "$GODOT_SHA256  $archive_path" | sha256sum --check -
+          grep -F " $GODOT_ARCHIVE" "$sums_path" > "$verify_path"
+          test "$(wc -l < "$verify_path")" -eq 1
+          (cd "$RUNNER_TEMP" && sha512sum --check "$(basename "$verify_path")")
+          unzip -q "$archive_path" -d "$RUNNER_TEMP/godot"
+          godot_bin="$(find "$RUNNER_TEMP/godot" -maxdepth 2 -type f -name 'Godot*' -perm -u+x -print -quit)"
+          test -n "$godot_bin"
+          case "$("$godot_bin" --version)" in 4.7.2*) ;; *) echo "unexpected Godot version" >&2; exit 1 ;; esac
+          echo "GODOT=$godot_bin" >> "$GITHUB_ENV"
+
+      - name: Create a new, private evidence directory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          evidence_dir="$RUNNER_TEMP/wp01h-e3-evidence"
+          test ! -e "$evidence_dir" && test ! -L "$evidence_dir"
+          mkdir -m 700 "$evidence_dir"
+          echo "WP01H_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
+
+      - name: Run the WP01-H E3 bounded launcher (gates first, then the job's cases)
+        id: launcher
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          node nakama/scripts/run_wp01h_e3_bounded.mjs \
+            --job "${{ matrix.job }}" \
+            --run-id "$WP01H_RUN_ID" \
+            --evidence-dir "$WP01H_EVIDENCE_DIR" \
+            --godot "$GODOT"
+
+      - name: Verify the evidence manifest
+        id: verify
+        if: always() && env.WP01H_EVIDENCE_DIR != ''
+        shell: bash
+        run: |
+          set +e
+          node nakama/scripts/run_wp01h_e3_bounded.mjs --verify-manifest "$WP01H_EVIDENCE_DIR"
+          status=$?
+          if [ "$status" -eq 0 ]; then echo "upload_safe=true" >> "$GITHUB_OUTPUT"; else echo "upload_safe=false" >> "$GITHUB_OUTPUT"; fi
+          exit "$status"
+
+      - name: Upload verified evidence (nothing is deleted on the runner)
+        if: always() && steps.verify.outputs.upload_safe == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp01h-e3-evidence-${{ matrix.job }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.WP01H_EVIDENCE_DIR }}/
+          if-no-files-found: error
+          retention-days: 30

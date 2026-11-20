@@ -84,7 +84,12 @@ func _run() -> void:
 	# The old session cannot replay an old key either (server-side), and a
 	# refused retry keeps the command pending (its outcome is unknown to it).
 	var old_key: String = bought["idempotency_key"]
-	p1a.import_pending_commands({old_key: {"action": "buy", "city_id": "A", "good_id": "test_good_01", "quantity": 10}})
+	# WP01-H E2: RAM import was removed (FIX-01). The old device's durable store
+	# holds the old key (written through the public store API, then reloaded as
+	# a restart would); its recovery is vs01_trade_resolve only.
+	_check(OnlinePendingStore.new().save_account(p1a.get_user_id(), {old_key: {"action": "buy", "city_id": "A", "good_id": "test_good_01", "quantity": 10,
+		"state": OnlinePendingStore.STATE_PENDING, "reason": ""}}, {}), "Old device's durable store holds the old key")
+	p1a.enable_pending_store(OnlinePendingStore.new())
 	p1a._superseded = false
 	var stale_replay := await p1a.recover_pending()
 	_check(stale_replay[0]["status"] == OnlineProgressClient.REJECTED and stale_replay[0]["reason"] == "gameplay_session_superseded" and not stale_replay[0].has("receipt"), "Old session gets no receipt replay: %s" % str(stale_replay[0]))
@@ -110,11 +115,14 @@ func _run() -> void:
 	_check(lost["status"] == OnlineProgressClient.UNCERTAIN, "No server answer leaves the order uncertain")
 	_check(p1b.get_confirmed_progress()["money"] == money_after_takeover, "Nothing applied locally while uncertain")
 	p1b.configure(_host, _port)
+	# WP01-H T-A2 (Resolve-or-Void): the order never reached the server, so
+	# recovery VOIDS it (v2 tombstone) instead of re-sending it (superseded,
+	# stricter than the WP01 expectation "recovery applies it").
 	var recovered := await p1b.recover_pending()
-	_check(recovered.size() == 1 and recovered[0]["status"] == OnlineProgressClient.OK and recovered[0]["replayed"] == false, "Recovery applies the order exactly once")
+	_check(recovered.size() == 1 and recovered[0]["status"] == OnlineProgressClient.OK and recovered[0]["outcome"] == "voided" and recovered[0]["replayed"] == false, "Recovery resolves the never-sent order as voided, exactly once")
 	_check(p1b.get_pending_commands().is_empty(), "Nothing left pending")
 	var money_after_recovery: int = p1b.get_confirmed_progress()["money"]
-	_check(money_after_recovery == money_after_takeover - recovered[0]["receipt"]["total"], "Money moved once")
+	_check(money_after_recovery == money_after_takeover and recovered[0]["receipt"]["total"] == 0, "Money did not move (the voided order can never execute)")
 
 	# 6. Response lost after the server applied it, then app restart: the same
 	#    key from a NEW session returns the original receipt, nothing twice.
@@ -122,10 +130,15 @@ func _run() -> void:
 	var command := {"action": "buy", "city_id": "B", "good_id": "test_good_02", "quantity": 1}
 	var original := await p1b._trade(command, key)
 	_check(original["receipt"]["status"] == "applied", "Command applied before the 'lost' response")
+	# WP01-H E2: the "lost response" leaves the order in the durable store
+	# (written here through the public store API before the restarted app
+	# signs in), and the restarted app recovers it with vs01_trade_resolve.
+	_check(OnlinePendingStore.new().save_account(p1b.get_user_id(), {key: {"action": command["action"], "city_id": command["city_id"],
+		"good_id": command["good_id"], "quantity": command["quantity"], "state": OnlinePendingStore.STATE_PENDING, "reason": ""}}, {}), "The order with the lost response is in the durable store")
 	var restarted := _new_client()
 	await restarted.sign_in_email_test(email1, password, false)
 	await restarted.begin_gameplay_session()
-	restarted.import_pending_commands({key: command})
+	_check(restarted.get_pending_commands().has(key), "Restarted app restores the order from its durable store")
 	var replay := await restarted.recover_pending()
 	_check(replay.size() == 1 and replay[0]["replayed"] == true, "Restarted app gets the original receipt back")
 	_check(replay[0]["receipt"] == original["receipt"], "Replay receipt is identical")
