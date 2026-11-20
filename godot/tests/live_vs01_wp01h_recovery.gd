@@ -24,8 +24,9 @@ extends SceneTree
 ##   AC-05b     b05_prep / b05_check, b05_prep / b05_kill / b05_kill_check
 ##   AC-06      ac06
 ##   AC-13 / FS-K1  k_prep / k_check                   --variant tmp|rename|clear|claim
-##   FS-K2      k2_lossy
+##   FS-K2      k2_lossy, k2_random (seeded random proxy, --lossy-port)
 ##   FS-K5      k5_switch
+##   FS-K6      k6j_prep / k6j_check                --variant j|h|hf  (live journal / HOLD write failure)
 ##   FS-K8      k8_prep / k8_check
 ##   AC-18      ac18_prep (E1 server) / ac18_check (BASELINE server)
 ## Each phase prints one line "WP01H_RESULT {json}" and, when it passes and is
@@ -44,6 +45,7 @@ var _variant := ""
 var _host := "127.0.0.1"
 var _port := 17350
 var _proxy_port := 17370
+var _lossy_port := 17380
 var _nonce := ""
 var _result := {}
 
@@ -71,6 +73,7 @@ func _initialize() -> void:
 	_host = _arg(args, "--host", _host)
 	_port = int(_arg(args, "--port", str(_port)))
 	_proxy_port = int(_arg(args, "--proxy-port", str(_proxy_port)))
+	_lossy_port = int(_arg(args, "--lossy-port", str(_lossy_port)))
 	_nonce = Crypto.new().generate_random_bytes(8).hex_encode()
 	_result = {"phase": _phase, "label": _label, "variant": _variant, "pid": OS.get_process_id(), "nonce": _nonce,
 		"user_data_dir": OS.get_user_data_dir(), "killed": false}
@@ -99,6 +102,9 @@ func _run_phase() -> void:
 		"k_prep": await _k_prep()
 		"k_check": await _k_check()
 		"k2_lossy": await _k2_lossy()
+		"k2_random": await _k2_random()
+		"k6j_prep": await _k6j_prep()
+		"k6j_check": await _k6j_check()
 		"k5_switch": await _k5_switch()
 		"k8_prep": await _k8_prep()
 		"k8_check": await _k8_check()
@@ -352,6 +358,88 @@ func _k2_lossy() -> void:
 	_result["applied"] = applied
 
 
+## FS-K2 (r1): the seeded random lossy proxy disturbs trades / resolves; every
+## order ends resolved once (recovery goes direct), nothing left pending.
+func _k2_random() -> void:
+	var st := await _new_account()
+	var c := await _signed_in(st, OnlinePendingStore.new(), _lossy_port)
+	var rounds := 12
+	var lost := 0
+	for i in rounds:
+		c.configure(_host, _lossy_port)
+		var r := await c.buy("A", GOOD, 1)
+		if r["status"] != OnlineProgressClient.OK:
+			lost += 1
+		c.configure(_host, _port)
+		var out := await c.recover_pending()
+		_check(c.get_pending_states().is_empty(), "K2r round %d: nothing left pending (%s / %d resolved)" % [i, str(r.get("status")), out.size()])
+	_result["user_id"] = c.get_user_id()
+	_result["rounds"] = rounds
+	_result["lost"] = lost
+
+
+## FS-K6 (r1): the REAL server answers resolve_command_invalid for a stored
+## order with no receipt and an invalid catalog command (trade_resolve.ts:116);
+## the client must mark it needs-check while the mark journal (j), the journal
+## and the live file (h), or also the HOLD marker (hf) cannot be written.
+func _k6j_prep() -> void:
+	var st := await _new_account()
+	var c := await _signed_in(st, OnlinePendingStore.new(), _port)
+	var uid := c.get_user_id()
+	c.sign_out_local()
+	var key := OnlineProgressClient.new_idempotency_key()
+	var bad := {"action": "buy", "city_id": "A", "good_id": "no_such_good", "quantity": 1, "state": OnlinePendingStore.STATE_PENDING, "reason": ""}
+	_check(OnlinePendingStore.new().save_account(uid, {key: bad}, {}), "k6j stored order with an invalid catalog command (public store API)")
+	st["k6_key"] = key
+	_save(st)
+	var store := OnlinePendingStore.new()
+	DirAccess.make_dir_recursive_absolute(store.marks_path_for(uid) + ".tmp")  # the journal cannot be written
+	if _variant in ["h", "hf"]:
+		DirAccess.make_dir_recursive_absolute(store.path_for(uid) + ".tmp")  # nor the live file
+	if _variant == "hf":
+		DirAccess.make_dir_recursive_absolute(OnlinePendingStore.QUARANTINE_DIR.get_base_dir())
+		if DirAccess.dir_exists_absolute(OnlinePendingStore.QUARANTINE_DIR):
+			_check(false, "hf quarantine directory must not exist yet")
+		_check(_write_file(OnlinePendingStore.QUARANTINE_DIR, "not a directory"), "hf the HOLD marker cannot be written either")
+	var c2 := await _signed_in(st, OnlinePendingStore.new(), _proxy_port)
+	var out := await c2.recover_pending()
+	_check(out.size() == 1 and str(out[0].get("reason", "")) == "resolve_command_invalid", "k6j the real server says resolve_command_invalid (%s)" % str(out))
+	var refused := await c2.buy("A", GOOD, 1)
+	_check(refused.get("local", false), "k6j a new trade is refused locally after the failed mark (%s)" % str(refused.get("reason")))
+	var want := {"j": "", "h": OnlinePendingStore.HELD_REASON, "hf": OnlineProgressClient.STORE_HOLD_FAILED}
+	if _variant != "j":
+		_check(c2.store_block_reason() == want[_variant], "k6j %s store blocked with %s (got %s)" % [_variant, want[_variant], c2.store_block_reason()])
+	else:
+		_check(c2.get_pending_states().get(key, {}).get("state", "") == OnlinePendingStore.STATE_NEEDS_CHECK, "k6j j the order is needs-check in memory and in the live file")
+	_check(not c2.get_pending_states().is_empty() or not c2.store_block_reason().is_empty(), "k6j the original evidence is not cleared")
+	_result["user_id"] = uid
+	_result["store_block"] = c2.store_block_reason()
+	_kill_now("k6j_prep %s" % _variant)
+
+
+func _k6j_check() -> void:
+	var st := _load()
+	var uid: String = st["user_id"]
+	var key: String = st["k6_key"]
+	var c := await _signed_in(st, OnlinePendingStore.new(), _proxy_port)
+	match _variant:
+		"j":
+			_check(c.get_pending_states().get(key, {}).get("state", "") == OnlinePendingStore.STATE_NEEDS_CHECK, "k6j j fresh process: still needs-check, never a normal retry")
+		"h":
+			_check(c.store_block_reason() == OnlinePendingStore.HELD_REASON, "k6j h fresh process: the account is HELD (%s)" % c.store_block_reason())
+		"hf":
+			# Nothing could be written: the live file still says pending, so the
+			# fresh process may ask resolve again; the server answers the same
+			# and the order is never executed or cleared.
+			var again := await c.recover_pending()
+			_check(again.size() <= 1 and (again.is_empty() or str(again[0].get("reason", "")) == "resolve_command_invalid" or again[0].get("local", false)), "k6j hf fresh process: at most one more resolve, same answer (%s)" % str(again))
+	var refused := await c.buy("A", GOOD, 1)
+	_check(refused.get("local", false), "k6j %s fresh process: new trades still refused locally" % _variant)
+	_check(FileAccess.file_exists(OnlinePendingStore.new().path_for(uid)), "k6j %s the original pending file is kept" % _variant)
+	_result["user_id"] = uid
+	_result["store_block"] = c.store_block_reason()
+
+
 func _k5_switch() -> void:
 	var a := await _new_account("a")
 	var c := await _signed_in(a, OnlinePendingStore.new(), _proxy_port)
@@ -506,6 +594,15 @@ func _load() -> Dictionary:
 func _overwrite(path: String, text: String) -> bool:
 	if not FileAccess.file_exists(path):
 		return false
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return false
+	var ok := f.store_string(text)
+	f.close()
+	return ok
+
+
+func _write_file(path: String, text: String) -> bool:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return false

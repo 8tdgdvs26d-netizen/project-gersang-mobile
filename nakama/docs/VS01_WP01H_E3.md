@@ -46,11 +46,30 @@ case below is **NOT RUN** until then.
 | `nakama/tests/live/tools/wp01h_seed.mjs` | R-04 seed: INSERT only, run accounts only, manifest, read-back |
 | `nakama/tests/live/tools/wp01h_clock.mjs` | FS-K10 verdict from server times only (TTL-1..6, bins, IC-1..5) |
 | `godot/tests/live_vs01_wp01h_recovery.gd` | client layer, one phase per process: AC-04/05a/05b/06/13/17/18, FS-K1/K2/K5/K6/K8 |
-| `nakama/tests/unit/wp01h_e3_launcher.test.mjs` | offline unit tests of the gates, the verdicts and the skip guard |
+| `nakama/tests/live/tools/wp01h_lossy_proxy.mjs` | r1 FS-K2: seeded random lossy proxy, 127.0.0.1 only; the shared `lossy_proxy.mjs` is unchanged |
+| `nakama/tests/unit/wp01h_e3_launcher.test.mjs` | offline unit tests of the gates, the verdicts, the skip guard and the r1 fixes |
+
+## Targeted Revision r1 (offline)
+- **B-1:** the workflow no longer runs `npm ci` at the repository root (there is no lockfile there); `nakama` keeps `npm ci`.
+- **B-2:** G1-10 does things in this order: images are pulled first, then `ss`, then the bind probe, then `compose up`.
+  - The window is measured from the end of the last probe to the start of compose; it must be at most 5 s.
+  - Evidence (probe and compose timestamps, plus container `StartedAt`) is written only after compose has started.
+  - G1-10 is written once.
+- **B-3:** G2-3 is a functional probe. A synthetic run account calls `vs01_trade_resolve` with `{}`, and the answer is classified as one of:
+  - `registered` (400 `unexpected_fields`);
+  - `not_registered` (404 / not found);
+  - `rate_limited`;
+  - `unknown`.
+  Only `registered` passes.
+- **G2-5:** before any test, no user other than the system user may exist. At the end of the job, every non-system user must be a `@myrial.test` account created during the run.
+- **FS-K1:** j2 has a final restart stage. The launcher restarts `nakama` (run project only) during an h3 burst of trade, resolve and claim requests; every key and the ticket must then settle exactly once, the ledger must be clean, and the module hash must be unchanged.
+- **FS-K2:** the random lossy proxy runs on 17380 (j2 only, seed derived from the run id). It is used by h3 FS-K2 and by the Godot phase `k2_random`.
+- **FS-K6:** Godot phases `k6j_*`, variants `j` / `h` / `hf`. The real server answers `resolve_command_invalid`, and the mark journal (`j`), journal + live file (`h`), or also the HOLD marker (`hf`) cannot be written; a fresh process then checks the result.
+- **FS-K9 live mutation** and **AC-08(c) synthetic UPDATE** exist as proposals only. Nothing is implemented, pending a separate approval.
 
 The E3 live tests skip everything unless the launcher sets `MYRIAL_WP01H_E3_RUN_ID`. The old `run_live_tests.sh`, which has no `-p` and only isolates HOME, is **not** used for E3.
 
 ## Labels
-- FS-K IDs are provisional until D-P6 is decided.
-- AC-14 reports "Code-derived / CV-01..07 PENDING", never "CV verified" (D-P7a).
+- FS-K IDs follow the order in which Blueprint v0.1r3 §9 lists the topics (D-P6 (a), Charlie, 2026-11-21).
+- AC-14 is tested against the code-derived receipt contract (D-P7a (a), Charlie, 2026-11-21). It reports "Code-derived / CV-01..07 PENDING", never "CV verified"; D-P7b (restoring CV-01..07) is still open.
 - `verify_vs01_wp01g_read_deadline` is a known flake. It is always reported separately; one PASS is not formal acceptance.

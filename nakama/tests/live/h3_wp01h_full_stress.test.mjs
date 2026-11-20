@@ -1,7 +1,9 @@
 // VS-01 WP01-H E3 FULL STRESS (server layer) against ONE isolated run.
-// FS IDs are PROVISIONAL (D-P6 PENDING): numbered in the order Blueprint
-// v0.1r3 §9 lists the ten topics. Covered here: FS-K2 (client-side lost
-// replies), FS-K3, FS-K4, FS-K7, FS-K9 (ledger part), FS-K10 (+ AC-16).
+// FS IDs follow the order Blueprint v0.1r3 §9 lists the ten topics (D-P6 (a),
+// Charlie approved 2026-11-21). Covered here: FS-K1 server restart around
+// commit (phase "restart", the launcher restarts nakama mid-burst), FS-K2
+// (client-side lost replies + the seeded random lossy proxy), FS-K3, FS-K4,
+// FS-K7, FS-K9 (ledger part), FS-K10 (+ AC-16).
 // FS-K9 live mutation is NOT RUN (needs separate approval).
 // FS-K10 runs only with MYRIAL_WP01H_E3_TTL=1 (real 15-minute TTL, one node,
 // nothing else running) and is judged ONLY from server-recorded times
@@ -23,6 +25,8 @@ const NOT_RUN = !RUN ? "WP01-H E3 only: run via nakama/scripts/run_wp01h_e3_boun
 const STRESS = NOT_RUN || (TTL ? "TTL job runs FS-K10 only" : false);
 const ROUND = NOT_RUN || (!TTL ? "set MYRIAL_WP01H_E3_TTL=1 (TTL job, ~16 min)" : false);
 if (RUN) runProject();
+const LOSSY = process.env.MYRIAL_WP01H_E3_LOSSY_URL ?? "";
+const RESTART = !RUN ? NOT_RUN : PHASE !== "restart" ? `phase ${PHASE} (FS-K1 restart runs in phase restart)` : false;
 const accounts = [];
 const reason = (r) => (r.status === 200 ? (r.body.replayed ? "replayed" : r.body.receipt?.status ?? "ok") : (r.body && typeof r.body === "object" && r.body.message) || (r.error ?? String(r.status)));
 function record(id, data) { if (CASE_DIR) fs.appendFileSync(`${CASE_DIR}/${id}.jsonl`, JSON.stringify({ at: new Date().toISOString(), id, ...data }) + "\n", { mode: 0o600 }); }
@@ -49,6 +53,55 @@ test("FS-K2 lost replies (client aborts at random points): every key ends with e
   for (const k of keys) { const rs = await settle(a, k, cmd()); assert.equal(rs.length, 1, `key ${k}: ${rs.length}`); await sleep(400); }
   assert.deepEqual(ledger(a.userId).problems, []);
   record("FS-K2", { keys: keys.length, outcomes: keys.map((k) => tradeReceipts(a, k)[0].status) });
+});
+
+test("FS-K2 random lossy proxy (seeded, loopback): every key ends with exactly one receipt", { skip: STRESS || (!LOSSY && "no MYRIAL_WP01H_E3_LOSSY_URL") }, async () => {
+  const a = await account("k2r");
+  const keys = [];
+  for (let i = 0; i < 40; i++) {
+    const key = newKey(); keys.push(key);
+    await safe(trade(a, key, cmd(), { base: LOSSY, signal: AbortSignal.timeout(6000) }));
+    await sleep(400);
+  }
+  await sleep(10000);
+  for (const k of keys) { const rs = await settle(a, k, cmd()); assert.equal(rs.length, 1, `key ${k}: ${rs.length}`); await sleep(400); }
+  assert.deepEqual(ledger(a.userId).problems, []);
+  const stats = await fetch(`${LOSSY}/__wp01h_lossy/stats`).then((r) => r.json());
+  for (const f of ["drop_request", "drop_response", "reset"]) assert.ok(stats.faults[f] >= 1, `fault ${f} was exercised (${stats.faults[f]})`);
+  record("FS-K2", { random_proxy: { seed: stats.seed, faults: stats.faults, disturbed: stats.disturbed }, outcomes: keys.map((k) => tradeReceipts(a, k)[0].status) });
+});
+
+test("FS-K1 server restart around commit: a trade / resolve / claim burst across a nakama restart settles exactly once", { skip: RESTART, timeout: 10 * 60 * 1000 }, async () => {
+  assert.ok(CASE_DIR, "MYRIAL_WP01H_E3_CASE_DIR is required (ready signal)");
+  const a = await account("k1rt");
+  const b = await account("k1rc");
+  const tk = (await rpc(b, "vs01e_encounter_begin", { gameplay_session_id: b.gsid, group_ids: ["prototype_monster_01"] })).body.ticket;
+  await sleep(10300);
+  const ckey = newKey();
+  fs.writeFileSync(`${CASE_DIR}/FS-K1-restart.ready`, new Date().toISOString() + "\n", { flag: "wx" }); // the launcher restarts nakama after this
+  const keys = [];
+  const answers = { ok: 0, error: 0 };
+  const until = Date.now() + 45000;
+  let claimed = false;
+  while (Date.now() < until) {
+    const key = newKey(); keys.push(key);
+    const [t, r] = await Promise.all([safe(trade(a, key, cmd(), { signal: AbortSignal.timeout(4000) })), safe(resolve(a, key, cmd(), { signal: AbortSignal.timeout(4000) }))]);
+    for (const x of [t, r]) answers[x.status === 200 ? "ok" : "error"] += 1;
+    if (!claimed) {
+      const c = await safe(rpc(b, "vs01e_encounter_claim", { gameplay_session_id: b.gsid, idempotency_key: ckey, ticket_id: tk.ticket_id, outcome: "victory", kills: 10, hero_alive: true }, { signal: AbortSignal.timeout(4000) }));
+      claimed = c.status === 200;
+    }
+    await sleep(800);
+  }
+  for (let i = 0; i < 120 && (await fetch(`${BASE}/healthcheck`).then((x) => x.status).catch(() => 0)) !== 200; i++) await sleep(1000);
+  for (const k of keys) { const rs = await settle(a, k, cmd()); assert.equal(rs.length, 1, `key ${k}: ${rs.length} receipts after the restart`); await sleep(400); }
+  for (let i = 0; i < 5 && !claimed; i++) { const c = await safe(rpc(b, "vs01e_encounter_claim", { gameplay_session_id: b.gsid, idempotency_key: ckey, ticket_id: tk.ticket_id, outcome: "victory", kills: 10, hero_alive: true })); claimed = c.status === 200; if (!claimed) await sleep(6000); }
+  const settlements = objects(b.userId, C.combatReceipts).map((o) => o.value).filter((r) => r.ticket_id === tk.ticket_id);
+  assert.equal(settlements.length, 1, "the claim settled exactly once across the restart");
+  assert.deepEqual(ledger(a.userId).problems, []);
+  assert.deepEqual(ledger(b.userId).problems, []);
+  assert.ok(answers.error >= 1, "the restart was actually observed by the client (some requests failed)");
+  record("FS-K1-restart", { keys: keys.length, answers, outcomes: keys.map((k) => tradeReceipts(a, k)[0].status) });
 });
 
 test("FS-K3 race: same key (100 requests, 2 nodes), 50 different keys, 100 trade/resolve pairs", { skip: STRESS }, async () => {

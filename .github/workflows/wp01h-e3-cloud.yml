@@ -39,11 +39,12 @@ jobs:
           cache: npm
           cache-dependency-path: nakama/package-lock.json
 
-      - name: Install dependencies (lockfiles only)
+      - name: Install Nakama dependencies (nakama/package-lock.json only)
+        # r1 B-1: the repository root has no package-lock.json and no
+        # dependencies (its tests use only node:test), so nothing is installed there.
         shell: bash
         run: |
           set -Eeuo pipefail
-          npm ci
           (cd nakama && npm ci)
 
       - name: Download and verify official Godot 4.7.2 (SHA-256 + SHA-512)

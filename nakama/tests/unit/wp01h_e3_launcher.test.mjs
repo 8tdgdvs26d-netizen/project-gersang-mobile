@@ -274,3 +274,91 @@ test("E3 live tests skip entirely without the launcher's run id (old run_live_te
     assert.ok(s.skipped.length >= 2, `${f}: skipped ${s.skipped.length}`);
   }
 });
+
+// ---- r1 (Targeted Revision): B-1, B-2, B-3, G2-5, FS-K2 proxy ----------------------
+
+test("r1 B-2 G1-10 window: measured from the last probe END to compose START", () => {
+  assert.deepEqual(L.probeWindow({ probeFirstStart: 1000, probeLastEnd: 1200, composeStart: 6199 }).problems, []);
+  assert.equal(L.probeWindow({ probeFirstStart: 1000, probeLastEnd: 1200, composeStart: 6199 }).window_ms, 4999);
+  assert.match(L.probeWindow({ probeFirstStart: 1000, probeLastEnd: 1200, composeStart: 6201 }).problems.join(), /5001 ms/);
+  assert.ok(L.probeWindow({ probeFirstStart: 1000, probeLastEnd: 1200, composeStart: null }).problems.length, "compose never started");
+  assert.ok(L.probeWindow({ probeFirstStart: 1300, probeLastEnd: 1200, composeStart: 1400 }).problems.length, "out of order");
+  assert.ok(L.probeWindow({ probeFirstStart: 1000, probeLastEnd: 1200, composeStart: 1100 }).problems.length, "compose before the probe ended");
+});
+
+test("r1 B-2 static order: pull, ss, probe, compose up — no gate / evidence write inside the window", async () => {
+  const fs = await import("node:fs");
+  const src = fs.readFileSync(new URL("../../scripts/run_wp01h_e3_bounded.mjs", import.meta.url), "utf8");
+  const body = src.slice(src.indexOf("async function bindProbeThenCompose("), src.indexOf("async function gateG2("));
+  const iPull = body.indexOf('"pull"'), iSs = body.indexOf('"-ltnH"'), iFirst = body.indexOf("probeFirstStart = Date.now()"),
+    iLast = body.indexOf("probeLastEnd = Date.now()"), iCompose = body.indexOf("composeStart = Date.now()"), iUp = body.indexOf('"up", "-d"');
+  assert.ok(iPull > 0 && iPull < iSs && iSs < iFirst && iFirst < iLast && iLast < iCompose && iCompose < iUp, "order pull < ss < probe < compose");
+  const window = body.slice(iLast, iUp);
+  assert.equal(/ev\.(gate|log|file|write)\(/.test(window), false, "no evidence write between the probe and compose up");
+  assert.equal((body.match(/ev\.gate\("G1-10"/g) ?? []).length, 2, "G1-10 written once on the normal path (the other only when pull fails, before the probe)");
+});
+
+test("r1 B-3 G2-3 functional RPC probe: registered vs not registered vs rate limited vs unknown", () => {
+  assert.equal(L.classifyRpcProbe({ status: 400, body: { code: 3, message: "unexpected_fields" } }), "registered");
+  assert.equal(L.classifyRpcProbe({ status: 404, body: { code: 5, message: "RPC function not found" } }), "not_registered");
+  assert.equal(L.classifyRpcProbe({ status: 429, body: { code: 8, message: "rate_limited" } }), "rate_limited");
+  assert.equal(L.classifyRpcProbe({ status: 400, body: { code: 3, message: "invalid_action" } }), "unknown", "any other refusal is not proof of registration");
+  assert.equal(L.classifyRpcProbe({ status: 200, body: {} }), "unknown");
+  assert.equal(L.classifyRpcProbe({ status: 0, body: "fetch failed" }), "unknown");
+});
+
+test("r1 G2-5 no non-run accounts: none before the tests, only synthetic run accounts at the end", () => {
+  const sys = { id: L.SYSTEM_USER_ID, email: "", create_ms: 1 };
+  const probe = { id: "11111111-1111-1111-1111-111111111111", email: "wp01h-g2probe-x@myrial.test", create_ms: 2000 };
+  assert.deepEqual(L.checkUsers([sys], { runStartMs: 1000 }), []);
+  assert.deepEqual(L.checkUsers([], { runStartMs: 1000 }), []);
+  assert.equal(L.checkUsers([sys, probe], { runStartMs: 1000 }).length, 1, "before the tests even a test-domain account is refused");
+  assert.deepEqual(L.checkUsers([sys, probe], { runStartMs: 1000, allowedIds: [probe.id] }), []);
+  assert.deepEqual(L.checkUsers([sys, probe], { runStartMs: 1000, final: true }), []);
+  assert.ok(L.checkUsers([sys, { ...probe, email: "someone@gmail.com" }], { runStartMs: 1000, final: true }).length);
+  assert.ok(L.checkUsers([sys, { ...probe, create_ms: 500 }], { runStartMs: 1000, final: true }).length, "created before the run");
+});
+
+test("r1 B-1 workflow install: no npm ci at the lockfile-less root; nakama npm ci kept", async () => {
+  const fs = await import("node:fs");
+  const wf = fs.readFileSync(new URL("../../../.github/workflows/wp01h-e3-cloud.yml", import.meta.url), "utf8");
+  const rootLock = fs.existsSync(new URL("../../../package-lock.json", import.meta.url));
+  assert.equal(rootLock, false, "the repository root has no package-lock.json (B-1 premise)");
+  assert.deepEqual(L.checkWorkflowInstall(wf, rootLock), []);
+  assert.ok(L.checkWorkflowInstall(wf.replace("(cd nakama && npm ci)", "npm ci\n          (cd nakama && npm ci)"), rootLock).length, "the old root npm ci is refused");
+  assert.ok(L.checkWorkflowInstall(wf.replace("(cd nakama && npm ci)", "true"), rootLock).length, "nakama install is required");
+});
+
+test("r1 FS-K2 random lossy proxy: deterministic, bounded, loopback only, faults do what they say", async () => {
+  const P = await import("../live/tools/wp01h_lossy_proxy.mjs");
+  const http = await import("node:http");
+  const cfg = { drop_request_pct: 15, drop_response_pct: 15, reset_pct: 5, delay_max_ms: 50 };
+  const a = [...Array(200)].map((_, i) => P.decide(i, 1234, cfg)), b = [...Array(200)].map((_, i) => P.decide(i, 1234, cfg));
+  assert.deepEqual(a, b, "same seed + order = same faults");
+  assert.notDeepEqual(a, [...Array(200)].map((_, i) => P.decide(i, 99, cfg)), "another seed differs");
+  const n = (f) => a.filter((x) => x.fault === f).length;
+  for (const f of ["drop_request", "drop_response", "reset", "none"]) assert.ok(n(f) > 0, `${f} occurs`);
+  assert.ok(a.every((x) => x.delay >= 0 && x.delay <= 50));
+  assert.throws(() => P.parseConfig(["80", "17350", "1"]), /ports/);
+  assert.throws(() => P.parseConfig(["17380", "17350", "1", "60", "50"]), /exceed/);
+  assert.equal(P.rpcOf("/v2/rpc/vs01_trade?unwrap=true"), "vs01_trade");
+  assert.equal(P.rpcOf("/v2/account/authenticate/email"), "");
+  // Real loopback round trip against a fake upstream (no Nakama): count what reaches it.
+  let reached = 0;
+  const up = http.createServer((req, res) => { reached += 1; req.resume(); req.on("end", () => res.end('{"ok":true}')); });
+  await new Promise((r) => up.listen({ host: "127.0.0.1", port: 0 }, r));
+  const { server, stats } = await P.startProxy({ listen: 0, upstream: up.address().port, seed: 7, drop_request_pct: 100, drop_response_pct: 0, reset_pct: 0, delay_max_ms: 0 });
+  assert.equal(server.address().address, "127.0.0.1", "listens on loopback only");
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const dropped = await fetch(`${url}/v2/rpc/vs01_trade?unwrap=true`, { method: "POST", body: "{}" }).then(() => "answered").catch(() => "dropped");
+  assert.equal(dropped, "dropped"); assert.equal(reached, 0, "drop_request never reaches the server");
+  const passed = await fetch(`${url}/v2/account/session/refresh`, { method: "POST", body: "{}" }).then((r) => r.status);
+  assert.equal(passed, 200); assert.equal(reached, 1, "non-WP01-H requests pass untouched");
+  assert.equal(stats.faults.drop_request, 1); assert.equal(stats.passed, 1);
+  await new Promise((r) => server.close(r));
+  const p2 = await P.startProxy({ listen: 0, upstream: up.address().port, seed: 7, drop_request_pct: 0, drop_response_pct: 100, reset_pct: 0, delay_max_ms: 0 });
+  const lost = await fetch(`http://127.0.0.1:${p2.server.address().port}/v2/rpc/vs01_trade_resolve?unwrap=true`, { method: "POST", body: "{}" }).then(() => "answered").catch(() => "lost");
+  assert.equal(lost, "lost"); assert.equal(reached, 2, "drop_response: the server got it, the client did not");
+  await new Promise((r) => p2.server.close(r));
+  await new Promise((r) => up.close(r));
+});

@@ -36,8 +36,9 @@ export const BASELINE = "360228cb934f459e0a828e20c540822446585615";
 export const EXPECTED_REPOSITORY = "8tdgdvs26d-netizen/project-gersang-mobile";
 export const EXECUTION_BRANCH = "wp01-h-e3-cloud-execution";
 export const RUN_ID_RE = /^wp01h_e3_[a-z0-9_]{1,50}$/;
-export const PORTS = [17350, 17351, 17360, 17361, 17370];
-export const API_PORT = 17350, NODE2_PORT = 17360, PROXY_PORT = 17370;
+export const PORTS = [17350, 17351, 17360, 17361, 17370, 17380];
+export const API_PORT = 17350, NODE2_PORT = 17360, PROXY_PORT = 17370, LOSSY_PORT = 17380;
+export const SYSTEM_USER_ID = "00000000-0000-0000-0000-000000000000";
 export const PROBE_TO_COMPOSE_MS = 5000;
 export const READ_DEADLINE_TEST = "verify_vs01_wp01g_read_deadline";
 
@@ -70,12 +71,13 @@ export const BLOBS = {
 export const E3_PREP_FILES = ["godot/tests/live_vs01_wp01e_online_combat.gd", "godot/tests/live_vs01_wp01_nakama.gd", "godot/tests/live_vs01_wp01b_online_trade.gd",
   "nakama/tests/live/h1_wp01h_trade_resolve.test.mjs", "nakama/tests/live/h2_wp01h_combat_intent.test.mjs", "nakama/tests/live/h3_wp01h_full_stress.test.mjs",
   "nakama/tests/live/tools/wp01h_db.mjs", "nakama/tests/live/tools/wp01h_seed.mjs", "nakama/tests/live/tools/wp01h_clock.mjs",
+  "nakama/tests/live/tools/wp01h_lossy_proxy.mjs", // r1: Charlie-approved single new file (FS-K2)
   "godot/tests/live_vs01_wp01h_recovery.gd", "godot/tests/live_vs01_wp01h_recovery.gd.uid",
   "nakama/scripts/run_wp01h_e3_bounded.mjs", "nakama/tests/unit/wp01h_e3_launcher.test.mjs",
   ".github/workflows/wp01h-e3-cloud.yml", "nakama/docs/VS01_WP01H_E3.md"];
 export const E3_TEST_FILES = ["nakama/tests/live/h1_wp01h_trade_resolve.test.mjs", "nakama/tests/live/h2_wp01h_combat_intent.test.mjs",
   "nakama/tests/live/h3_wp01h_full_stress.test.mjs", "nakama/tests/live/tools/wp01h_db.mjs", "nakama/tests/live/tools/wp01h_seed.mjs",
-  "nakama/tests/live/tools/wp01h_clock.mjs", "godot/tests/live_vs01_wp01h_recovery.gd"];
+  "nakama/tests/live/tools/wp01h_clock.mjs", "nakama/tests/live/tools/wp01h_lossy_proxy.mjs", "godot/tests/live_vs01_wp01h_recovery.gd"];
 // Godot FAILED messages that mean an isolation / save problem: SAFETY, never FUNCTIONAL.
 export const GODOT_SAFETY_CHECKS = ["No local save file was created or changed", "No local save file exists in the isolated user data folder", "Godot reports a user data folder"];
 const SENSITIVE = [
@@ -200,6 +202,53 @@ export function checkComposeUp({ exitCode, output, msSinceProbe }) {
   if (/port is already allocated|address already in use|bind(ing)? .*fail|failed to bind/i.test(output)) p.push("compose up reported a bind / port conflict");
   return p;
 }
+// G1-10 (r1, B-2): the window is measured from the END of the last bind probe
+// to the START of compose up (images are pulled BEFORE the probe, so up only
+// creates / starts containers). All times are Date.now() ms.
+export function probeWindow({ probeFirstStart, probeLastEnd, composeStart }) {
+  const p = [];
+  for (const [k, v] of Object.entries({ probeFirstStart, probeLastEnd, composeStart })) if (!Number.isSafeInteger(v)) p.push(`${k} missing`);
+  if (p.length) return { problems: p, window_ms: null };
+  if (probeLastEnd < probeFirstStart || composeStart < probeLastEnd) p.push("timestamps out of order");
+  const w = composeStart - probeLastEnd;
+  if (w > PROBE_TO_COMPOSE_MS) p.push(`${w} ms between the last probe and compose up (> ${PROBE_TO_COMPOSE_MS})`);
+  return { problems: p, window_ms: w };
+}
+// G2-3 (r1, B-3): a functional probe of vs01_trade_resolve from a synthetic
+// run account with the payload {} (rpcTradeResolve: rate limit, then
+// guardParsePayload -> INVALID_ARGUMENT "unexpected_fields"; writes no
+// receipt or progress). Strictly three outcomes plus "unknown".
+export function classifyRpcProbe({ status, body }) {
+  const msg = body && typeof body === "object" ? String(body.message ?? "") : String(body ?? "");
+  if (status === 404 || /not found/i.test(msg)) return "not_registered";
+  if (status === 429 || msg === "rate_limited") return "rate_limited";
+  if (status === 400 && msg === "unexpected_fields") return "registered";
+  return "unknown";
+}
+// G2-5 (r1): no account that is not the system user or this run's own.
+// rows: [{id, email, create_ms}]; before tests `allowed` holds only the
+// probe account; at the end every non-system user must be a test-domain
+// account created after the run started.
+export function checkUsers(rows, { allowedIds = [], runStartMs, final = false }) {
+  const p = [];
+  for (const r of rows) {
+    if (r.id === SYSTEM_USER_ID || allowedIds.includes(r.id)) continue;
+    if (!final) { p.push(`user ${r.id} exists before any test (not this run's)`); continue; }
+    if (!/@myrial\.test$/.test(r.email ?? "")) p.push(`user ${r.id} is not a synthetic test account`);
+    if (!(r.create_ms >= runStartMs)) p.push(`user ${r.id} was created before this run`);
+  }
+  return p;
+}
+// B-1 (r1): the repository root has no lockfile and no dependencies, so the
+// workflow must not run `npm ci` there.
+export function checkWorkflowInstall(text, rootHasLockfile) {
+  const p = [];
+  const lines = text.split("\n").map((l) => l.trim());
+  for (const l of lines) if (/^npm ci\b/.test(l) && !rootHasLockfile) p.push("`npm ci` at the repository root (no package-lock.json there)");
+  if (!lines.some((l) => /\(cd nakama && npm ci\)/.test(l))) p.push("nakama dependencies are not installed with npm ci");
+  return p;
+}
+
 // G2-1: every running container belongs to the run project.
 export function checkLabels(text, project) {
   const rows = text.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -321,7 +370,7 @@ class Evidence {
     if (st.isSymbolicLink() || !st.isDirectory()) throw new Stop("evidence dir is not a real directory");
     if (fs.readdirSync(dir).length) throw new Stop("evidence dir is not empty");
     if ((st.mode & 0o077) !== 0) throw new Stop("evidence dir is accessible by group/other");
-    this.dir = fs.realpathSync(dir); this.seq = 0;
+    this.dir = fs.realpathSync(dir); this.seq = 0; this.runStartMs = Date.now();
     fs.mkdirSync(path.join(this.dir, "cases"), { mode: 0o700 });
     this.summary = { started_at: new Date().toISOString(), gates: {}, cases: {}, steps: [] };
   }
@@ -413,21 +462,37 @@ async function gateG1(ev, args, rr, project) {
   ev.gate("G1-6", [pv.safety, pv.functional, pv.result?.save_exists ? "a save exists" : "", godotOk.startsWith("4.7.2") ? "" : `Godot ${godotOk}`].filter(Boolean), { user_data_dir: pv.result?.user_data_dir, godot: godotOk });
   ev.gate("G1-7", staticScan(Object.fromEntries(E3_TEST_FILES.map((f) => [f, fs.readFileSync(path.join(REPO, f), "utf8")]))));
   ev.gate("G1-8", checkChildEnv(probeEnv, rr.root, project));
-  ev.gate("G1-9", checkWorkflowStatic(fs.readFileSync(path.join(REPO, ".github/workflows/wp01h-e3-cloud.yml"), "utf8")));
+  const wf = fs.readFileSync(path.join(REPO, ".github/workflows/wp01h-e3-cloud.yml"), "utf8");
+  ev.gate("G1-9", [...checkWorkflowStatic(wf), ...checkWorkflowInstall(wf, fs.existsSync(path.join(REPO, "package-lock.json")))]);
 }
 
 async function bindProbeThenCompose(ev, project, services, extraArgs = []) {
+  // r1 B-2: images first (no port is bound by a pull), so compose up only starts containers.
+  const pull = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, ...extraArgs, "pull", ...services], { cwd: NAKAMA_DIR, timeoutMs: 900000 });
+  ev.log("compose-pull", pull.out);
+  if (pull.code !== 0) ev.gate("G1-10", [`compose pull exit ${pull.code}`]);
+  // ss cross check BEFORE the probe; nothing but the probe sits between ss and compose up.
+  const listeners = ssListeners(sh("ss", ["-ltnH"]).stdout, PORTS);
+  const probeFirstStart = Date.now();
   const results = [];
   for (const port of PORTS) for (const [host, v6] of PROBE_HOSTS) results.push(await probeBind(host, port, v6));
-  const ss = sh("ss", ["-ltnH"]).stdout;
-  const listeners = ssListeners(ss, PORTS);
-  ev.gate("G1-5", [...checkProbeResults(results), ...listeners.map((l) => `ss shows a listener ${l}`)], { probes: results });
-  const probedAt = Date.now();
-  const startDelay = Date.now() - probedAt; // nothing runs between the probe and compose up
-  if (startDelay > PROBE_TO_COMPOSE_MS) ev.gate("G1-10", [`${startDelay} ms between the probe and compose up`]);
-  const up = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, ...extraArgs, "up", "-d", "--wait", ...services], { cwd: NAKAMA_DIR, timeoutMs: 900000 });
+  const probeLastEnd = Date.now();
+  const problems = [...checkProbeResults(results), ...listeners.map((l) => `ss shows a listener ${l}`)];
+  let up = null, composeStart = null;
+  if (!problems.length) {
+    composeStart = Date.now();
+    up = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, ...extraArgs, "up", "-d", "--wait", ...services], { cwd: NAKAMA_DIR, timeoutMs: 900000 });
+  }
+  // Evidence is written only after compose up has started (it is not in the window).
+  ev.summary.g1_timestamps = { probe_first_start: probeFirstStart, probe_last_end: probeLastEnd, compose_start: composeStart };
+  ev.gate("G1-5", problems, { probes: results, ss_listeners: listeners });
   ev.log("compose-up", up.out);
-  ev.gate("G1-10", checkComposeUp({ exitCode: up.code, output: up.out, msSinceProbe: startDelay }), { start_delay_ms: startDelay });
+  const started = sh("docker", ["ps", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Names}}"]).stdout.split("\n").filter(Boolean)
+    .map((n) => ({ name: n, started_at: sh("docker", ["inspect", "-f", "{{.State.StartedAt}}", n]).stdout.trim() }));
+  const w = probeWindow({ probeFirstStart, probeLastEnd, composeStart });
+  const firstStart = Math.min(...started.map((x) => Date.parse(x.started_at)).filter(Number.isFinite));
+  ev.gate("G1-10", [...w.problems, ...checkComposeUp({ exitCode: up.code, output: up.out, msSinceProbe: w.window_ms ?? Infinity })],
+    { window_ms: w.window_ms, bind_latency_ms: Number.isFinite(firstStart) ? firstStart - probeLastEnd : null, containers: started });
 }
 
 async function gateG2(ev, project, ports, { columns = true } = {}) {
@@ -443,16 +508,32 @@ async function gateG2(ev, project, ports, { columns = true } = {}) {
   }
   ev.gate("G2-2", [...checkPortBindings(inspect, project), ...extProblems], { external_ip: ext ?? "none", port_mode: sh("ss", ["-ltnpH"]).stdout.includes("docker-proxy") ? "docker-proxy" : "iptables/none-visible" });
   const health = await fetch(`http://127.0.0.1:${API_PORT}/healthcheck`).then((r) => r.status).catch(() => 0);
-  const logs = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, "logs", "nakama"], { cwd: NAKAMA_DIR }).out;
-  ev.gate("G2-3", [health === 200 ? "" : `healthcheck ${health}`, /vs01_trade_resolve/.test(logs) ? "" : "vs01_trade_resolve not registered"].filter(Boolean));
+  // G2-5 first (r1): before any account of ours exists, only the system user may exist.
+  const db = await import("../tests/live/tools/wp01h_db.mjs");
+  const env = { ...process.env, COMPOSE_PROJECT_NAME: project };
+  const userRows = () => db.sql("SELECT json_build_object('id', id::text, 'email', coalesce(email, ''), 'create_ms', (extract(epoch from create_time) * 1000)::bigint)::text FROM users", env)
+    .split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+  const ours = db.sql("SELECT count(*) FROM storage WHERE collection LIKE 'vs01_%'", env).trim();
+  ev.gate("G2-5", [...checkUsers(userRows(), { runStartMs: ev.runStartMs }), ours === "0" ? "" : `storage has ${ours} vs01 objects`].filter(Boolean));
+  // G2-3 (r1, B-3): functional probe from a synthetic run account.
+  const probeEmail = `wp01h-g2probe-${crypto.randomBytes(6).toString("hex")}@myrial.test`;
+  const auth = await fetch(`http://127.0.0.1:${API_PORT}/v2/account/authenticate/email?create=true`, { method: "POST",
+    headers: { Authorization: "Basic " + Buffer.from("defaultkey:").toString("base64"), "Content-Type": "application/json" },
+    body: JSON.stringify({ email: probeEmail, password: crypto.randomBytes(12).toString("hex") }) }).then(async (r) => ({ status: r.status, body: await r.json() })).catch((e) => ({ status: 0, body: String(e) }));
+  let probe = { status: 0, body: null }, cls = "unknown";
+  if (auth.status === 200) {
+    probe = await fetch(`http://127.0.0.1:${API_PORT}/v2/rpc/vs01_trade_resolve?unwrap=true`, { method: "POST",
+      headers: { Authorization: `Bearer ${auth.body.token}`, "Content-Type": "application/json" }, body: "{}" })
+      .then(async (r) => { const t = await r.text(); let b; try { b = JSON.parse(t); } catch { b = t; } return { status: r.status, body: b }; }).catch((e) => ({ status: 0, body: String(e) }));
+    cls = classifyRpcProbe(probe);
+    ev.probeUserId = JSON.parse(Buffer.from(auth.body.token.split(".")[1], "base64url").toString()).uid;
+  }
+  ev.gate("G2-3", [health === 200 ? "" : `healthcheck ${health}`, auth.status === 200 ? "" : `probe account sign-in ${auth.status}`,
+    cls === "registered" ? "" : `vs01_trade_resolve probe: ${cls} (HTTP ${probe.status} ${typeof probe.body === "object" ? probe.body?.message : ""})`].filter(Boolean),
+    { probe_class: cls, probe_http: probe.status, probe_message: typeof probe.body === "object" ? probe.body?.message : "" });
   const hostHash = sha256(fs.readFileSync(path.join(NAKAMA_DIR, "build", "index.js")));
   const inHash = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, "exec", "-T", "nakama", "sha256sum", "/nakama/data/modules/index.js"], { cwd: NAKAMA_DIR }).stdout.split(/\s+/)[0];
   ev.gate("G2-4", inHash === hostHash ? [] : [`module hash ${inHash} != ${hostHash}`], { module_sha256: hostHash });
-  const db = await import("../tests/live/tools/wp01h_db.mjs");
-  const env = { ...process.env, COMPOSE_PROJECT_NAME: project };
-  const users = db.sql("SELECT count(*) FROM users", env).trim();
-  const ours = db.sql("SELECT count(*) FROM storage WHERE collection LIKE 'vs01_%'", env).trim();
-  ev.gate("G2-5", [users === "1" ? "" : `users = ${users}`, ours === "0" ? "" : `storage has ${ours} vs01 objects`].filter(Boolean));
   if (columns) { const seed = await import("../tests/live/tools/wp01h_seed.mjs"); try { ev.gate("G2-6", [], { columns: seed.checkStorageColumns(env) }); } catch (e) { ev.gate("G2-6", [String(e.message)]); } }
 }
 function connects(host, port) {
@@ -487,7 +568,7 @@ async function godotPhase(ev, rr, args, project, label, phase, variant = "", { e
   recheckG2(ev, project);
   const env = isolatedEnv(rr.root, `godot-${label}`, project);
   const a = ["--headless", "--path", GODOT_DIR, "--script", "res://tests/live_vs01_wp01h_recovery.gd", "--", "--phase", phase, "--label", label,
-    "--host", "127.0.0.1", "--port", String(API_PORT), "--proxy-port", String(PROXY_PORT), ...(variant ? ["--variant", variant] : [])];
+    "--host", "127.0.0.1", "--port", String(API_PORT), "--proxy-port", String(PROXY_PORT), "--lossy-port", String(LOSSY_PORT), ...(variant ? ["--variant", variant] : [])];
   const r = await runBounded(args.godot, a, { env, timeoutMs });
   ev.log(`godot-${label}-${phase}`, r.output);
   const v = godotPhaseVerdict(r.output, phase, { expectKill, exitCode: r.code, signal: r.signal, runRoot: rr.root });
@@ -530,10 +611,12 @@ async function jobCases(ev, rr, args, project, job) {
     g("AC-06", [{ label: "ac06", phase: "ac06" }]);
     for (const v of ["tmp", "rename", "clear", "claim"]) g(`AC-13-${v}`, [{ label: `ac13_${v}`, phase: "k_prep", variant: v, kill: true }, { label: `ac13_${v}`, phase: "k_check", variant: v, proxyTradeUnchanged: true }]);
   } else if (job === "j2") {
-    await nodeTests(ev, rr, project, ["tests/live/h3_wp01h_full_stress.test.mjs"], { MYRIAL_NAKAMA_URL_2: `http://127.0.0.1:${NODE2_PORT}` }, "h3");
+    await nodeTests(ev, rr, project, ["tests/live/h3_wp01h_full_stress.test.mjs"], { MYRIAL_NAKAMA_URL_2: `http://127.0.0.1:${NODE2_PORT}`, MYRIAL_WP01H_E3_LOSSY_URL: `http://127.0.0.1:${LOSSY_PORT}` }, "h3");
     const repeat = 20;
     for (const v of ["tmp", "rename", "clear", "claim"]) for (let i = 0; i < repeat; i++) g(`FS-K1-${v}-${i}`, [{ label: `k1_${v}_${i}`, phase: "k_prep", variant: v, kill: true }, { label: `k1_${v}_${i}`, phase: "k_check", variant: v, proxyTradeUnchanged: true }]);
     g("FS-K2-godot", [{ label: "k2", phase: "k2_lossy" }]);
+    g("FS-K2-godot-random", [{ label: "k2r", phase: "k2_random" }]);
+    for (const v of ["j", "h", "hf"]) g(`FS-K6-journal-${v}`, [{ label: `k6j_${v}`, phase: "k6j_prep", variant: v, kill: true }, { label: `k6j_${v}`, phase: "k6j_check", variant: v, proxyTradeUnchanged: true }]);
     g("FS-K5", [{ label: "k5", phase: "k5_switch" }]);
     for (const v of ["a2", "a3", "a5"]) g(`FS-K6-${v}`, [{ label: `k6_${v}`, phase: "a05_prep", variant: v, kill: true }, { label: `k6_${v}`, phase: "a05_blocked", variant: v, s0s1: true }]);
     g("FS-K8", [{ label: "k8", phase: "k8_prep", kill: true }, { label: "k8", phase: "k8_check" }]);
@@ -612,6 +695,29 @@ async function revertStage(ev, rr, args, project) {
   ev.caseResult("AC-18", ac18.functional || chk.functional ? "FAIL" : "PASS", { prep: ac18.functional, check: chk.functional, label: "baseline module " + BASELINE });
 }
 
+// FS-K1 (r1): a trade / resolve / claim burst while the launcher restarts
+// nakama (run project only), then the per-key receipt and ledger checks in h3.
+async function restartStage(ev, rr, project) {
+  const caseDir = path.join(ev.dir, "cases");
+  const ready = path.join(caseDir, "FS-K1-restart.ready");
+  const env = isolatedEnv(rr.root, "node-k1-restart", project, { MYRIAL_WP01H_E3_RUN_ID: rr.runId, MYRIAL_WP01H_E3_PHASE: "restart",
+    MYRIAL_NAKAMA_URL: `http://127.0.0.1:${API_PORT}`, MYRIAL_WP01H_E3_CASE_DIR: caseDir });
+  const run = runBounded(process.execPath, ["--test", "--test-reporter=tap", "--test-name-pattern=FS-K1 server restart", "tests/live/h3_wp01h_full_stress.test.mjs"], { env, cwd: NAKAMA_DIR, timeoutMs: 15 * 60 * 1000 });
+  for (let i = 0; i < 240 && !fs.existsSync(ready); i++) await new Promise((r) => setTimeout(r, 500));
+  if (!fs.existsSync(ready)) { const r = await run; ev.log("k1-restart-node", r.output); ev.caseResult("FS-K1-restart", "FAIL", { reason: "the burst never became ready" }); return; }
+  await new Promise((r) => setTimeout(r, 3000));
+  recheckG2(ev, project);
+  const rs = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, "restart", "nakama"], { cwd: NAKAMA_DIR, timeoutMs: 300000 });
+  ev.log("k1-compose-restart", rs.out);
+  const r = await run;
+  ev.log("k1-restart-node", r.output);
+  recheckG2(ev, project);
+  const inHash = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, "exec", "-T", "nakama", "sha256sum", "/nakama/data/modules/index.js"], { cwd: NAKAMA_DIR }).stdout.split(/\s+/)[0];
+  if (inHash !== sha256(fs.readFileSync(path.join(NAKAMA_DIR, "build", "index.js")))) throw new Stop("module hash changed across the restart");
+  const t = tapSummary(r.output);
+  ev.caseResult("FS-K1-restart", rs.code === 0 && t.passed.length === 1 && !t.failed.length ? "PASS" : "FAIL", { restart_exit: rs.code, passed: t.passed, failed: t.failed });
+}
+
 async function ttlJob(ev, rr, project) {
   let last = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -627,7 +733,7 @@ async function ttlJob(ev, rr, project) {
     last.attempt = attempt;
     if (last.verdict !== "INCONCLUSIVE") break;
   }
-  ev.caseResult("FS-K10", last.verdict, { reason: last.reason, attempts: last.attempt, provisional_id: "D-P6 PENDING" });
+  ev.caseResult("FS-K10", last.verdict, { reason: last.reason, attempts: last.attempt, fs_id_basis: "D-P6 (a): Blueprint §9 listed order (Charlie, 2026-11-21)" });
   ev.caseResult("AC-16", last.verdict, { from: "FS-K10 round", reason: last.reason });
 }
 
@@ -659,7 +765,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const ev = new Evidence(args.evidenceDir);
   const project = args.runId;
-  let rr = null, proxy = null, verdict = "STOP";
+  let rr = null, proxy = null, lossy = null, verdict = "STOP";
   try {
     rr = { ...makeRunRoot(process.env.RUNNER_TEMP ?? "", args.runId), runId: args.runId };
     await gateG1(ev, args, rr, project);
@@ -675,12 +781,20 @@ async function main() {
       for (let i = 0; i < 30; i++) { if (await proxyStats().then(() => true).catch(() => false)) break; await new Promise((r) => setTimeout(r, 500)); }
       const ext = Object.values(os.networkInterfaces()).flat().find((i) => i && i.family === "IPv4" && !i.internal)?.address;
       if (ext && await connects(ext, PROXY_PORT)) throw new Stop("lossy proxy reachable on the external interface");
+      if (args.job === "j2") {
+        const seed = parseInt(sha256(args.runId).slice(0, 8), 16) % 2147483647;
+        ev.summary.lossy_seed = seed;
+        lossy = spawn(process.execPath, [path.join(NAKAMA_DIR, "tests/live/tools/wp01h_lossy_proxy.mjs"), String(LOSSY_PORT), String(API_PORT), String(seed)], { stdio: "ignore" });
+        for (let i = 0; i < 30; i++) { if (await fetch(`http://127.0.0.1:${LOSSY_PORT}/__wp01h_lossy/stats`).then(() => true).catch(() => false)) break; await new Promise((r) => setTimeout(r, 500)); }
+        if (ext && await connects(ext, LOSSY_PORT)) throw new Stop("random lossy proxy reachable on the external interface");
+      }
     }
     if (args.job === "j3") await ttlJob(ev, rr, project);
     else if (args.job === "j1r") await existingLiveRegression(ev, rr, args, project);
     else {
       await jobCases(ev, rr, args, project, args.job);
       if (args.job === "j1") await revertStage(ev, rr, args, project);
+      if (args.job === "j2") await restartStage(ev, rr, project); // last: the restart touches the shared server
     }
     const bad = Object.entries(ev.summary.cases).filter(([id, c]) => id !== READ_DEADLINE_TEST && !["PASS", "NOT RUN"].includes(c.verdict));
     verdict = bad.length ? "FAIL" : "PASS";
@@ -688,7 +802,23 @@ async function main() {
     ev.summary.stop = String(e.message ?? e);
     verdict = e instanceof Stop ? "SAFETY STOP" : "ERROR";
   } finally {
+    if (lossy) {
+      const st = await fetch(`http://127.0.0.1:${LOSSY_PORT}/__wp01h_lossy/stats`).then((r) => r.text()).catch(() => "unavailable");
+      ev.log("lossy-proxy-stats", st);
+      lossy.kill("SIGTERM");
+    }
     if (proxy) proxy.kill("SIGTERM");
+    // G2-5 final (r1): every non-system account is a synthetic account of this run.
+    if (rr && ev.summary.gates["G2-5"]) {
+      try {
+        const db = await import("../tests/live/tools/wp01h_db.mjs");
+        const rows = db.sql("SELECT json_build_object('id', id::text, 'email', coalesce(email, ''), 'create_ms', (extract(epoch from create_time) * 1000)::bigint)::text FROM users", { ...process.env, COMPOSE_PROJECT_NAME: project })
+          .split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+        const p = checkUsers(rows, { runStartMs: ev.runStartMs - 5000, final: true });
+        ev.summary.gates["G2-5-final"] = { result: p.length ? "STOP" : "PASS", problems: p, facts: { users: rows.length } };
+        if (p.length) verdict = "SAFETY STOP";
+      } catch (e) { ev.summary.gates["G2-5-final"] = { result: "STOP", problems: [String(e.message ?? e)] }; verdict = "SAFETY STOP"; }
+    }
     // Leftover inventory only: nothing is deleted (containers, volumes, run root are kept).
     const inv = sh("docker", ["ps", "-a", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Names}} {{.Status}}"]).out
       + sh("docker", ["volume", "ls", "--filter", `label=com.docker.compose.project=${project}`, "--format", "{{.Name}}"]).out;
