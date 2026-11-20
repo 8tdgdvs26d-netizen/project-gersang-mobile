@@ -71,37 +71,54 @@ test("FS-K2 random lossy proxy (seeded, loopback): every key ends with exactly o
   record("FS-K2", { random_proxy: { seed: stats.seed, faults: stats.faults, disturbed: stats.disturbed }, outcomes: keys.map((k) => tradeReceipts(a, k)[0].status) });
 });
 
+// FS-K1 (r2): this test only drives the burst and records evidence; the
+// launcher owns the restart timing (docker State.FinishedAt / StartedAt) and
+// gives the strict PASS / INCONCLUSIVE / FAIL verdict (restartVerdict) from
+// FS-K1-restart-round.json. Invariant breaks (not exactly one receipt per key,
+// not exactly one claim settlement, ledger) still fail here directly.
 test("FS-K1 server restart around commit: a trade / resolve / claim burst across a nakama restart settles exactly once", { skip: RESTART, timeout: 10 * 60 * 1000 }, async () => {
-  assert.ok(CASE_DIR, "MYRIAL_WP01H_E3_CASE_DIR is required (ready signal)");
+  assert.ok(CASE_DIR, "MYRIAL_WP01H_E3_CASE_DIR is required (ready signal + round file)");
   const a = await account("k1rt");
   const b = await account("k1rc");
   const tk = (await rpc(b, "vs01e_encounter_begin", { gameplay_session_id: b.gsid, group_ids: ["prototype_monster_01"] })).body.ticket;
   await sleep(10300);
   const ckey = newKey();
+  const requests = []; // every request of the burst: key, rpc, client send / done (Date.now, same host clock as docker), outcome
+  const timed = async (rpcName, key, p) => {
+    const sent = Date.now();
+    const r = await safe(p);
+    requests.push({ key, rpc: rpcName, sent_at: sent, done_at: Date.now(), status: r.status, outcome: reason(r) });
+    return r;
+  };
   fs.writeFileSync(`${CASE_DIR}/FS-K1-restart.ready`, new Date().toISOString() + "\n", { flag: "wx" }); // the launcher restarts nakama after this
   const keys = [];
-  const answers = { ok: 0, error: 0 };
   const until = Date.now() + 45000;
   let claimed = false;
   while (Date.now() < until) {
     const key = newKey(); keys.push(key);
-    const [t, r] = await Promise.all([safe(trade(a, key, cmd(), { signal: AbortSignal.timeout(4000) })), safe(resolve(a, key, cmd(), { signal: AbortSignal.timeout(4000) }))]);
-    for (const x of [t, r]) answers[x.status === 200 ? "ok" : "error"] += 1;
+    await Promise.all([timed("vs01_trade", key, trade(a, key, cmd(), { signal: AbortSignal.timeout(4000) })),
+      timed("vs01_trade_resolve", key, resolve(a, key, cmd(), { signal: AbortSignal.timeout(4000) }))]);
     if (!claimed) {
-      const c = await safe(rpc(b, "vs01e_encounter_claim", { gameplay_session_id: b.gsid, idempotency_key: ckey, ticket_id: tk.ticket_id, outcome: "victory", kills: 10, hero_alive: true }, { signal: AbortSignal.timeout(4000) }));
+      const c = await timed("vs01e_encounter_claim", ckey, rpc(b, "vs01e_encounter_claim", { gameplay_session_id: b.gsid, idempotency_key: ckey, ticket_id: tk.ticket_id, outcome: "victory", kills: 10, hero_alive: true }, { signal: AbortSignal.timeout(4000) }));
       claimed = c.status === 200;
     }
     await sleep(800);
   }
   for (let i = 0; i < 120 && (await fetch(`${BASE}/healthcheck`).then((x) => x.status).catch(() => 0)) !== 200; i++) await sleep(1000);
-  for (const k of keys) { const rs = await settle(a, k, cmd()); assert.equal(rs.length, 1, `key ${k}: ${rs.length} receipts after the restart`); await sleep(400); }
+  const settledAt = Date.now();
+  for (const k of keys) { await settle(a, k, cmd()); await sleep(400); }
   for (let i = 0; i < 5 && !claimed; i++) { const c = await safe(rpc(b, "vs01e_encounter_claim", { gameplay_session_id: b.gsid, idempotency_key: ckey, ticket_id: tk.ticket_id, outcome: "victory", kills: 10, hero_alive: true })); claimed = c.status === 200; if (!claimed) await sleep(6000); }
+  const all = tradeReceipts(a);
+  const perKey = keys.map((k) => ({ key: k, receipts: all.filter((r) => r.idempotency_key === k).map((r) => ({ status: r.status, server_time_ms: r.server_time_ms })) }));
   const settlements = objects(b.userId, C.combatReceipts).map((o) => o.value).filter((r) => r.ticket_id === tk.ticket_id);
+  const round = { requests, keys: perKey, settle_started_at: settledAt,
+    claim: { key: ckey, settlements: settlements.map((r) => ({ kind: r.kind, server_time_ms: r.server_time_ms })) },
+    ledger_problems: [...ledger(a.userId).problems, ...ledger(b.userId).problems] };
+  fs.writeFileSync(`${CASE_DIR}/FS-K1-restart-round.json`, JSON.stringify(round, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+  for (const k of perKey) assert.equal(k.receipts.length, 1, `key ${k.key}: ${k.receipts.length} receipts after the restart`);
   assert.equal(settlements.length, 1, "the claim settled exactly once across the restart");
-  assert.deepEqual(ledger(a.userId).problems, []);
-  assert.deepEqual(ledger(b.userId).problems, []);
-  assert.ok(answers.error >= 1, "the restart was actually observed by the client (some requests failed)");
-  record("FS-K1-restart", { keys: keys.length, answers, outcomes: keys.map((k) => tradeReceipts(a, k)[0].status) });
+  assert.deepEqual(round.ledger_problems, []);
+  record("FS-K1-restart", { keys: keys.length, requests: requests.length, client_errors: requests.filter((r) => r.status !== 200).length });
 });
 
 test("FS-K3 race: same key (100 requests, 2 nodes), 50 different keys, 100 trade/resolve pairs", { skip: STRESS }, async () => {

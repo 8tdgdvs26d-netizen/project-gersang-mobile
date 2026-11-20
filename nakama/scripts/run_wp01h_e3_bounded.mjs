@@ -347,6 +347,59 @@ export function tapSummary(text) {
   return { passed, failed, skipped };
 }
 // FS-K10 round file -> case verdict (FAIL > INCONCLUSIVE > PASS).
+// FS-K1 restart verdict (r2). Pure. timing comes from the launcher (docker
+// State.StartedAt before / after, State.FinishedAt of the stopped process, the
+// restart command window, health back); round is h3's FS-K1-restart-round.json;
+// tap is tapSummary of the h3 run. Server receipt times and docker times share
+// one host clock (single host; Inference, not proven), so margin_ms absorbs
+// rounding. PASS only with direct evidence that the burst really crossed a
+// restart; missing or contradictory evidence is INCONCLUSIVE, never PASS.
+export function parseDockerTime(t) {
+  if (typeof t !== "string") return NaN;
+  const m = /^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d:\d\d)$/.exec(t.trim());
+  if (!m || m[1].startsWith("0001-")) return NaN;
+  return Date.parse(`${m[1]}.${(m[2] ?? "").padEnd(3, "0").slice(0, 3)}${m[3]}`);
+}
+export function restartVerdict({ timing, round, tap, margin_ms = 1000 }) {
+  const fails = [];
+  if (tap && tap.failed && tap.failed.length) fails.push(`h3 test failed: ${tap.failed.join(", ")}`);
+  if (round) {
+    for (const k of round.keys ?? []) if ((k.receipts ?? []).length !== 1) fails.push(`key ${k.key}: ${(k.receipts ?? []).length} receipts`);
+    const n = (round.claim?.settlements ?? []).length;
+    if (n !== 1) fails.push(`claim settlements ${n} (expected 1)`);
+    if ((round.ledger_problems ?? []).length) fails.push(`ledger problems ${round.ledger_problems.length}`);
+  }
+  if (fails.length) return { verdict: "FAIL", reason: fails.join("; ") };
+  const inc = (reason, extra = {}) => ({ verdict: "INCONCLUSIVE", reason, ...extra });
+  if (!timing) return inc("no restart timing");
+  if (timing.restart_exit !== 0) return inc(`restart command exit ${timing.restart_exit}`);
+  if (!round) return inc("no FS-K1-restart-round.json");
+  if (!tap || tap.passed.length !== 1) return inc("h3 FS-K1 test did not report exactly one pass");
+  if (!timing.started_before || timing.started_before === timing.started_after) return inc("container StartedAt unchanged: no restart observed");
+  const stop = parseDockerTime(timing.finished_at), start = parseDockerTime(timing.started_after);
+  const { cmd_start: cs, cmd_end: ce, health_at: ha } = timing;
+  if (![stop, start, cs, ce, ha].every(Number.isFinite)) return inc("restart timing incomplete or unparsable");
+  if (!(cs - margin_ms <= stop && stop <= start && start <= ce + margin_ms && start <= ha + margin_ms))
+    return inc("restart timing inconsistent (expected cmd_start <= stop <= start <= cmd_end / health)", { stop, start, cmd_start: cs, cmd_end: ce, health_at: ha });
+  const reqs = round.requests ?? [];
+  const receipts = (round.keys ?? []).flatMap((k) => k.receipts ?? []);
+  const inDown = receipts.filter((r) => r.server_time_ms > stop + margin_ms && r.server_time_ms < start - margin_ms).length;
+  if (inDown) return inc(`${inDown} receipt(s) committed while the server was down: contradictory clock evidence`);
+  const settleAt = round.settle_started_at;
+  const s = {
+    in_flight_at_stop: reqs.filter((r) => r.sent_at <= stop && r.done_at >= stop).length,
+    client_errors_in_window: reqs.filter((r) => r.status !== 200 && r.done_at >= cs - margin_ms && r.sent_at <= ha + margin_ms).length,
+    committed_before_stop: receipts.filter((r) => r.server_time_ms < stop - margin_ms).length,
+    burst_ok_after_start: reqs.filter((r) => r.status === 200 && r.sent_at > start + margin_ms && (!Number.isFinite(settleAt) || r.done_at < settleAt)).length,
+    receipts_after_start: receipts.filter((r) => r.server_time_ms > start + margin_ms).length,
+  };
+  if (!s.committed_before_stop) return inc("no commit before the stop", s);
+  if (!s.in_flight_at_stop) return inc("no request was in flight when the server stopped", s);
+  if (!s.client_errors_in_window) return inc("the client observed no error during the restart", s);
+  if (!s.burst_ok_after_start || !s.receipts_after_start) return inc("no burst commit after the new start", s);
+  return { verdict: "PASS", reason: "burst crossed the restart; exactly-once invariants held", ...s };
+}
+
 export function fsK10Verdict(round, { containerRestarted }) {
   if (!round || !["PASS", "FAIL", "INCONCLUSIVE"].includes(round.verdict)) return { verdict: "INCONCLUSIVE", reason: "no round result" };
   if (round.verdict === "FAIL") return { verdict: "FAIL", reason: round.fails.join("; ") };
@@ -695,8 +748,15 @@ async function revertStage(ev, rr, args, project) {
   ev.caseResult("AC-18", ac18.functional || chk.functional ? "FAIL" : "PASS", { prep: ac18.functional, check: chk.functional, label: "baseline module " + BASELINE });
 }
 
-// FS-K1 (r1): a trade / resolve / claim burst while the launcher restarts
-// nakama (run project only), then the per-key receipt and ledger checks in h3.
+// FS-K1 (r2): a trade / resolve / claim burst while the launcher restarts
+// nakama (run project only). The launcher records the restart timing and the
+// verdict is restartVerdict (strict PASS / INCONCLUSIVE / FAIL).
+function nakamaState(project) {
+  const id = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, "ps", "-q", "nakama"], { cwd: NAKAMA_DIR }).stdout.trim();
+  if (!id) return { id: "", started_at: null, finished_at: null };
+  const [st, fin] = sh("docker", ["inspect", "-f", "{{.State.StartedAt}}|{{.State.FinishedAt}}", id]).stdout.trim().split("|");
+  return { id, started_at: st || null, finished_at: fin || null };
+}
 async function restartStage(ev, rr, project) {
   const caseDir = path.join(ev.dir, "cases");
   const ready = path.join(caseDir, "FS-K1-restart.ready");
@@ -704,18 +764,33 @@ async function restartStage(ev, rr, project) {
     MYRIAL_NAKAMA_URL: `http://127.0.0.1:${API_PORT}`, MYRIAL_WP01H_E3_CASE_DIR: caseDir });
   const run = runBounded(process.execPath, ["--test", "--test-reporter=tap", "--test-name-pattern=FS-K1 server restart", "tests/live/h3_wp01h_full_stress.test.mjs"], { env, cwd: NAKAMA_DIR, timeoutMs: 15 * 60 * 1000 });
   for (let i = 0; i < 240 && !fs.existsSync(ready); i++) await new Promise((r) => setTimeout(r, 500));
-  if (!fs.existsSync(ready)) { const r = await run; ev.log("k1-restart-node", r.output); ev.caseResult("FS-K1-restart", "FAIL", { reason: "the burst never became ready" }); return; }
+  if (!fs.existsSync(ready)) { const r = await run; ev.log("k1-restart-node", r.output); ev.caseResult("FS-K1-restart", "INCONCLUSIVE", { reason: "the burst never became ready" }); return; }
   await new Promise((r) => setTimeout(r, 3000));
   recheckG2(ev, project);
+  const before = nakamaState(project);
+  const cmdStart = Date.now();
   const rs = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, "restart", "nakama"], { cwd: NAKAMA_DIR, timeoutMs: 300000 });
+  const cmdEnd = Date.now();
   ev.log("k1-compose-restart", rs.out);
+  const after = nakamaState(project);
+  let healthAt = null;
+  for (let i = 0; i < 240 && healthAt === null; i++) {
+    const ok = await fetch(`http://127.0.0.1:${API_PORT}/healthcheck`, { signal: AbortSignal.timeout(2000) }).then((x) => x.status === 200).catch(() => false);
+    if (ok) healthAt = Date.now(); else await new Promise((r) => setTimeout(r, 500));
+  }
+  const timing = { restart_exit: rs.code, container_before: before.id, container_after: after.id, started_before: before.started_at, started_after: after.started_at,
+    finished_at: after.finished_at, cmd_start: cmdStart, cmd_end: cmdEnd, health_at: healthAt };
+  fs.writeFileSync(path.join(caseDir, "FS-K1-restart-timing.json"), JSON.stringify(timing, null, 2) + "\n", { mode: 0o600, flag: "wx" });
   const r = await run;
   ev.log("k1-restart-node", r.output);
   recheckG2(ev, project);
   const inHash = sh("docker", ["compose", "-p", project, "-f", COMPOSE_FILE, "exec", "-T", "nakama", "sha256sum", "/nakama/data/modules/index.js"], { cwd: NAKAMA_DIR }).stdout.split(/\s+/)[0];
   if (inHash !== sha256(fs.readFileSync(path.join(NAKAMA_DIR, "build", "index.js")))) throw new Stop("module hash changed across the restart");
+  const roundFile = path.join(caseDir, "FS-K1-restart-round.json");
+  const round = fs.existsSync(roundFile) ? JSON.parse(fs.readFileSync(roundFile, "utf8")) : null;
   const t = tapSummary(r.output);
-  ev.caseResult("FS-K1-restart", rs.code === 0 && t.passed.length === 1 && !t.failed.length ? "PASS" : "FAIL", { restart_exit: rs.code, passed: t.passed, failed: t.failed });
+  const v = restartVerdict({ timing, round, tap: t });
+  ev.caseResult("FS-K1-restart", v.verdict, { ...v, restart_exit: rs.code, passed: t.passed, failed: t.failed });
 }
 
 async function ttlJob(ev, rr, project) {

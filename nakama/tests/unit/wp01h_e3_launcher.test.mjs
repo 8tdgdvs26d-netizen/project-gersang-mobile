@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
+import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import * as L from "../../scripts/run_wp01h_e3_bounded.mjs";
@@ -362,3 +363,98 @@ test("r1 FS-K2 random lossy proxy: deterministic, bounded, loopback only, faults
   await new Promise((r) => p2.server.close(r));
   await new Promise((r) => up.close(r));
 });
+
+// ---- r2: FS-K1 restart timing and strict verdict ----------------------------
+{
+  const T0 = Date.parse("2026-11-21T10:00:00.000Z");
+  const iso = (ms, extra = "") => new Date(ms).toISOString().replace("Z", extra + "Z");
+  const STOP = T0 + 10000, START = T0 + 12000;
+  const timing = (o = {}) => ({ restart_exit: 0, started_before: "2026-11-21T09:00:00.1Z", started_after: iso(START, "123456"), finished_at: iso(STOP, "987654"),
+    cmd_start: T0 + 9500, cmd_end: START + 300, health_at: START + 1500, ...o });
+  const key = (k, t) => ({ key: k, receipts: [{ status: "committed", server_time_ms: t }] });
+  const round = (o = {}) => ({
+    requests: [
+      { key: "k1", rpc: "vs01_trade", sent_at: T0 + 1000, done_at: T0 + 1100, status: 200 },
+      { key: "k2", rpc: "vs01_trade", sent_at: STOP - 500, done_at: STOP + 3500, status: 0 },
+      { key: "k3", rpc: "vs01_trade", sent_at: START + 2500, done_at: START + 2600, status: 200 },
+    ],
+    keys: [key("k1", T0 + 1050), key("k2", START + 20000), key("k3", START + 2550)],
+    settle_started_at: START + 15000, claim: { key: "c", settlements: [{ kind: "claim", server_time_ms: T0 + 2000 }] }, ledger_problems: [], ...o });
+  const tap = (o = {}) => ({ passed: ["FS-K1 server restart"], failed: [], ...o });
+
+  test("r2 parseDockerTime: nanosecond RFC3339 to ms; zero / garbage are NaN", () => {
+    assert.equal(L.parseDockerTime("2026-11-21T10:00:00.123456789Z"), Date.parse("2026-11-21T10:00:00.123Z"));
+    assert.equal(L.parseDockerTime("2026-11-21T10:00:00Z"), Date.parse("2026-11-21T10:00:00.000Z"));
+    assert.equal(L.parseDockerTime("2026-11-21T18:00:00.5+08:00"), Date.parse("2026-11-21T10:00:00.500Z"));
+    for (const bad of ["0001-01-01T00:00:00Z", "", "yesterday", null, undefined]) assert.ok(Number.isNaN(L.parseDockerTime(bad)), String(bad));
+  });
+
+  test("r2 restartVerdict PASS only with full timing evidence across the restart", () => {
+    const v = L.restartVerdict({ timing: timing(), round: round(), tap: tap() });
+    assert.equal(v.verdict, "PASS", v.reason);
+    assert.equal(v.in_flight_at_stop, 1); assert.equal(v.committed_before_stop, 1); assert.equal(v.burst_ok_after_start, 1);
+  });
+
+  test("r2 restartVerdict FAIL on invariant breaks (beats missing timing)", () => {
+    const two = round({ keys: [{ key: "k1", receipts: [{ server_time_ms: 1 }, { server_time_ms: 2 }] }] });
+    assert.equal(L.restartVerdict({ timing: null, round: two, tap: tap() }).verdict, "FAIL");
+    assert.equal(L.restartVerdict({ timing: timing(), round: round({ keys: [{ key: "k1", receipts: [] }] }), tap: tap() }).verdict, "FAIL");
+    assert.equal(L.restartVerdict({ timing: timing(), round: round({ claim: { settlements: [] } }), tap: tap() }).verdict, "FAIL");
+    assert.equal(L.restartVerdict({ timing: timing(), round: round({ claim: { settlements: [{}, {}] } }), tap: tap() }).verdict, "FAIL");
+    assert.equal(L.restartVerdict({ timing: timing(), round: round({ ledger_problems: ["x"] }), tap: tap() }).verdict, "FAIL");
+    assert.equal(L.restartVerdict({ timing: timing(), round: null, tap: tap({ passed: [], failed: ["FS-K1 server restart"] }) }).verdict, "FAIL");
+  });
+
+  test("r2 restartVerdict INCONCLUSIVE on missing / failed restart evidence", () => {
+    const inc = (a) => { const v = L.restartVerdict({ timing: timing(), round: round(), tap: tap(), ...a }); assert.equal(v.verdict, "INCONCLUSIVE", JSON.stringify(a)); return v; };
+    inc({ timing: null });
+    inc({ timing: timing({ restart_exit: 1 }) });
+    inc({ round: null });
+    inc({ tap: tap({ passed: [] }) });
+    inc({ timing: timing({ started_after: "2026-11-21T09:00:00.1Z" }) });
+    inc({ timing: timing({ started_before: null }) });
+    inc({ timing: timing({ finished_at: "0001-01-01T00:00:00Z" }) });
+    inc({ timing: timing({ health_at: null }) });
+  });
+
+  test("r2 restartVerdict INCONCLUSIVE on inconsistent or contradictory timing", () => {
+    const inc = (a) => assert.equal(L.restartVerdict({ timing: timing(), round: round(), tap: tap(), ...a }).verdict, "INCONCLUSIVE", JSON.stringify(a));
+    inc({ timing: timing({ finished_at: iso(START + 5000) }) });          // stop after start
+    inc({ timing: timing({ cmd_start: STOP + 5000 }) });                   // stop before the command
+    inc({ timing: timing({ cmd_end: START - 5000, health_at: START - 5000 }) }); // start after command / health
+  });
+
+  test("r2 restartVerdict INCONCLUSIVE: receipt committed inside the down window", () => {
+    const STOP2 = T0 + 10000, START2 = T0 + 20000;
+    const t = timing({ finished_at: iso(STOP2), started_after: iso(START2), cmd_end: START2 + 300, health_at: START2 + 1500 });
+    const r = round({ keys: [key("k1", T0 + 1050), key("k2", T0 + 15000), key("k3", START2 + 2550)],
+      requests: [{ sent_at: T0 + 1000, done_at: T0 + 1100, status: 200 }, { sent_at: STOP2 - 500, done_at: STOP2 + 3500, status: 0 }, { sent_at: START2 + 2500, done_at: START2 + 2600, status: 200 }] });
+    const v = L.restartVerdict({ timing: t, round: r, tap: tap() });
+    assert.equal(v.verdict, "INCONCLUSIVE"); assert.match(v.reason, /while the server was down/);
+  });
+
+  test("r2 restartVerdict INCONCLUSIVE when the burst did not straddle the restart", () => {
+    const base = round();
+    const inc = (o, re) => { const v = L.restartVerdict({ timing: timing(), round: round(o), tap: tap() }); assert.equal(v.verdict, "INCONCLUSIVE"); assert.match(v.reason, re); };
+    inc({ keys: [key("k2", START + 20000), key("k3", START + 2550)] }, /no commit before the stop/);
+    inc({ requests: [base.requests[0], { ...base.requests[1], sent_at: STOP + 100 }, base.requests[2]] }, /in flight/);
+    inc({ requests: [base.requests[0], { ...base.requests[1], status: 200 }, base.requests[2]] }, /observed no error/);
+    inc({ requests: base.requests.slice(0, 2) }, /after the new start/);
+    inc({ requests: [base.requests[0], base.requests[1], { ...base.requests[2], done_at: START + 16000 }] }, /after the new start/); // only settle-phase commits
+    inc({ keys: [key("k1", T0 + 1050)] }, /after the new start/);
+  });
+
+  test("r2 restart stage source: timing recorded around the command, verdict from restartVerdict, G2 + hash checks kept", () => {
+    const src = fs.readFileSync(new URL("../../scripts/run_wp01h_e3_bounded.mjs", import.meta.url), "utf8");
+    const body = src.slice(src.indexOf("async function restartStage("), src.indexOf("async function ttlJob("));
+    const at = (s) => { const i = body.indexOf(s); assert.ok(i >= 0, s); return i; };
+    assert.ok(at("const before = nakamaState(project)") < at("const cmdStart = Date.now()"));
+    assert.ok(at("const cmdStart = Date.now()") < at('"restart", "nakama"'));
+    assert.ok(at('"restart", "nakama"') < at("const cmdEnd = Date.now()"));
+    assert.ok(at("const cmdEnd = Date.now()") < at("const after = nakamaState(project)"));
+    assert.equal(body.split("recheckG2(ev, project)").length - 1, 2);
+    at('throw new Stop("module hash changed across the restart")');
+    at("restartVerdict({ timing, round, tap: t })");
+    assert.ok(!/caseResult\("FS-K1-restart", [^;]*\? "PASS"/.test(body), "no ad-hoc PASS ternary left");
+  });
+}

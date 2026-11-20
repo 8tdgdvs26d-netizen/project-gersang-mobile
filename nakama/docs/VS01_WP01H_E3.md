@@ -69,6 +69,17 @@ case below is **NOT RUN** until then.
 
 The E3 live tests skip everything unless the launcher sets `MYRIAL_WP01H_E3_RUN_ID`. The old `run_live_tests.sh`, which has no `-p` and only isolates HOME, is **not** used for E3.
 
+## Corrective r2 (offline): FS-K1 restart timing and strict verdict
+
+- **Timing evidence.** h3 records every burst request (key, rpc, client `sent_at` / `done_at`, status, outcome) and writes `cases/FS-K1-restart-round.json` (per-key receipts with `server_time_ms`, claim settlements, ledger problems) **before** asserting. The launcher writes `cases/FS-K1-restart-timing.json`: nakama container `State.StartedAt` before and after, `State.FinishedAt` of the stopped process, the restart command window (`cmd_start` / `cmd_end`), its exit code, and when `/healthcheck` answered again.
+- **Verdict** (`restartVerdict`, pure, unit-tested; FAIL > INCONCLUSIVE > PASS):
+  - **FAIL:** the h3 test failed, a key does not have exactly one receipt, the claim did not settle exactly once, or the ledger has problems.
+  - **INCONCLUSIVE:** no timing or round file; restart exit ≠ 0; `StartedAt` unchanged; unparsable / missing times; times out of order (`cmd_start ≤ stop ≤ start ≤ cmd_end / health`, 1 s margin); a receipt committed inside the down window (contradictory clock evidence); no commit before the stop; no request in flight at the stop; no client error during the restart; no burst commit after the new start (settle-phase commits do not count). "The burst never became ready" is now INCONCLUSIVE (was FAIL): no restart was attempted.
+  - **PASS:** none of the above, i.e. direct evidence that the burst crossed the restart and exactly-once held.
+- The client-side "some request failed" check moved from an h3 hard assert to the verdict's coverage rule (INCONCLUSIVE, not FAIL).
+- Kept unchanged: the G1 / G2 isolation checks, `recheckG2` before and after the restart, the module-hash STOP, run-project-only restart.
+- Assumption (Inference, not proven): docker timestamps, the launcher clock and nakama `server_time_ms` share one host clock (single-host run).
+
 ## Labels
 - FS-K IDs follow the order in which Blueprint v0.1r3 §9 lists the topics (D-P6 (a), Charlie, 2026-11-21).
 - AC-14 is tested against the code-derived receipt contract (D-P7a (a), Charlie, 2026-11-21). It reports "Code-derived / CV-01..07 PENDING", never "CV verified"; D-P7b (restoring CV-01..07) is still open.
