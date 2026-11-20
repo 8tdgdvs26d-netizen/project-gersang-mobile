@@ -561,14 +561,48 @@ function rpcProgressionGet(ctx: nkruntime.Context, logger: nkruntime.Logger, nk:
   eCharge(ctx, logger, nk, userId, "receipt_replay", eGet(snap, E_RATE_COLLECTION, "receipt_replay"), now0);
   const state = eStateOrDefault(eGet(snap, E_STATE_COLLECTION, E_STATE_KEY));
   let unresolved: any = null;
+  let recorded: any = null;
   if (state.open_ticket_id !== "") {
-    const t = eGet(eRead(nk, userId, [[E_TICKET_COLLECTION, state.open_ticket_id]]), E_TICKET_COLLECTION, state.open_ticket_id);
-    if (t !== null && eIsUnresolved(t.value, now0)) unresolved = eTicketView(t.value);
+    const ticketId = state.open_ticket_id;
+    // WP01-H C-B1: ticket and intent are read in ONE snapshot together with
+    // the progress (session) and the state again, and every link is
+    // re-checked there, so a takeover or a settlement between the two reads
+    // can never disclose an intent to a superseded session.
+    const snap2 = eRead(nk, userId, [[E_STATE_COLLECTION, E_STATE_KEY], [E_TICKET_COLLECTION, ticketId], [E_INTENT_COLLECTION, ticketId]]);
+    requireActiveSession(trustProgress(snap2.progress), gameplaySessionId);
+    const state2 = eStateOrDefault(eGet(snap2, E_STATE_COLLECTION, E_STATE_KEY));
+    const t = eGet(snap2, E_TICKET_COLLECTION, ticketId);
+    if (state2.open_ticket_id === ticketId && t !== null && eIsUnresolved(t.value, now0)) {
+      unresolved = eTicketView(t.value);
+      if (t.value.intent_recorded) recorded = eRecordedIntentView(ticketId, eGet(snap2, E_INTENT_COLLECTION, ticketId));
+    }
   }
   return JSON.stringify({
     progression: eProgressionView(eHeroOrDefault(eGet(snap, E_HERO_COLLECTION, E_HERO_KEY))),
     unresolved_ticket: unresolved,
+    recorded_intent: recorded,
     group_available_at_ms: JSON.parse(JSON.stringify(state.group_available_at_ms)),
     server_time_ms: now0,
   });
+}
+
+// WP01-H C-B1: what the ACTIVE session needs to finish an unresolved ticket's
+// durable RECORDED claim with its ORIGINAL key and claim (resent through the
+// unchanged vs01e_encounter_claim). Only a fully consistent intent is shown;
+// any break in the ticket / intent / hash links is reported as
+// "inconsistent" WITHOUT key or claim (fail closed: the client stops claim /
+// abandon for that ticket, B-4A), never guessed from intent_recorded alone.
+function eRecordedIntentView(ticketId: string, intent: EObj | null): any {
+  const inconsistent = { status: "inconsistent", ticket_id: ticketId };
+  if (intent === null) return inconsistent;
+  const v = intent.value;
+  if (v.state !== "RECORDED" || v.ticket_id !== ticketId) return inconsistent;
+  const c = v.claim;
+  if (E_OUTCOMES.indexOf(c.outcome) < 0 || !rulesIsInt(c.kills) || c.kills < 0 || typeof c.hero_alive !== "boolean") return inconsistent;
+  if (v.request_hash !== eClaimHash(ticketId, c.outcome, c.kills, c.hero_alive)) return inconsistent;
+  return {
+    status: "recorded", ticket_id: ticketId, idempotency_key: v.idempotency_key,
+    claim: { outcome: c.outcome, kills: c.kills, hero_alive: c.hero_alive },
+    first_seen_at_ms: v.first_seen_at_ms,
+  };
 }

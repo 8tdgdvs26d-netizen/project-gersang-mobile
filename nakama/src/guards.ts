@@ -27,6 +27,8 @@ const GUARD_DEFAULT_LIMITS: { [name: string]: { env: string; perWindow: number; 
   trade: { env: "MYRIAL_RL_TRADE_PER_10S", perWindow: 30, windowMs: 10000 },
   progress_get: { env: "MYRIAL_RL_PROGRESS_GET_PER_10S", perWindow: 60, windowMs: 10000 },
   session_begin: { env: "MYRIAL_RL_SESSION_BEGIN_PER_60S", perWindow: 10, windowMs: 60000 },
+  // WP01-H: its own log, so recovery never spends (or is starved by) trades.
+  trade_resolve: { env: "MYRIAL_RL_TRADE_RESOLVE_PER_10S", perWindow: 30, windowMs: 10000 },
 };
 
 function guardError(code: number, message: string): { message: string; code: number } {
@@ -103,6 +105,18 @@ function guardParseTrade(payload: string): { gameplaySessionId: string; idempote
     idempotencyKey: d.idempotency_key,
     req: { action: d.action, city_id: d.city_id, good_id: d.good_id, quantity: d.quantity },
   };
+}
+
+// WP01-H vs01_trade_resolve: the ORIGINAL command, field for field. The basic
+// format is exactly vs01_trade's, deliberately no stricter (E1 R-1): a key
+// must be able to match any receipt rpcTrade could have written, including
+// legacy rejections of commands the current catalog no longer accepts
+// (AC-20). Non-finite quantities (JSON 1e999 -> Infinity) pass here as they
+// do for vs01_trade; they are refused later either by the strict stored-
+// receipt check (fail closed) or, with no receipt, by the catalog check
+// (no tombstone). Catalog / quantity rules apply only when no receipt exists.
+function guardParseTradeResolve(payload: string): { gameplaySessionId: string; idempotencyKey: string; req: TradeRequest } {
+  return guardParseTrade(payload);
 }
 
 // Same key + same command = same outcome. The session id is left out on

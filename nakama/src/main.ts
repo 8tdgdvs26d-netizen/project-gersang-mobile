@@ -191,6 +191,7 @@ function InitModule(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkrunt
   initializer.registerRpc("vs01_session_begin", rpcSessionBegin);
   initializer.registerRpc("vs01_progress_get", rpcProgressGet);
   initializer.registerRpc("vs01_trade", rpcTrade);
+  initializer.registerRpc("vs01_trade_resolve", rpcTradeResolve); // WP01-H (src/trade_resolve.ts)
   initializer.registerRpc("vs01_combat_reward_claim", rpcCombatRewardClaim);
   initializer.registerRpc("vs01e_encounter_begin", rpcEncounterBegin);
   initializer.registerRpc("vs01e_encounter_claim", rpcEncounterClaim);
